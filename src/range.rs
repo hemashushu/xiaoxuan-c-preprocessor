@@ -42,4 +42,11 @@ impl Range {
             end_included,
         }
     }
+
+    pub fn merge(left: &Self, right: &Self) -> Self {
+        Self {
+            start: left.start,
+            end_included: right.end_included,
+        }
+    }
 }

@@ -44,6 +44,9 @@ fn pre_tokenize(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessEr
     remove_shebang(&mut peekable_clean_iter)
 }
 
+/// Merge continued lines in the input text.
+/// Lines that end with a backslash ('\') are merged with the following line.
+/// It also handles whitespace characters between the backslash and the newline character.
 fn merge_continued_lines(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
@@ -117,6 +120,8 @@ fn merge_continued_lines(
     Ok(merged)
 }
 
+/// Replace line comments (line comment include the ending newline character)
+/// and block comments with a single space character.
 fn remove_comments(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
@@ -174,6 +179,9 @@ fn remove_comments(
     Ok(clean)
 }
 
+/// Remove the shebang line (if present) from the beginning of the input.
+/// It also removes any leading whitespace characters (includes newline characters)
+/// before the document content starts.
 fn remove_shebang(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
@@ -200,6 +208,17 @@ fn remove_shebang(
         }
     }
 
+    // removes any leading whitespace characters (includes newline characters)
+    // before the document content starts.
+    while let Some(CharWithPosition { character, .. }) = chars.peek(0) {
+        if character.is_whitespace() {
+            // Skip whitespace characters
+            chars.next();
+        } else {
+            break; // Stop when we reach a non-whitespace character
+        }
+    }
+
     let pure = chars.collect::<Vec<_>>();
     Ok(pure)
 }
@@ -220,8 +239,8 @@ struct Tokenizer<'a> {
 
     // positions stack.
     // This is used to store the positions of characters when consuming characters continusely.
-    // use functions `save_position` and `load_position` to manipulate this stack.
-    position_stack: Vec<Position>,
+    // use functions `push_position_into_store` and `pop_position_from_store` to manipulate this stack.
+    stored_positions: Vec<Position>,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -229,7 +248,7 @@ impl<'a> Tokenizer<'a> {
         Self {
             upstream,
             last_position: Position::new(0, 0, 0),
-            position_stack: vec![],
+            stored_positions: vec![],
         }
     }
 
@@ -272,19 +291,26 @@ impl<'a> Tokenizer<'a> {
             Some(CharWithPosition { character, .. }) if expected_chars.contains(character))
     }
 
+    /// Save the last position into the stack.
+    fn push_last_position_into_store(&mut self) {
+        let last_position = self.last_position;
+        self.push_position_into_store(&last_position);
+    }
+
+    /// Save the current position into the stack.
     /// The current position is ahead of one of the last position.
     /// It equals to `self.peek_position(0)`.
-    fn save_current_position(&mut self) {
+    fn push_peek_position_into_store(&mut self) {
         let position = *self.peek_position(0).unwrap();
-        self.save_position(&position);
+        self.push_position_into_store(&position);
     }
 
-    fn save_position(&mut self, position: &Position) {
-        self.position_stack.push(*position);
+    fn push_position_into_store(&mut self, position: &Position) {
+        self.stored_positions.push(*position);
     }
 
-    fn load_position(&mut self) -> Position {
-        self.position_stack.pop().unwrap()
+    fn pop_position_from_store(&mut self) -> Position {
+        self.stored_positions.pop().unwrap()
     }
 }
 
@@ -309,23 +335,14 @@ impl Tokenizer<'_> {
                     // char
                     token_with_ranges.push(self.tokenize_char()?);
                 }
-                //                 '"' => {
-                //                     // string
-                //                     let twr =
-                //                         if self.peek_char_and_equals(1, '"') && self.peek_char_and_equals(2, '"') {
-                //                             // auto-trimmed string
-                //                             self.lex_auto_trimmed_string()?
-                //                         } else {
-                //                             // normal string
-                //                             self.lex_string()?
-                //                         };
-                //
-                //                     token_with_ranges.push(twr);
-                //                 }
+                '"' => {
+                    // string
+                    token_with_ranges.push(self.tokenize_string()?);
+                }
                 //                 ',' => {
                 //                     self.next_char(); // consume ','
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::Comma,
                 //                         &self.last_position,
                 //                         1,
@@ -334,7 +351,7 @@ impl Tokenizer<'_> {
                 //                 ':' => {
                 //                     self.next_char(); // consume ':'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::Colon,
                 //                         &self.last_position,
                 //                         1,
@@ -343,28 +360,28 @@ impl Tokenizer<'_> {
                 //                 '=' => {
                 //                     self.next_char(); // consume '='
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::Equal,
                 //                         &self.last_position,
                 //                         1,
                 //                     ));
                 //                 }
                 //                 '-' if self.peek_char_and_equals(1, '>') => {
-                //                     self.save_current_position();
+                //                     self.push_peek_position_into_store();
                 //
                 //                     self.next_char(); // consume '-'
                 //                     self.next_char(); // consume '>'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::RightArrow,
-                //                         &self.pop_saved_position(),
+                //                         &self.pop_position_from_store(),
                 //                         2,
                 //                     ));
                 //                 }
                 //                 '-' => {
                 //                     self.next_char(); // consume '-'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::Minus,
                 //                         &self.last_position,
                 //                         1,
@@ -373,7 +390,7 @@ impl Tokenizer<'_> {
                 //                 '+' => {
                 //                     self.next_char(); // consume '+'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::Plus,
                 //                         &self.last_position,
                 //                         1,
@@ -382,7 +399,7 @@ impl Tokenizer<'_> {
                 //                 '{' => {
                 //                     self.next_char(); // consume '{'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::LeftBrace,
                 //                         &self.last_position,
                 //                         1,
@@ -391,7 +408,7 @@ impl Tokenizer<'_> {
                 //                 '}' => {
                 //                     self.next_char(); // consume '}'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::RightBrace,
                 //                         &self.last_position,
                 //                         1,
@@ -400,7 +417,7 @@ impl Tokenizer<'_> {
                 //                 '[' => {
                 //                     self.next_char(); // consume '['
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::LeftBracket,
                 //                         &self.last_position,
                 //                         1,
@@ -409,7 +426,7 @@ impl Tokenizer<'_> {
                 //                 ']' => {
                 //                     self.next_char(); // consume ']'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::RightBracket,
                 //                         &self.last_position,
                 //                         1,
@@ -418,7 +435,7 @@ impl Tokenizer<'_> {
                 //                 '(' => {
                 //                     self.next_char(); // consume '('
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::LeftParen,
                 //                         &self.last_position,
                 //                         1,
@@ -427,7 +444,7 @@ impl Tokenizer<'_> {
                 //                 ')' => {
                 //                     self.next_char(); // consume ')'
                 //
-                //                     token_with_ranges.push(TokenWithRange::from_position_and_length(
+                //                     token_with_ranges.push(TokenWithRange::new(
                 //                         Token::RightParen,
                 //                         &self.last_position,
                 //                         1,
@@ -498,7 +515,7 @@ impl Tokenizer<'_> {
     //         let mut name_string = String::new();
     //         let mut found_double_colon = false; // to indicate whether the variant separator "::" is found
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         while let Some(current_char) = self.peek_char(0) {
     //             match current_char {
@@ -563,7 +580,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let name_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -624,7 +641,7 @@ impl Tokenizer<'_> {
     //         // 2.99e+8
     //         // 6.672e-34
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         while let Some(current_char) = self.peek_char(0) {
     //             match current_char {
@@ -697,7 +714,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let num_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -835,7 +852,7 @@ impl Tokenizer<'_> {
     //         // d = 0..=9
     //         // T = terminator chars || EOF
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         let first_char = self.next_char().unwrap(); // consume char 'i/u/f'
     //
@@ -858,7 +875,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let type_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -876,7 +893,7 @@ impl Tokenizer<'_> {
     //         //
     //         // T = terminator chars || EOF
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume '0'
     //         self.next_char(); // consume 'x'
@@ -963,7 +980,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let num_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -1108,7 +1125,7 @@ impl Tokenizer<'_> {
     //         //
     //         // T = terminator chars || EOF
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume '0'
     //         self.next_char(); // consume 'b'
@@ -1148,7 +1165,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let num_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -1227,7 +1244,8 @@ impl Tokenizer<'_> {
         // ^  ^__// to here
         // |_____// current char, validated
 
-        self.save_current_position();
+        // save the start position of the char literal (i.e. the first "'")
+        self.push_peek_position_into_store();
 
         self.next_char(); // Consumes "'"
 
@@ -1235,33 +1253,33 @@ impl Tokenizer<'_> {
             Some(current_char) => {
                 match current_char {
                     '\\' => {
+                        // save the start position of the escape sequence (i.e. the "\" char)
+                        self.push_last_position_into_store();
+
                         // escape chars.
                         // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
-                        match self.next_char() {
+                        let escaped_char = match self.next_char() {
                             Some(current_char2) => {
                                 match current_char2 {
-                                    'a' => '\u{07}', // bell (BEL, ascii 7)
-                                    'b' => '\u{08}', // backspace (BS, ascii 8)
-                                    'e' => {
-                                        // escape character (ESC, ascii 27)
-                                        return Err(PreprocessError::MessageWithPosition(
-                                            "Escape character '\\e' is not supported.".to_owned(),
-                                            self.last_position,
-                                        ));
-                                    }
-                                    'f' => '\u{0c}', // form feed (FF, ascii 12)
-                                    'n' => '\n',     // new line character (line feed, LF, ascii 10)
-                                    'r' => '\r',     // carriage return (CR, ascii 13)
-                                    't' => '\t',     // horizontal tabulation (HT, ascii 9)
-                                    'v' => '\u{0b}', // vertical tabulation (VT, ascii 11)
-                                    '\\' => '\\',    // backslash
-                                    '\'' => '\'',    // single quote
-                                    '"' => '"',      // double quote
+                                    'a' => 7u8 as char,  // bell (BEL, ascii 7)
+                                    'b' => 8u8 as char,  // backspace (BS, ascii 8)
+                                    'e' => 27u8 as char, // escape character (ESC, ascii 27){
+                                    'f' => 12u8 as char, // form feed (FF, ascii 12)
+                                    'n' => '\n', // new line character (line feed, LF, ascii 10)
+                                    'r' => '\r', // carriage return (CR, ascii 13)
+                                    't' => '\t', // horizontal tabulation (HT, ascii 9)
+                                    'v' => 11u8 as char, // vertical tabulation (VT, ascii 11)
+                                    '\\' => '\\', // backslash
+                                    '\'' => '\'', // single quote
+                                    '"' => '"',  // double quote
                                     '?' => {
                                         // question mark (?)
-                                        return Err(PreprocessError::MessageWithPosition(
+                                        return Err(PreprocessError::MessageWithRange(
                                                 "Escape character '\\?' is not supported since trigraphs are not supported.".to_owned(),
-                                                self.last_position
+                                                Range::new(
+                                                    &self.pop_position_from_store(),
+                                                    &self.last_position,
+                                                ),
                                             ));
                                     }
                                     '0'..'9' => {
@@ -1301,7 +1319,7 @@ impl Tokenizer<'_> {
                                                         buffer
                                                     ),
                                                     Range::new(
-                                                        &self.load_position(),
+                                                        &self.pop_position_from_store(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -1344,7 +1362,7 @@ impl Tokenizer<'_> {
                                                     current_char2, buffer, length
                                                 ),
                                                 Range::new(
-                                                    &self.load_position(),
+                                                    &self.pop_position_from_store(),
                                                     &self.last_position,
                                                 ),
                                             ));
@@ -1362,7 +1380,7 @@ impl Tokenizer<'_> {
                                                             current_char2, buffer
                                                         ),
                                                         Range::new(
-                                                            &self.load_position(),
+                                                            &self.pop_position_from_store(),
                                                             &self.last_position,
                                                         ),
                                                     ));
@@ -1375,7 +1393,7 @@ impl Tokenizer<'_> {
                                                         current_char2, buffer
                                                     ),
                                                     Range::new(
-                                                        &self.load_position(),
+                                                        &self.pop_position_from_store(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -1412,7 +1430,7 @@ impl Tokenizer<'_> {
                                                     buffer, HEX_DIGITS
                                                 ),
                                                 Range::new(
-                                                    &self.load_position(),
+                                                    &self.pop_position_from_store(),
                                                     &self.last_position,
                                                 ),
                                             ));
@@ -1428,7 +1446,7 @@ impl Tokenizer<'_> {
                                                         buffer
                                                     ),
                                                     Range::new(
-                                                        &self.load_position(),
+                                                        &self.pop_position_from_store(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -1453,13 +1471,19 @@ impl Tokenizer<'_> {
                                     "Incomplete escape character sequence.".to_owned(),
                                 ));
                             }
-                        }
+                        };
+
+                        // discard the saved position of the escape sequence
+                        self.pop_position_from_store();
+
+                        // return the escaped character
+                        escaped_char
                     }
                     '\'' => {
                         // Empty char (`''`).
                         return Err(PreprocessError::MessageWithRange(
                             "Empty character is not allowed.".to_owned(),
-                            Range::new(&self.load_position(), &self.last_position),
+                            Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     }
                     _ => {
@@ -1496,206 +1520,282 @@ impl Tokenizer<'_> {
             }
         }
 
-        let character_range = Range::new(&self.load_position(), &self.last_position);
+        let character_range = Range::new(&self.pop_position_from_store(), &self.last_position);
         Ok(TokenWithRange::new(Token::Char(character), character_range))
     }
 
-    //     fn unescape_unicode(&mut self) -> Result<char, PreprocessError> {
-    //         // \u{6587}?  //
-    //         //   ^     ^__// to here
-    //         //   |________// current char, validated
-    //
-    //         self.save_current_position();
-    //
-    //         self.next_char(); // comsume char '{'
-    //
-    //         let mut codepoint_string = String::new();
-    //
-    //         loop {
-    //             match self.next_char() {
-    //                 Some(previous_char) => match previous_char {
-    //                     '}' => break,
-    //                     '0'..='9' | 'a'..='f' | 'A'..='F' => codepoint_string.push(previous_char),
-    //                     _ => {
-    //                         return Err(PreprocessError::MessageWithPosition(
-    //                             format!(
-    //                                 "Invalid character '{}' for unicode escape sequence.",
-    //                                 previous_char
-    //                             ),
-    //                             self.last_position,
-    //                         ));
-    //                     }
-    //                 },
-    //                 None => {
-    //                     // EOF
-    //                     return Err(PreprocessError::UnexpectedEndOfDocument(
-    //                         "Incomplete unicode escape sequence.".to_owned(),
-    //                     ));
-    //                 }
-    //             }
-    //
-    //             if codepoint_string.len() > 6 {
-    //                 break;
-    //             }
-    //         }
-    //
-    //         let codepoint_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
-    //             &self.last_position,
-    //         );
-    //
-    //         if codepoint_string.len() > 6 {
-    //             return Err(PreprocessError::MessageWithPosition(
-    //                 "Unicode point code exceeds six digits.".to_owned(),
-    //                 codepoint_range,
-    //             ));
-    //         }
-    //
-    //         if codepoint_string.is_empty() {
-    //             return Err(PreprocessError::MessageWithPosition(
-    //                 "Empty unicode code point.".to_owned(),
-    //                 codepoint_range,
-    //             ));
-    //         }
-    //
-    //         let codepoint = u32::from_str_radix(&codepoint_string, 16).unwrap();
-    //
-    //         if let Some(c) = char::from_u32(codepoint) {
-    //             // valid code point:
-    //             // 0 to 0x10FFFF, inclusive
-    //             //
-    //             // ref:
-    //             // https://doc.rust-lang.org/std/primitive.char.html
-    //             Ok(c)
-    //         } else {
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 "Invalid unicode code point.".to_owned(),
-    //                 codepoint_range,
-    //             ))
-    //         }
-    //     }
-    //
-    //     fn lex_string(&mut self) -> Result<TokenWithRange, PreprocessError> {
-    //         // "abc"?  //
-    //         // ^    ^__// to here
-    //         // |_______// current char, validated
-    //
-    //         self.save_current_position();
-    //
-    //         self.next_char(); // consume '"'
-    //
-    //         let mut final_string = String::new();
-    //
-    //         loop {
-    //             match self.next_char() {
-    //                 Some(previous_previous_char) => {
-    //                     match previous_previous_char {
-    //                         '\\' => {
-    //                             // escape chars
-    //                             match self.next_char() {
-    //                                 Some(previous_char) => {
-    //                                     match previous_char {
-    //                                         '\\' => {
-    //                                             final_string.push('\\');
-    //                                         }
-    //                                         '\'' => {
-    //                                             // single quote does not necessary to be escaped for string
-    //                                             // however, it is still supported for consistency between chars and strings.
-    //                                             final_string.push('\'');
-    //                                         }
-    //                                         '"' => {
-    //                                             final_string.push('"');
-    //                                         }
-    //                                         't' => {
-    //                                             // horizontal tabulation
-    //                                             final_string.push('\t');
-    //                                         }
-    //                                         'r' => {
-    //                                             // carriage return (CR, ascii 13)
-    //                                             final_string.push('\r');
-    //                                         }
-    //                                         'n' => {
-    //                                             // new line character (line feed, LF, ascii 10)
-    //                                             final_string.push('\n');
-    //                                         }
-    //                                         '0' => {
-    //                                             // null char
-    //                                             final_string.push('\0');
-    //                                         }
-    //                                         'u' => {
-    //                                             if self.peek_char_and_equals(0, '{') {
-    //                                                 // unicode code point, e.g. '\u{2d}', '\u{6587}'
-    //                                                 let ch = self.unescape_unicode()?;
-    //                                                 final_string.push(ch);
-    //                                             } else {
-    //                                                 return Err(PreprocessError::MessageWithPosition(
-    //                                                     "Missing the brace for unicode escape sequence.".to_owned(),
-    //                                                     self.last_position.move_position_forward()
-    //                                                 ));
-    //                                             }
-    //                                         }
-    //                                         '\r' if self.peek_char_and_equals(0, '\n') => {
-    //                                             // (single line) long string
-    //
-    //                                             self.next_char(); // consume '\n'
-    //                                             self.consume_all_leading_whitespaces()?;
-    //                                         }
-    //                                         '\n' => {
-    //                                             // (single line) long string
-    //                                             self.consume_all_leading_whitespaces()?;
-    //                                         }
-    //                                         _ => {
-    //                                             return Err(PreprocessError::MessageWithPosition(
-    //                                                 format!(
-    //                                                     "Unsupported escape char '{}'.",
-    //                                                     previous_char
-    //                                                 ),
-    //                                                 Location::from_position_and_length(
-    //                                                     &self.last_position.move_position_backward(),
-    //                                                     2,
-    //                                                 ),
-    //                                             ));
-    //                                         }
-    //                                     }
-    //                                 }
-    //                                 None => {
-    //                                     // `\` + EOF
-    //                                     return Err(PreprocessError::UnexpectedEndOfDocument(
-    //                                         "Incomplete character escape sequence.".to_owned(),
-    //                                     ));
-    //                                 }
-    //                             }
-    //                         }
-    //                         '"' => {
-    //                             // end of the string
-    //                             break;
-    //                         }
-    //                         _ => {
-    //                             // ordinary char
-    //                             final_string.push(previous_previous_char);
-    //                         }
-    //                     }
-    //                 }
-    //                 None => {
-    //                     // `"...EOF`
-    //                     return Err(PreprocessError::UnexpectedEndOfDocument(
-    //                         "Incomplete string.".to_owned(),
-    //                     ));
-    //                 }
-    //             }
-    //         }
-    //
-    //         let final_string_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
-    //             &self.last_position,
-    //         );
-    //
-    //         Ok(TokenWithRange::new(
-    //             Token::String(final_string),
-    //             final_string_range,
-    //         ))
-    //     }
-    //
+    fn tokenize_string(&mut self) -> Result<TokenWithRange, PreprocessError> {
+        // "abc"?  //
+        // ^    ^__// to here
+        // |_______// current char, validated
+
+        // save the start position of the string literal (i.e. the first '"')
+        self.push_peek_position_into_store();
+
+        self.next_char(); // Consumes '"'
+
+        let mut final_string = String::new();
+
+        loop {
+            match self.next_char() {
+                Some(current_char) => {
+                    match current_char {
+                        '\\' => {
+                            // save the start position of the escape sequence (i.e. the "\" char)
+                            self.push_last_position_into_store();
+
+                            // escape chars.
+                            // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
+                            let escaped_char = match self.next_char() {
+                                Some(current_char2) => {
+                                    match current_char2 {
+                                        'a' => 7u8 as char,  // bell (BEL, ascii 7)
+                                        'b' => 8u8 as char,  // backspace (BS, ascii 8)
+                                        'e' => 27u8 as char, // escape character (ESC, ascii 27){
+                                        'f' => 12u8 as char, // form feed (FF, ascii 12)
+                                        'n' => '\n', // new line character (line feed, LF, ascii 10)
+                                        'r' => '\r', // carriage return (CR, ascii 13)
+                                        't' => '\t', // horizontal tabulation (HT, ascii 9)
+                                        'v' => 11u8 as char, // vertical tabulation (VT, ascii 11)
+                                        '\\' => '\\', // backslash
+                                        '\'' => '\'', // single quote
+                                        '"' => '"',  // double quote
+                                        '?' => {
+                                            // question mark (?)
+                                            return Err(PreprocessError::MessageWithRange(
+                                                    "Escape character '\\?' is not supported since trigraphs are not supported.".to_owned(),
+                                                    Range::new(
+                                                    &self.pop_position_from_store(),
+                                                    &self.last_position,
+                                                ),
+                                                ));
+                                        }
+                                        '0'..'9' => {
+                                            // Octal escape sequence.
+                                            // format: `\o`, `\oo`, and `\ooo`.
+                                            // e.g. `\0`, `\70` (`'8'`), `\101` (`'A'`)
+                                            // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Octal
+
+                                            const MAX_OCTAL_DIGITS: usize = 3; // max 3 octal digits
+
+                                            let mut buffer = String::new();
+                                            buffer.push(current_char2);
+
+                                            while let Some(next_char) = self.peek_char(0) {
+                                                if next_char.is_ascii_digit() {
+                                                    buffer.push(*next_char);
+                                                    self.next_char(); // consume digit
+
+                                                    if buffer.len() >= MAX_OCTAL_DIGITS {
+                                                        break;
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+
+                                            // convert octal escape sequence to char
+                                            match u8::from_str_radix(&buffer, 8) {
+                                                Ok(octal_value) => {
+                                                    // convert to char
+                                                    octal_value as char
+                                                }
+                                                Err(_) => {
+                                                    return Err(PreprocessError::MessageWithRange(
+                                                        format!(
+                                                            "Invalid octal escape sequence '\\{}'.",
+                                                            buffer
+                                                        ),
+                                                        Range::new(
+                                                            &self.pop_position_from_store(),
+                                                            &self.last_position,
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        'u' | 'U' => {
+                                            // - Unicode code point below 10000.
+                                            //   format: `\uhhhh`.
+                                            // - code points located at U+10000 or higher.
+                                            //   format: `\Uhhhhhhhh`.
+                                            //
+                                            // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Universal_character_names
+                                            let length = if current_char2 == 'u' {
+                                                4 // 4 hex digits
+                                            } else {
+                                                8 // 8 hex digits
+                                            };
+
+                                            let mut buffer = String::new();
+
+                                            while let Some(next_char) = self.peek_char(0) {
+                                                if next_char.is_ascii_hexdigit() {
+                                                    buffer.push(*next_char);
+                                                    self.next_char(); // consume hex digit
+
+                                                    if buffer.len() >= length {
+                                                        // reached the required length
+                                                        break;
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+
+                                            if buffer.len() != length {
+                                                return Err(PreprocessError::MessageWithRange(
+                                                    format!(
+                                                        "Invalid unicode escape sequence '\\{}{}'. Expected {} hex digits.",
+                                                        current_char2, buffer, length
+                                                    ),
+                                                    Range::new(
+                                                        &self.pop_position_from_store(),
+                                                        &self.last_position,
+                                                    ),
+                                                ));
+                                            }
+
+                                            // convert hex escape sequence to char
+                                            match u32::from_str_radix(&buffer, 16) {
+                                                Ok(codepoint) => {
+                                                    if let Some(c) = char::from_u32(codepoint) {
+                                                        c // valid code point
+                                                    } else {
+                                                        return Err(
+                                                            PreprocessError::MessageWithRange(
+                                                                format!(
+                                                                    "Invalid unicode code point '\\{}{}'.",
+                                                                    current_char2, buffer
+                                                                ),
+                                                                Range::new(
+                                                                    &self.pop_position_from_store(),
+                                                                    &self.last_position,
+                                                                ),
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                                Err(_) => {
+                                                    return Err(PreprocessError::MessageWithRange(
+                                                        format!(
+                                                            "Invalid unicode escape sequence '\\{}{}'.",
+                                                            current_char2, buffer
+                                                        ),
+                                                        Range::new(
+                                                            &self.pop_position_from_store(),
+                                                            &self.last_position,
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        'x' => {
+                                            // Hexadecimal escape sequence,
+                                            // format: `\xhh`.
+                                            // e.g. `\x38` (`'8'`), `\x41` (`'A'`)
+                                            // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Hex
+
+                                            const HEX_DIGITS: usize = 2; // only format `\xhh` is supported
+
+                                            let mut buffer = String::new();
+
+                                            while let Some(next_char) = self.peek_char(0) {
+                                                if next_char.is_ascii_hexdigit() {
+                                                    buffer.push(*next_char);
+                                                    self.next_char(); // consume digit
+
+                                                    if buffer.len() >= HEX_DIGITS {
+                                                        break;
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+
+                                            if buffer.len() != HEX_DIGITS {
+                                                return Err(PreprocessError::MessageWithRange(
+                                                    format!(
+                                                        "Invalid hex escape sequence '\\x{}'. Expected {} hex digits.",
+                                                        buffer, HEX_DIGITS
+                                                    ),
+                                                    Range::new(
+                                                        &self.pop_position_from_store(),
+                                                        &self.last_position,
+                                                    ),
+                                                ));
+                                            }
+
+                                            // convert hex escape sequence to char
+                                            match u8::from_str_radix(&buffer, 16) {
+                                                Ok(hex_value) => hex_value as char,
+                                                Err(_) => {
+                                                    return Err(PreprocessError::MessageWithRange(
+                                                        format!(
+                                                            "Invalid hex escape sequence '\\x{}'.",
+                                                            buffer
+                                                        ),
+                                                        Range::new(
+                                                            &self.pop_position_from_store(),
+                                                            &self.last_position,
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            // Unexpected escape char.
+                                            return Err(PreprocessError::MessageWithPosition(
+                                                format!(
+                                                    "Invalid escape character '{}'.",
+                                                    current_char2
+                                                ),
+                                                self.last_position,
+                                            ));
+                                        }
+                                    }
+                                }
+                                None => {
+                                    // `\` + EOF
+                                    return Err(PreprocessError::UnexpectedEndOfDocument(
+                                        "Incomplete escape character sequence.".to_owned(),
+                                    ));
+                                }
+                            };
+
+                            // discard the saved position of the escape sequence
+                            self.pop_position_from_store();
+
+                            final_string.push(escaped_char);
+                        }
+                        '"' => {
+                            // encounter the closing double quote, which
+                            // means the end of the string literal.
+                            break;
+                        }
+                        _ => {
+                            // ordinary char
+                            final_string.push(current_char);
+                        }
+                    }
+                }
+                None => {
+                    // Incomplete string literal (`"...EOF`).
+                    return Err(PreprocessError::UnexpectedEndOfDocument(
+                        "Incomplete string literal.".to_owned(),
+                    ));
+                }
+            }
+        }
+
+        let final_string_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+
+        Ok(TokenWithRange::new(
+            Token::String(final_string),
+            final_string_range,
+        ))
+    }
+
     //     fn consume_all_leading_whitespaces(&mut self) -> Result<(), PreprocessError> {
     //         // \nssssS  //
     //         //   ^   ^__// to here ('s' = whitespace, 'S' = not whitespace)
@@ -1731,7 +1831,7 @@ impl Tokenizer<'_> {
     //         // ||_______// validated
     //         // |________// current char, validated
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume char 'r'
     //         self.next_char(); // consume the '"'
@@ -1762,7 +1862,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let final_string_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -1781,7 +1881,7 @@ impl Tokenizer<'_> {
     //
     //         // hash symbol = '#', i.e. the pound sign
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume 'r'
     //         self.next_char(); // consume '#'
@@ -1814,7 +1914,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let final_string_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -1838,7 +1938,7 @@ impl Tokenizer<'_> {
     //         // - the '\n' of the first line is necessary.
     //         // - the closed `"""` must be started with a new line.
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume the 1st '"'
     //         self.next_char(); // consume the 2nd '"'
@@ -1903,7 +2003,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -2021,7 +2121,7 @@ impl Tokenizer<'_> {
     //             Ok(amount)
     //         };
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume char 'h'
     //         self.next_char(); // consume quote '"'
@@ -2075,7 +2175,7 @@ impl Tokenizer<'_> {
     //         self.next_char(); // consume '"'
     //
     //         let bytes_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -2090,7 +2190,7 @@ impl Tokenizer<'_> {
     //         //
     //         // x = '/'
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume the 1st '/'
     //         self.next_char(); // consume the 2nd '/'
@@ -2117,7 +2217,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let comment_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -2133,7 +2233,7 @@ impl Tokenizer<'_> {
     //         // ||________// validated
     //         // |_________// current char, validated
     //
-    //         self.save_current_position();
+    //         self.push_peek_position_into_store();
     //
     //         self.next_char(); // consume '/'
     //         self.next_char(); // consume '*'
@@ -2187,7 +2287,7 @@ impl Tokenizer<'_> {
     //         }
     //
     //         let comment_range = Location::from_position_pair_with_end_included(
-    //             &self.pop_saved_position(),
+    //             &self.pop_position_from_store(),
     //             &self.last_position,
     //         );
     //
@@ -2368,77 +2468,277 @@ mod tests {
         );
     }
 
-    //
-    //     #[test]
-    //     fn test_lex_whitespaces() {
-    //         assert_eq!(tokenize_from_str_without_range_strip("  ").unwrap(), vec![]);
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("()").unwrap(),
-    //             vec![Token::LeftParen, Token::RightParen]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("(  )").unwrap(),
-    //             vec![Token::LeftParen, Token::RightParen]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("(\t\r\n\n\n)").unwrap(),
-    //             vec![
-    //                 Token::LeftParen,
-    //                 Token::NewLine,
-    //                 Token::NewLine,
-    //                 Token::NewLine,
-    //                 Token::RightParen,
-    //             ]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(tokenize_from_str("  ").unwrap(), vec![]);
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("()").unwrap(),
-    //             vec![
-    //                 TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
-    //                 TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 1, 0, 1, 1)),
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("(  )").unwrap(),
-    //             vec![
-    //                 TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
-    //                 TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 3, 0, 3, 1)),
-    //             ]
-    //         );
-    //
-    //         // "(\t\r\n\n\n)"
-    //         //  _--____--__-
-    //         //  0  2   4 5 6    // index
-    //         //  0  0   1 2 3    // line
-    //         //  0  2   0 0 1    // column
-    //         //  1  2   1 1 1    // length
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("(\t\r\n\n\n)").unwrap(),
-    //             vec![
-    //                 TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
-    //                 TokenWithRange::new(Token::NewLine, Location::new_range(/*0,*/ 2, 0, 2, 2,)),
-    //                 TokenWithRange::new(Token::NewLine, Location::new_range(/*0,*/ 4, 1, 0, 1,)),
-    //                 TokenWithRange::new(Token::NewLine, Location::new_range(/*0,*/ 5, 2, 0, 1,)),
-    //                 TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 6, 3, 0, 1)),
-    //             ]
-    //         );
-    //     }
+    #[test]
+    fn test_tokenize_whitespaces() {
+        //         assert_eq!(tokenize_from_str_without_range_strip("  ").unwrap(), vec![]);
+        //
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip("()").unwrap(),
+        //             vec![Token::LeftParen, Token::RightParen]
+        //         );
+        //
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip("(  )").unwrap(),
+        //             vec![Token::LeftParen, Token::RightParen]
+        //         );
+        //
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip("(\t\r\n\n\n)").unwrap(),
+        //             vec![
+        //                 Token::LeftParen,
+        //                 Token::Newline,
+        //                 Token::Newline,
+        //                 Token::Newline,
+        //                 Token::RightParen,
+        //             ]
+        //         );
+        //
+        //         // location
+        //
+        //         assert_eq!(tokenize_from_str("  ").unwrap(), vec![]);
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("()").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
+        //                 TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 1, 0, 1, 1)),
+        //             ]
+        //         );
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("(  )").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
+        //                 TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 3, 0, 3, 1)),
+        //             ]
+        //         );
+        //
+        //         // "(\t\r\n\n\n)"
+        //         //  _--____--__-
+        //         //  0  2   4 5 6    // index
+        //         //  0  0   1 2 3    // line
+        //         //  0  2   0 0 1    // column
+        //         //  1  2   1 1 1    // length
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("(\t\r\n\n\n)").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
+        //                 TokenWithRange::new(Token::Newline, Location::new_range(/*0,*/ 2, 0, 2, 2,)),
+        //                 TokenWithRange::new(Token::Newline, Location::new_range(/*0,*/ 4, 1, 0, 1,)),
+        //                 TokenWithRange::new(Token::Newline, Location::new_range(/*0,*/ 5, 2, 0, 1,)),
+        //                 TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 6, 3, 0, 1)),
+        //             ]
+        //         );
+    }
+
+    #[test]
+    fn test_tokenize_line_comment() {
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip(
+        //                 r#"
+        //                 7 //11
+        //                 13 17// 19 23
+        //                 //  29
+        //                 31//    37
+        //                 "#
+        //             )
+        //             .unwrap(),
+        //             vec![
+        //                 Token::Newline,
+        //                 Token::Number(NumberToken::I32(7)),
+        //                 Token::Comment(Comment::Line("11".to_owned())),
+        //                 Token::Newline,
+        //                 Token::Number(NumberToken::I32(13)),
+        //                 Token::Number(NumberToken::I32(17)),
+        //                 Token::Comment(Comment::Line(" 19 23".to_owned())),
+        //                 Token::Newline,
+        //                 Token::Comment(Comment::Line("  29".to_owned())),
+        //                 Token::Newline,
+        //                 Token::Number(NumberToken::I32(31)),
+        //                 Token::Comment(Comment::Line("    37".to_owned())),
+        //                 Token::Newline,
+        //             ]
+        //         );
+        //
+        //         // location
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("foo // bar").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(
+        //                     Token::new_name("foo"),
+        //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
+        //                     3
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Comment(Comment::Line(" bar".to_owned())),
+        //                     Range::from_detail_and_length(/*0,*/ 4, 0, 4),
+        //                     6
+        //                 ),
+        //             ]
+        //         );
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("abc // def\n// xyz\n").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(
+        //                     Token::new_name("abc"),
+        //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
+        //                     3
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Comment(Comment::Line(" def".to_owned())),
+        //                     Range::from_detail_and_length(/*0,*/ 4, 0, 4),
+        //                     6
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Newline,
+        //                     Range::from_detail_and_length(/*0,*/ 10, 0, 10),
+        //                     1
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Comment(Comment::Line(" xyz".to_owned())),
+        //                     Range::from_detail_and_length(/*0,*/ 11, 1, 0),
+        //                     6
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Newline,
+        //                     Range::from_detail_and_length(/*0,*/ 17, 1, 6),
+        //                     1
+        //                 ),
+        //             ]
+        //         );
+    }
+
+    #[test]
+    fn test_tokenize_block_comment() {
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip(
+        //                 r#"
+        //                 7 /* 11 13 */ 17
+        //                 "#
+        //             )
+        //             .unwrap(),
+        //             vec![
+        //                 Token::Newline,
+        //                 Token::Number(NumberToken::I32(7)),
+        //                 Token::Comment(Comment::Block(" 11 13 ".to_owned())),
+        //                 Token::Number(NumberToken::I32(17)),
+        //                 Token::Newline,
+        //             ]
+        //         );
+        //
+        //         // nested block comment
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip(
+        //                 r#"
+        //                 7 /* 11 /* 13 */ 17 */ 19
+        //                 "#
+        //             )
+        //             .unwrap(),
+        //             vec![
+        //                 Token::Newline,
+        //                 Token::Number(NumberToken::I32(7)),
+        //                 Token::Comment(Comment::Block(" 11 /* 13 */ 17 ".to_owned())),
+        //                 Token::Number(NumberToken::I32(19)),
+        //                 Token::Newline,
+        //             ]
+        //         );
+        //
+        //         // line comment chars "//" within the block comment
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip(
+        //                 r#"
+        //                 7 /* 11 // 13 17 */ 19
+        //                 "#
+        //             )
+        //             .unwrap(),
+        //             vec![
+        //                 Token::Newline,
+        //                 Token::Number(NumberToken::I32(7)),
+        //                 Token::Comment(Comment::Block(" 11 // 13 17 ".to_owned())),
+        //                 Token::Number(NumberToken::I32(19)),
+        //                 Token::Newline,
+        //             ]
+        //         );
+        //
+        //         // location
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("foo /* hello */ bar").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(
+        //                     Token::new_name("foo"),
+        //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
+        //                     3
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Comment(Comment::Block(" hello ".to_owned())),
+        //                     Range::from_detail_and_length(/*0,*/ 4, 0, 4),
+        //                     11
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::new_name("bar"),
+        //                     Range::from_detail_and_length(/*0,*/ 16, 0, 16),
+        //                     3
+        //                 ),
+        //             ]
+        //         );
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("/* abc\nxyz */ /* hello */").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(
+        //                     Token::Comment(Comment::Block(" abc\nxyz ".to_owned())),
+        //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
+        //                     13
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Comment(Comment::Block(" hello ".to_owned())),
+        //                     Range::from_detail_and_length(/*0,*/ 14, 1, 7),
+        //                     11
+        //                 ),
+        //             ]
+        //         );
+        //
+        //         // err: incomplete, missing "*/"
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("7 /* 11"),
+        //             Err(PreprocessError::UnexpectedEndOfDocument(_))
+        //         ));
+        //
+        //         // err: incomplete, missing "*/", ends with \n
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("7 /* 11\n"),
+        //             Err(PreprocessError::UnexpectedEndOfDocument(_))
+        //         ));
+        //
+        //         // err: incomplete, unpaired, missing "*/"
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("a /* b /* c */"),
+        //             Err(PreprocessError::UnexpectedEndOfDocument(_))
+        //         ));
+        //
+        //         // err: incomplete, unpaired, missing "*/", ends with \n
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("a /* b /* c */\n"),
+        //             Err(PreprocessError::UnexpectedEndOfDocument(_))
+        //         ));
+    }
+
+    #[test]
+    fn test_tokenize_shebang() {
+        // TODO
+    }
+
     //
     //     #[test]
     //     fn test_lex_punctuations() {
     //         assert_eq!(
     //             tokenize_from_str_without_range_strip("\n,:=->+-{}[]()").unwrap(),
     //             vec![
-    //                 Token::NewLine,
+    //                 Token::Newline,
     //                 Token::Comma,
     //                 Token::Colon,
     //                 Token::Equal,
@@ -2459,14 +2759,14 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("-->").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Minus,
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::RightArrow,
-    //                     &Location::new_position(/*0,*/ 1, 0, 1),
+    //                     Range::from_detail_and_length(/*0,*/ 1, 0, 1),
     //                     2
     //                 ),
     //             ]
@@ -2514,14 +2814,14 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("hello ASON").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_name("hello"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                     5
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_name("ASON"),
-    //                     &Location::new_position(/*0,*/ 6, 0, 6),
+    //                     Range::from_detail_and_length(/*0,*/ 6, 0, 6),
     //                     4
     //                 )
     //             ]
@@ -2548,29 +2848,29 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("foo::bar a::bc::def a:b").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_full_name("foo::bar"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                     8
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_full_name("a::bc::def"),
-    //                     &Location::new_position(/*0,*/ 9, 0, 9),
+    //                     Range::from_detail_and_length(/*0,*/ 9, 0, 9),
     //                     10
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_name("a"),
-    //                     &Location::new_position(/*0,*/ 20, 0, 20),
+    //                     Range::from_detail_and_length(/*0,*/ 20, 0, 20),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Colon,
-    //                     &Location::new_position(/*0,*/ 21, 0, 21),
+    //                     Range::from_detail_and_length(/*0,*/ 21, 0, 21),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_name("b"),
-    //                     &Location::new_position(/*0,*/ 22, 0, 22),
+    //                     Range::from_detail_and_length(/*0,*/ 22, 0, 22),
     //                     1
     //                 )
     //             ]
@@ -2632,24 +2932,24 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("data foo:i32").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_keyword("data"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                     4
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_name("foo"),
-    //                     &Location::new_position(/*0,*/ 5, 0, 5),
+    //                     Range::from_detail_and_length(/*0,*/ 5, 0, 5),
     //                     3
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Colon,
-    //                     &Location::new_position(/*0,*/ 8, 0, 8),
+    //                     Range::from_detail_and_length(/*0,*/ 8, 0, 8),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_datatype_name("i32"),
-    //                     &Location::new_position(/*0,*/ 9, 0, 9),
+    //                     Range::from_detail_and_length(/*0,*/ 9, 0, 9),
     //                     3
     //                 ),
     //             ]
@@ -2667,39 +2967,39 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("[\n  pub\n    data\n]").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::LeftBracket,
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::NewLine,
-    //                     &Location::new_position(/*0,*/ 1, 0, 1),
+    //                 TokenWithRange::new(
+    //                     Token::Newline,
+    //                     Range::from_detail_and_length(/*0,*/ 1, 0, 1),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_keyword("pub"),
-    //                     &Location::new_position(/*0,*/ 4, 1, 2),
+    //                     Range::from_detail_and_length(/*0,*/ 4, 1, 2),
     //                     3
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::NewLine,
-    //                     &Location::new_position(/*0,*/ 7, 1, 5),
+    //                 TokenWithRange::new(
+    //                     Token::Newline,
+    //                     Range::from_detail_and_length(/*0,*/ 7, 1, 5),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::new_keyword("data"),
-    //                     &Location::new_position(/*0,*/ 12, 2, 4),
+    //                     Range::from_detail_and_length(/*0,*/ 12, 2, 4),
     //                     4
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::NewLine,
-    //                     &Location::new_position(/*0,*/ 16, 2, 8),
+    //                 TokenWithRange::new(
+    //                     Token::Newline,
+    //                     Range::from_detail_and_length(/*0,*/ 16, 2, 8),
     //                     1
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::RightBracket,
-    //                     &Location::new_position(/*0,*/ 17, 3, 0),
+    //                     Range::from_detail_and_length(/*0,*/ 17, 3, 0),
     //                     1
     //                 ),
     //             ]
@@ -2750,14 +3050,14 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("223 211").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Number(NumberToken::I32(223)),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0,),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0,),
     //                     3
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Number(NumberToken::I32(211)),
-    //                     &Location::new_position(/*0,*/ 4, 0, 4,),
+    //                     Range::from_detail_and_length(/*0,*/ 4, 0, 4,),
     //                     3
     //                 ),
     //             ]
@@ -2929,14 +3229,14 @@ mod tests {
     //             assert_eq!(
     //                 tokenize_from_str("101_i16 103_i32").unwrap(),
     //                 vec![
-    //                     TokenWithRange::from_position_and_length(
+    //                     TokenWithRange::new(
     //                         Token::Number(NumberToken::I16(101)),
-    //                         &Location::new_position(/*0,*/ 0, 0, 0),
+    //                         Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                         7
     //                     ),
-    //                     TokenWithRange::from_position_and_length(
+    //                     TokenWithRange::new(
     //                         Token::Number(NumberToken::I32(103)),
-    //                         &Location::new_position(/*0,*/ 8, 0, 8),
+    //                         Range::from_detail_and_length(/*0,*/ 8, 0, 8),
     //                         7
     //                     ),
     //                 ]
@@ -3138,14 +3438,14 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("0xab 0xdef").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Number(NumberToken::I32(0xab)),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                     4
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Number(NumberToken::I32(0xdef)),
-    //                     &Location::new_position(/*0,*/ 5, 0, 5,),
+    //                     Range::from_detail_and_length(/*0,*/ 5, 0, 5,),
     //                     5
     //                 ),
     //             ]
@@ -3223,14 +3523,14 @@ mod tests {
     //             assert_eq!(
     //                 tokenize_from_str("0x101_i16 0x103_i32").unwrap(),
     //                 vec![
-    //                     TokenWithRange::from_position_and_length(
+    //                     TokenWithRange::new(
     //                         Token::Number(NumberToken::I16(0x101)),
-    //                         &Location::new_position(/*0,*/ 0, 0, 0),
+    //                         Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                         9
     //                     ),
-    //                     TokenWithRange::from_position_and_length(
+    //                     TokenWithRange::new(
     //                         Token::Number(NumberToken::I32(0x103)),
-    //                         &Location::new_position(/*0,*/ 10, 0, 10),
+    //                         Range::from_detail_and_length(/*0,*/ 10, 0, 10),
     //                         9
     //                     ),
     //                 ]
@@ -3397,9 +3697,9 @@ mod tests {
     //
     //         assert_eq!(
     //             tokenize_from_str("0x1.4p3").unwrap(),
-    //             vec![TokenWithRange::from_position_and_length(
+    //             vec![TokenWithRange::new(
     //                 Token::Number(NumberToken::F64(10f64)),
-    //                 &Location::new_position(/*0,*/ 0, 0, 0),
+    //                 Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                 7
     //             )]
     //         );
@@ -3502,14 +3802,14 @@ mod tests {
     //         assert_eq!(
     //             tokenize_from_str("0b10 0b0101").unwrap(),
     //             vec![
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Number(NumberToken::I32(0b10)),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0,),
+    //                     Range::from_detail_and_length(/*0,*/ 0, 0, 0,),
     //                     4
     //                 ),
-    //                 TokenWithRange::from_position_and_length(
+    //                 TokenWithRange::new(
     //                     Token::Number(NumberToken::I32(0b0101)),
-    //                     &Location::new_position(/*0,*/ 5, 0, 5,),
+    //                     Range::from_detail_and_length(/*0,*/ 5, 0, 5,),
     //                     6
     //                 ),
     //             ]
@@ -3602,14 +3902,14 @@ mod tests {
     //             assert_eq!(
     //                 tokenize_from_str("0b101_i16 0b1010_i32").unwrap(),
     //                 vec![
-    //                     TokenWithRange::from_position_and_length(
+    //                     TokenWithRange::new(
     //                         Token::Number(NumberToken::I16(0b101)),
-    //                         &Location::new_position(/*0,*/ 0, 0, 0),
+    //                         Range::from_detail_and_length(/*0,*/ 0, 0, 0),
     //                         9
     //                     ),
-    //                     TokenWithRange::from_position_and_length(
+    //                     TokenWithRange::new(
     //                         Token::Number(NumberToken::I32(0b1010)),
-    //                         &Location::new_position(/*0,*/ 10, 0, 10),
+    //                         Range::from_detail_and_length(/*0,*/ 10, 0, 10),
     //                         10
     //                     ),
     //                 ]
@@ -3894,7 +4194,7 @@ mod tests {
             ))
         ));
 
-        // err: incomplete char, missing the char and the closing single quote
+        // err: incomplete char, missing the content, encounter EOF
         assert!(matches!(
             tokenize_from_str_without_range_strip("'"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
@@ -3919,7 +4219,7 @@ mod tests {
             ))
         ));
 
-        // err: invalid char, expect the right quote, encounter another char
+        // err: invalid char, expect the right quote, encounter char 'b'
         assert!(matches!(
             tokenize_from_str_without_range_strip("'ab'"),
             Err(PreprocessError::MessageWithPosition(
@@ -3935,26 +4235,33 @@ mod tests {
         // err: unsupported escape char `'\?'`
         assert!(matches!(
             tokenize_from_str_without_range_strip(r#"'\?'"#),
-            Err(PreprocessError::MessageWithPosition(
+            Err(PreprocessError::MessageWithRange(
                 _,
-                Position {
-                    index: 2,
-                    line: 0,
-                    column: 2,
+                Range {
+                    start: Position {
+                        index: 1,
+                        line: 0,
+                        column: 1,
+                    },
+                    end_included: Position {
+                        index: 2,
+                        line: 0,
+                        column: 2,
+                    }
                 }
             ))
         ));
 
-        // err: incorrect hex escape `'\x.'`
+        // err: incorrect hex escape `'\x3'`
         assert!(matches!(
             tokenize_from_str_without_range_strip(r#"'\x3'"#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
                     start: Position {
-                        index: 0,
+                        index: 1,
                         line: 0,
-                        column: 0,
+                        column: 1,
                     },
                     end_included: Position {
                         index: 3,
@@ -3966,17 +4273,17 @@ mod tests {
         ));
 
         // err: empty unicode escape string
-        // "'\\u'"
-        //  01 23     // index
+        // '\\u'
+        // 01 23    // index
         assert!(matches!(
             tokenize_from_str_without_range_strip("'\\u'"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
                     start: Position {
-                        index: 0,
+                        index: 1,
                         line: 0,
-                        column: 0,
+                        column: 1,
                     },
                     end_included: Position {
                         index: 2,
@@ -3988,17 +4295,37 @@ mod tests {
         ));
 
         // err: invalid unicode escape string, the number of digits should be 4 or 8.
-        // "'\\u1000111'"
-        //  01 234567890    // index
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("'\\u123"),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 1,
+                        line: 0,
+                        column: 1,
+                    },
+                    end_included: Position {
+                        index: 5,
+                        line: 0,
+                        column: 5,
+                    }
+                }
+            ))
+        ));
+
+        // err: invalid unicode escape string, the number of digits should be 4 or 8.
+        // '\\U1000111'
+        // 01 234567890    // index
         assert!(matches!(
             tokenize_from_str_without_range_strip("'\\U1000111'"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
                     start: Position {
-                        index: 0,
+                        index: 1,
                         line: 0,
-                        column: 0,
+                        column: 1,
                     },
                     end_included: Position {
                         index: 9,
@@ -4010,17 +4337,17 @@ mod tests {
         ));
 
         // err: invalid unicode code point, code point out of range
-        // "'\\u123456'"
-        //  01 23456789 // index
+        // '\\U00123456'
+        // 01 2345678901    // index
         assert!(matches!(
             tokenize_from_str_without_range_strip("'\\U00123456'"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
                     start: Position {
-                        index: 0,
+                        index: 1,
                         line: 0,
-                        column: 0,
+                        column: 1,
                     },
                     end_included: Position {
                         index: 10,
@@ -4038,9 +4365,9 @@ mod tests {
                 _,
                 Range {
                     start: Position {
-                        index: 0,
+                        index: 1,
                         line: 0,
-                        column: 0,
+                        column: 1,
                     },
                     end_included: Position {
                         index: 4,
@@ -4050,981 +4377,261 @@ mod tests {
                 }
             ))
         ));
+    }
 
-        // err: incomplete unicode escape sequence, except closing single quote, encounter EOF
+    #[test]
+    fn test_tokenize_string() {
+        assert_eq!(
+            tokenize_from_str_without_range_strip(r#""abc""#).unwrap(),
+            vec![Token::new_string("abc")]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip(r#""abc" "xyz""#).unwrap(),
+            vec![Token::new_string("abc"), Token::new_string("xyz")]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("\"abc\"\n\n\"xyz\"").unwrap(),
+            vec![
+                Token::new_string("abc"),
+                Token::Newline,
+                Token::Newline,
+                Token::new_string("xyz"),
+            ]
+        );
+
+        // unicode
+        assert_eq!(
+            tokenize_from_str_without_range_strip(
+                r#"
+                "abc文字😊"
+                "#
+            )
+            .unwrap(),
+            vec![
+                Token::new_string("abc文字😊"),
+                Token::Newline,
+            ]
+        );
+
+        // empty string
+        assert_eq!(
+            tokenize_from_str_without_range_strip("\"\"").unwrap(),
+            vec![Token::new_string("")]
+        );
+
+        // escape chars
+        assert_eq!(
+            tokenize_from_str_without_range_strip(
+                r#"
+                "\\\'\"\t\r\n\0\x2d\u6587"
+                "#
+            )
+            .unwrap(),
+            vec![
+                Token::new_string("\\\'\"\t\r\n\0-文"),
+                Token::Newline,
+            ]
+        );
+
+        // location
+        // "abc" "文字😊"
+        // 01234567 8 9 0
+
+        assert_eq!(
+            tokenize_from_str(r#""abc" "文字😊""#).unwrap(),
+            vec![
+                TokenWithRange::new(
+                    Token::new_string("abc"),
+                    Range::from_detail_and_length(0, 0, 0, 5)
+                ),
+                TokenWithRange::new(
+                    Token::new_string("文字😊"),
+                    Range::from_detail_and_length(6, 0, 6, 5)
+                ),
+            ]
+        );
+
+        // err: incomplete string, missing the content, encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'\\u1234"),
+            tokenize_from_str_without_range_strip("\""),
+            Err(PreprocessError::UnexpectedEndOfDocument(_))
+        ));
+
+        // err: incomplete string, missing the closing double quote, encounter EOF
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("\"abc"),
+            Err(PreprocessError::UnexpectedEndOfDocument(_))
+        ));
+
+        // err: incomplete string, missing the closing double quote, ends with '\n' and encounter EOF
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("\"abc\n"),
+            Err(PreprocessError::UnexpectedEndOfDocument(_))
+        ));
+
+        // err: incomplete string, missing the closing double quote, ends with whitespaces and encounter EOF
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("\"abc\n   "),
+            Err(PreprocessError::UnexpectedEndOfDocument(_))
+        ));
+
+        // err: unsupported escape char `'\?'`.
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\?xyz""#),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4,
+                    },
+                    end_included: Position {
+                        index: 5,
+                        line: 0,
+                        column: 5,
+                    }
+                }
+            ))
+        ));
+
+        // err: incorrect hex escape `'\x3'`
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\x3xyz""#),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4,
+                    },
+                    end_included: Position {
+                        index: 6,
+                        line: 0,
+                        column: 6,
+                    }
+                }
+            ))
+        ));
+
+        // err: empty unicode escape string
+        // "abc\\u"
+        // 01234 5  // index
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\u""#),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4,
+                    },
+                    end_included: Position {
+                        index: 5,
+                        line: 0,
+                        column: 5,
+                    }
+                }
+            ))
+        ));
+
+        // err: invalid unicode escape string, the number of digits should be 4 or 8.
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\u123""#),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4,
+                    },
+                    end_included: Position {
+                        index: 8,
+                        line: 0,
+                        column: 8,
+                    }
+                }
+            ))
+        ));
+
+        // err: invalid unicode escape string, the number of digits should be 4 or 8.
+        // "abc\\U1000111xyz"
+        // 01234 567890234567   // index
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\U1000111xyz""#),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4,
+                    },
+                    end_included: Position {
+                        index: 12,
+                        line: 0,
+                        column: 12,
+                    }
+                }
+            ))
+        ));
+
+        // err: invalid unicode code point, code point out of range
+        // "abc\\U00123456xyz"
+        // 01234 5678901234567
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\U00123456xyz""#),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4,
+                    },
+                    end_included: Position {
+                        index: 13,
+                        line: 0,
+                        column: 13,
+                    }
+                }
+            ))
+        ));
+
+        // err: invalid char in the unicode escape sequence
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\u12mnxyz""#),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4,
+                    },
+                    end_included: Position {
+                        index: 7,
+                        line: 0,
+                        column: 7,
+                    }
+                }
+            ))
+        ));
+
+        // err: incomplete string, missing the closing double quote, ends with unicode escape sequence and encounter EOF
+        assert!(matches!(
+            tokenize_from_str_without_range_strip(r#""abc\u1234"#),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
     }
 
-    //     #[test]
-    //     fn test_lex_string() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(r#""abc""#).unwrap(),
-    //             vec![Token::new_string("abc")]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(r#"("abc")"#).unwrap(),
-    //             vec![
-    //                 Token::LeftParen,
-    //                 Token::new_string("abc"),
-    //                 Token::RightParen,
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(r#""abc" "xyz""#).unwrap(),
-    //             vec![Token::new_string("abc"), Token::new_string("xyz")]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("\"abc\"\n\n\"xyz\"").unwrap(),
-    //             vec![
-    //                 Token::new_string("abc"),
-    //                 Token::NewLine,
-    //                 Token::NewLine,
-    //                 Token::new_string("xyz"),
-    //             ]
-    //         );
-    //
-    //         // unicode
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 "abc文字😊"
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::new_string("abc文字😊"),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // empty string
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("\"\"").unwrap(),
-    //             vec![Token::new_string("")]
-    //         );
-    //
-    //         // escape chars
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 "\\\'\"\t\r\n\0\u{2d}\u{6587}"
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::new_string("\\\'\"\t\r\n\0-文"),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // location
-    //         // "abc" "文字😊"
-    //         // 01234567 8 9 0
-    //
-    //         assert_eq!(
-    //             tokenize_from_str(r#""abc" "文字😊""#).unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("abc"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     5
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("文字😊"),
-    //                     &Location::new_position(/*0,*/ 6, 0, 6),
-    //                     5
-    //                 ),
-    //             ]
-    //         );
-    //
-    //         // err: incomplete string, missing the closed quote
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("\"abc"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the closed quote, ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("\"abc\n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the closed quote, ends with whitespaces/other chars
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("\"abc\n   "),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: unsupported escape char \v
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\vxyz""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 4,
-    //                     line: 0,
-    //                     column: 4,
-    //                     length: 2
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: unsupported hex escape "\x.."
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\x33xyz""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 4,
-    //                     line: 0,
-    //                     column: 4,
-    //                     length: 2
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: empty unicode escape string
-    //         // "abc\u{}"
-    //         // 012345678    // index
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\u{}xyz""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 6,
-    //                     line: 0,
-    //                     column: 6,
-    //                     length: 2
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: invalid unicode code point, too much digits
-    //         // "abc\u{1000111}xyz"
-    //         // 0123456789023456789    // index
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\u{1000111}xyz""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 6,
-    //                     line: 0,
-    //                     column: 6,
-    //                     length: 8
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: invalid unicode code point, code point out of range
-    //         // "abc\u{123456}xyz"
-    //         // 012345678901234567
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\u{123456}xyz""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 6,
-    //                     line: 0,
-    //                     column: 6,
-    //                     length: 8
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: invalid char in the unicode escape sequence
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\u{12mn}xyz""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 9,
-    //                     line: 0,
-    //                     column: 9,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: missing the right brace for unicode escape sequence
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\u{1234""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 11,
-    //                     line: 0,
-    //                     column: 11,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: incomplete unicode escape sequence, encounter EOF
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\u{1234"#),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: missing left brace for unicode escape sequence
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(r#""abc\u1234}xyz""#),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 6,
-    //                     line: 0,
-    //                     column: 6,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_multiple_line_string() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("\"abc\n    \n\n    \n\"").unwrap(),
-    //             vec![Token::new_string("abc\n    \n\n    \n")]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("\"abc\ndef\n    uvw\r\n\t  \txyz\"").unwrap(),
-    //             vec![Token::new_string("abc\ndef\n    uvw\r\n\t  \txyz")]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("\"abc\n    xyz\n\" \"foo\nbar\"").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("abc\n    xyz\n"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     14
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("foo\nbar"),
-    //                     &Location::new_position(/*0,*/ 15, 2, 2),
-    //                     9
-    //                 )
-    //             ]
-    //         );
-    //
-    //         // err: incomplete string, missing the closed quote, ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("\"abc\n    \n\n    \n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the closed quote, whitespaces/other chars
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("\"abc\n    \n\n    \n   "),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_long_string() {
-    //         // the tailing '\' should escapes the new-line chars
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("\"abc\\\ndef\\\n    opq\\\r\n\t  \txyz\"").unwrap(),
-    //             vec![Token::new_string("abcdefopqxyz")]
-    //         );
-    //
-    //         // the tailing '\' should escapes the new-line chars and trim the leading white-spaces
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("\"\\\n  \t  \"").unwrap(),
-    //             vec![Token::new_string("")]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("\"abc\\\n\\\n    xyz\" \"\\\n\"").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("abcxyz"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     16
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string(""),
-    //                     &Location::new_position(/*0,*/ 17, 2, 9),
-    //                     4
-    //                 )
-    //             ]
-    //         );
-    //
-    //         // err: incomplete string, missing the right quote, ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("\"abc\\\n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the right quote, ends with whitespaces/other chars
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("\"abc\\\n    "),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_raw_string() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 "r\"abc\ndef\n    uvw\r\n\t escape: \\r\\n\\t\\\\ unicode: \\u{1234} xyz\""
-    //             )
-    //             .unwrap(),
-    //             vec![Token::new_string(
-    //                 "abc\ndef\n    uvw\r\n\t escape: \\r\\n\\t\\\\ unicode: \\u{1234} xyz"
-    //             )]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("r\"abc\n    xyz\" r\"foo\\nbar\"").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("abc\n    xyz"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     14
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("foo\\nbar"),
-    //                     &Location::new_position(/*0,*/ 15, 1, 9),
-    //                     11
-    //                 )
-    //             ]
-    //         );
-    //
-    //         // err: incomplete string, missing the right quote
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("r\"abc    "),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the right quote, ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("r\"abc\n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the right quote, ends with whitespaces/other chars
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("r\"abc\n   "),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_raw_string_with_hash_symbol() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 "r#\"abc\ndef\n    uvw\r\n\t escape: \\r\\n\\t\\\\ unicode: \\u{1234} xyz quote: \"foo\"\"#"
-    //             ).unwrap(),
-    //             vec![Token::new_string(
-    //                 "abc\ndef\n    uvw\r\n\t escape: \\r\\n\\t\\\\ unicode: \\u{1234} xyz quote: \"foo\""
-    //             )]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("r#\"abc\n    xyz\"# r#\"foo\\nbar\"#").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("abc\n    xyz"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     16
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("foo\\nbar"),
-    //                     &Location::new_position(/*0,*/ 17, 1, 10),
-    //                     13
-    //                 )
-    //             ]
-    //         );
-    //
-    //         // err: incomplete string, missing the closed hash
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("r#\"abc    \""),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the closed quote, ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("r#\"abc\n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete string, missing the closed quote, ends with whitespace/other chars
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("r#\"abc\nxyz"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_auto_trimmed_string() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 """
-    //                 one
-    //                   two
-    //                     three
-    //                 end
-    //                 """
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::new_string("one\n  two\n    three\nend"),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 """
-    //                 one
-    //               two
-    //             three
-    //                 end
-    //                 """
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::new_string("    one\n  two\nthree\n    end"),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // contains empty lines
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 """
-    //                     one\\\"\t\r\n\u{1234}
-    //
-    //                     end
-    //                 """
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::new_string("one\\\\\\\"\\t\\r\\n\\u{1234}\n\nend"),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // including (""")
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 """
-    //                     one"""
-    //                     two
-    //                 """
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::new_string("one\"\"\"\ntwo"),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // inline
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 11 """
-    //                     abc
-    //                 """ 13
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::Number(NumberToken::I32(11)),
-    //                 Token::new_string("abc"),
-    //                 Token::Number(NumberToken::I32(13)),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str(
-    //                 r#"["""
-    //     foo
-    //     bar
-    // """, """
-    //     hello
-    //     world
-    // """]"#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::LeftBracket,
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     1
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("foo\nbar"),
-    //                     &Location::new_position(/*0,*/ 1, 0, 1),
-    //                     23
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::Comma,
-    //                     &Location::new_position(/*0,*/ 24, 3, 3),
-    //                     1
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_string("hello\nworld"),
-    //                     &Location::new_position(/*0,*/ 26, 3, 5),
-    //                     27
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::RightBracket,
-    //                     &Location::new_position(/*0,*/ 53, 6, 3),
-    //                     1
-    //                 ),
-    //             ]
-    //         );
-    //
-    //         // err: the content does not start on a new line
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    // """hello
-    // """
-    // "#
-    //             ),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 4,
-    //                     line: 1,
-    //                     column: 3,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: missing the ending marker (the ending marker does not start on a new line)
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    // """
-    // hello"""
-    // "#
-    //             ),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: missing the ending marker
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    // """
-    // hello
-    // world"#
-    //             ),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: missing the ending marker, ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    // """
-    // hello
-    // "#
-    //             ),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_hex_byte_data() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                     h""
-    //                     "#
-    //             )
-    //             .unwrap(),
-    //             vec![Token::NewLine, Token::HexByteData(vec![]), Token::NewLine]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                     h"11"
-    //                     "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::HexByteData(vec![0x11]),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                     h"11 13 17 19"
-    //                     "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::HexByteData(vec![0x11, 0x13, 0x17, 0x19]),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 "
-    //                     h\"  11\t  13\r17\r\n  19\n  \"
-    //                     "
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::HexByteData(vec![0x11, 0x13, 0x17, 0x19]),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("h\"11 13\"").unwrap(),
-    //             vec![TokenWithRange::from_position_and_length(
-    //                 Token::HexByteData(vec![0x11, 0x13]),
-    //                 &Location::new_position(/*0,*/ 0, 0, 0),
-    //                 8
-    //             )]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("h\"11\" h\"13\"").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::HexByteData(vec![0x11]),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     5
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::HexByteData(vec![0x13]),
-    //                     &Location::new_position(/*0,*/ 6, 0, 6),
-    //                     5
-    //                 )
-    //             ]
-    //         );
-    //
-    //         // err: not enough digits
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("h\"11 1\""),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 6,
-    //                     line: 0,
-    //                     column: 6,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: too much digits | no whitespace between two bytes
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("h\"11 1317\""),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 7,
-    //                     line: 0,
-    //                     column: 7,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: invalid char for byte string
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("h\"11 1x\""),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 6,
-    //                     line: 0,
-    //                     column: 6,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: invalid separator
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("h\"11-13\""),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 4,
-    //                     line: 0,
-    //                     column: 4,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: missing the close quote
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("h\"11 13"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: missing the close quote, ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("h\"11 13\n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: missing the close quote, ends with whitespaces/other chars
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("h\"11 13\n    "),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_line_comment() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 7 //11
-    //                 13 17// 19 23
-    //                 //  29
-    //                 31//    37
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::Number(NumberToken::I32(7)),
-    //                 Token::Comment(Comment::Line("11".to_owned())),
-    //                 Token::NewLine,
-    //                 Token::Number(NumberToken::I32(13)),
-    //                 Token::Number(NumberToken::I32(17)),
-    //                 Token::Comment(Comment::Line(" 19 23".to_owned())),
-    //                 Token::NewLine,
-    //                 Token::Comment(Comment::Line("  29".to_owned())),
-    //                 Token::NewLine,
-    //                 Token::Number(NumberToken::I32(31)),
-    //                 Token::Comment(Comment::Line("    37".to_owned())),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("foo // bar").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_name("foo"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     3
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::Comment(Comment::Line(" bar".to_owned())),
-    //                     &Location::new_position(/*0,*/ 4, 0, 4),
-    //                     6
-    //                 ),
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("abc // def\n// xyz\n").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_name("abc"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     3
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::Comment(Comment::Line(" def".to_owned())),
-    //                     &Location::new_position(/*0,*/ 4, 0, 4),
-    //                     6
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::NewLine,
-    //                     &Location::new_position(/*0,*/ 10, 0, 10),
-    //                     1
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::Comment(Comment::Line(" xyz".to_owned())),
-    //                     &Location::new_position(/*0,*/ 11, 1, 0),
-    //                     6
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::NewLine,
-    //                     &Location::new_position(/*0,*/ 17, 1, 6),
-    //                     1
-    //                 ),
-    //             ]
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_lex_block_comment() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 7 /* 11 13 */ 17
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::Number(NumberToken::I32(7)),
-    //                 Token::Comment(Comment::Block(" 11 13 ".to_owned())),
-    //                 Token::Number(NumberToken::I32(17)),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // nested block comment
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 7 /* 11 /* 13 */ 17 */ 19
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::Number(NumberToken::I32(7)),
-    //                 Token::Comment(Comment::Block(" 11 /* 13 */ 17 ".to_owned())),
-    //                 Token::Number(NumberToken::I32(19)),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // line comment chars "//" within the block comment
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip(
-    //                 r#"
-    //                 7 /* 11 // 13 17 */ 19
-    //                 "#
-    //             )
-    //             .unwrap(),
-    //             vec![
-    //                 Token::NewLine,
-    //                 Token::Number(NumberToken::I32(7)),
-    //                 Token::Comment(Comment::Block(" 11 // 13 17 ".to_owned())),
-    //                 Token::Number(NumberToken::I32(19)),
-    //                 Token::NewLine,
-    //             ]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("foo /* hello */ bar").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_name("foo"),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     3
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::Comment(Comment::Block(" hello ".to_owned())),
-    //                     &Location::new_position(/*0,*/ 4, 0, 4),
-    //                     11
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::new_name("bar"),
-    //                     &Location::new_position(/*0,*/ 16, 0, 16),
-    //                     3
-    //                 ),
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("/* abc\nxyz */ /* hello */").unwrap(),
-    //             vec![
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::Comment(Comment::Block(" abc\nxyz ".to_owned())),
-    //                     &Location::new_position(/*0,*/ 0, 0, 0),
-    //                     13
-    //                 ),
-    //                 TokenWithRange::from_position_and_length(
-    //                     Token::Comment(Comment::Block(" hello ".to_owned())),
-    //                     &Location::new_position(/*0,*/ 14, 1, 7),
-    //                     11
-    //                 ),
-    //             ]
-    //         );
-    //
-    //         // err: incomplete, missing "*/"
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("7 /* 11"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete, missing "*/", ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("7 /* 11\n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete, unpaired, missing "*/"
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("a /* b /* c */"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //
-    //         // err: incomplete, unpaired, missing "*/", ends with \n
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("a /* b /* c */\n"),
-    //             Err(PreprocessError::UnexpectedEndOfDocument(_))
-    //         ));
-    //     }
+    #[test]
+    fn test_tokenize_continued_string() {
+        // TODO
+    }
 }
