@@ -23,14 +23,17 @@ use crate::{
     ParserError,
 };
 
-pub const PARSER_PEEK_TOKEN_MAX_COUNT: usize = 4;
+pub const PEEK_BUFFER_LENGTH_PREPROCESS: usize = 4;
 
-pub struct Parser<'a> {
+// see:
+// - https://en.cppreference.com/w/c/language.html
+// - https://en.cppreference.com/w/c/preprocessor.html
+pub struct Preprocessor<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithRange>,
     last_range: Location,
 }
 
-impl<'a> Parser<'a> {
+impl<'a> Preprocessor<'a> {
     fn new(upstream: &'a mut PeekableIter<'a, TokenWithRange>) -> Self {
         Self {
             upstream,
@@ -268,7 +271,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-impl Parser<'_> {
+impl Preprocessor<'_> {
     pub fn parse_module_node(&mut self) -> Result<ModuleNode, ParserError> {
         // let mut uses: Vec<UseNode> = vec![];
         let mut imports: Vec<ImportNode> = vec![];
@@ -1800,8 +1803,8 @@ pub fn parse_from_str(source_code: &str) -> Result<ModuleNode, ParserError> {
     let clean_tokens = clean(tokens);
     let normalized_tokens = normalize(clean_tokens)?;
     let mut token_iter = normalized_tokens.into_iter();
-    let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PARSER_PEEK_TOKEN_MAX_COUNT);
-    let mut parser = Parser::new(&mut peekable_token_iter);
+    let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_PREPROCESS);
+    let mut parser = Preprocessor::new(&mut peekable_token_iter);
     parser.parse_module_node()
 }
 

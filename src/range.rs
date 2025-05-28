@@ -28,15 +28,17 @@ impl Range {
     }
 
     pub fn from_position_and_length(pos: &Position, length: usize) -> Self {
+        let inc = length - 1;
         Self {
             start: *pos,
-            end_included: Position::new(pos.index + length - 1, pos.line, pos.column + length - 1),
+            end_included: Position::new(pos.index + inc, pos.line, pos.column + inc),
         }
     }
 
     pub fn from_detail_and_length(index: usize, line: usize, column: usize, length: usize) -> Self {
+        let inc = length - 1;
         let start = Position::new(index, line, column);
-        let end_included = Position::new(index + length - 1, line, column + length - 1);
+        let end_included = Position::new(index + inc, line, column + inc);
         Self {
             start,
             end_included,

@@ -26,13 +26,17 @@ pub enum Token {
     // A string literal, character constant, or header file name (as used in #include).
     // String and character constants are written as "..." or '...'.
     // Embedded quotes must be escaped with a backslash, e.g., '\'' represents the character constant for a single quote.
-    String(String),
+    //
+    // see: https://en.cppreference.com/w/c/language/string_literal.html
+    String(String, StringType),
 
-    // A character constant, e.g., 'a', '\t', '文', '\u6587', and '\U2005E'.
-    // See: https://en.wikipedia.org/wiki/Escape_sequences_in_C
-    Char(char),
-
-    Operator(Operator),
+    // A (single) character constant, e.g., 'a', '\t', '文', '\u6587', and '\U2005E'.
+    // ANCPP does not support multicharacter constants like 'abc', L'abc', '\1\2\3\4'.
+    //
+    // See:
+    // - https://en.wikipedia.org/wiki/Escape_sequences_in_C
+    // - https://en.cppreference.com/w/c/language/character_constant.html
+    Char(char, CharType),
 
     // A punctuator: any punctuation character meaningful in C or C++,
     // except for '@', '$', and '`', which are not considered C punctuators.
@@ -45,11 +49,11 @@ pub enum Token {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Operator {
+pub enum Punctuator {
     // Arithmetic Operators
     Addition,       // '+'
     Subtraction,    // '-'
-    Multiplication, // '*'
+    Multiplication, // '*', also is operator `Dereference`
     Division,       // '/'
     Modulus,        // '%'
     Increment,      // '++'
@@ -69,12 +73,12 @@ pub enum Operator {
     Not, // '!'
 
     // Bitwise Operators
-    BitwiseAnd, // '&'
+    BitwiseAnd, // '&', also is operator `AddressOf`
     BitwiseOr,  // '|'
     BitwiseXor, // '^'
     BitwiseNot, // '~'
     ShiftLeft,  // '<<'
-    ShiftRight, // '>>'
+    ShiftRight, // '>>', note that there is no `>>>` (logical right shift) operator in C
 
     // Assignment Operators
     Assignment,           // '='
@@ -90,18 +94,14 @@ pub enum Operator {
     ShiftRightAssignment, // '>>='
 
     // Conditional Operator
-    Conditional, // '?'
+    QuestionMark, // '?'
 
     // Miscellaneous Operators
-    AddressOf,     // '&'
-    Dereference,   // '*'
-    Comma,         // ','
-    MemberAccess,  // '.'
-    PointerAccess, // '->'
-}
+    Comma, // ','
+    Dot,   // '.', member access operator
+    Arrow, // '->', pointer member access operator
 
-#[derive(Debug, PartialEq)]
-pub enum Punctuator {
+    // Brackets and Delimiters
     BraceOpen,        // '{'
     BraceClose,       // '}'
     BracketOpen,      // '['
@@ -110,11 +110,45 @@ pub enum Punctuator {
     ParenthesisClose, // ')'
     Semicolon,        // ';'
     Colon,            // ':'
-    Variadic,         // '...'
+    Ellipsis,         // '...', Variadic arguments in function definitions
 
-    // used in C preprocessor directives
+    // Punctuators used in C preprocessor directives
     Pound,      // '#'
     PoundPound, // '##'
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CharType {
+    Int, // Normal character, e.g., 'a', '1', '文', note that the data type is `int` instead of `char`.
+    Wide, // Wide character, e.g., L'a', L'文', data type is `wchar_t`
+    UTF16, // UTF-16 character, e.g., u'a', u'文', data type is `char16_t`
+    UTF32, // UTF-32 character, e.g., U'a', U'文', data type is `char32_t`
+    UTF8, // UTF-8 character, e.g., u8'a', u8'文', data type is `char8_t`
+}
+
+#[derive(Debug, PartialEq)]
+pub enum StringType {
+    Char,  // Normal string, e.g., "hello", "文", data type is `char[]`
+    Wide,  // Wide string, e.g., L"hello", L"文", data type is `wchar_t[]`
+    UTF16, // UTF-16 string, e.g., u"hello", u"文", data type is `char16_t[]`
+    UTF32, // UTF-32 string, e.g., U"hello", U"文", data type is `char32_t[]`
+    UTF8,  // UTF-8 string, e.g., u8"hello", u8"文", data type is `char8_t[]`
+}
+
+#[derive(Debug, PartialEq)]
+pub enum IntegerNumberType{
+    Unsigned,
+    UnsignedLong,
+    UnsignedLongLong,
+    Long,
+    LongLong
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FloatingPointNumberType{
+    Float,
+    Double,
+    LongDouble,
 }
 
 #[derive(Debug, PartialEq)]
