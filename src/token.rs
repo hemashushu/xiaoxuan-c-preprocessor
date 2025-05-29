@@ -202,7 +202,10 @@ pub enum FloatingPointNumberType {
 #[derive(Debug, PartialEq)]
 pub struct FloatingPointNumber {
     pub value: String,
-    pub decimal: bool, // true for `_Decimal{32|64|128}`, note `_Decimal64` has suffix `dd` or `DD`
+
+    /// true for `_Decimal{32|64|128}`.
+    /// possible suffix are: `dd`, `DD`, `df`, `DF`, `dl`, `DL`
+    pub decimal: bool,
     pub number_type: FloatingPointNumberType,
 }
 

@@ -1147,6 +1147,12 @@ impl Tokenizer<'_> {
 
         self.push_peek_position_into_store();
 
+        if leading_dot {
+            // if the number starts with a dot, e.g. `.5`, then we should add a leading zero
+            num_string.push_str("0.");
+            self.next_char(); // consumes '.'
+        }
+
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 '0'..='9' => {
@@ -1157,26 +1163,40 @@ impl Tokenizer<'_> {
                 '\'' => {
                     self.next_char(); // Consumes '\''
                 }
-                '.' if !found_point => {
-                    found_point = true;
-                    num_string.push(*current_char);
-
-                    self.next_char(); // consumes '.'
-                }
-                'e' | 'E' if !found_e => {
-                    found_e = true;
-
-                    if self.peek_char_and_equals(1, '-') {
-                        num_string.push_str("e-");
-                        self.next_char(); // consumes 'e' or 'E'
-                        self.next_char(); // consumes '-'
-                    } else if self.peek_char_and_equals(1, '+') {
-                        num_string.push_str("e+");
-                        self.next_char(); // consumes 'e' or 'E'
-                        self.next_char(); // consumes '+'
+                '.' => {
+                    if found_point {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Decimal number can not have multiple '.' characters.".to_owned(),
+                            *self.peek_position(0).unwrap(),
+                        ));
                     } else {
-                        num_string.push('e');
-                        self.next_char(); // consumes 'e' or 'E'
+                        found_point = true;
+                        num_string.push(*current_char);
+
+                        self.next_char(); // consumes '.'
+                    }
+                }
+                'e' | 'E' => {
+                    if found_e {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Decimal number can not have multiple 'e' characters.".to_owned(),
+                            *self.peek_position(0).unwrap(),
+                        ));
+                    } else {
+                        found_e = true;
+
+                        if self.peek_char_and_equals(1, '-') {
+                            num_string.push_str("e-");
+                            self.next_char(); // consumes 'e' or 'E'
+                            self.next_char(); // consumes '-'
+                        } else if self.peek_char_and_equals(1, '+') {
+                            num_string.push_str("e+");
+                            self.next_char(); // consumes 'e' or 'E'
+                            self.next_char(); // consumes '+'
+                        } else {
+                            num_string.push('e');
+                            self.next_char(); // consumes 'e' or 'E'
+                        }
                     }
                 }
                 'u' | 'U' | 'l' | 'L' | 'w' | 'W' | 'f' | 'F' | 'd' | 'D' => {
@@ -1216,11 +1236,6 @@ impl Tokenizer<'_> {
         }
 
         // normalize
-        if leading_dot {
-            // if the number starts with a dot, e.g. `.5`, then we should add a leading zero
-            num_string.insert(0, '0');
-        }
-
         if num_string.ends_with('.') {
             // if the number ends with a dot, e.g. `1.`, then we should add a trailing zero
             num_string.push('0');
@@ -1494,7 +1509,71 @@ impl Tokenizer<'_> {
         //
         // T = terminator chars || EOF
         // ```
-        todo!()
+
+        // Save the start position of the binary number (i.e. the first '0')
+        self.push_peek_position_into_store();
+
+        let mut num_string = String::new();
+        let mut is_unsigned = false;
+        let mut integer_number_type = IntegerNumberType::Default;
+
+        num_string.push_str("0b");
+        self.next_char(); // Consumes '0'
+        self.next_char(); // Consumes 'b'
+
+        while let Some(current_char) = self.peek_char(0) {
+            match current_char {
+                '0' | '1' => {
+                    // valid digits for binary number
+                    num_string.push(*current_char);
+                    self.next_char(); // Consumes digit
+                }
+                '\'' => {
+                    self.next_char(); // Consumes '\''
+                }
+                'u' | 'U' | 'l' | 'L' | 'w' | 'W' => {
+                    // integer suffix
+                    let suffix = self.tokenize_integer_number_suffix()?;
+                    is_unsigned = suffix.0;
+                    integer_number_type = suffix.1;
+                    break;
+                }
+                '2'..='9' | '.' | 'e' | 'E' => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        format!("Invalid digit '{}' for binary number.", current_char),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                    // terminator, all punctuation and whitespace, per ASCII table
+                    break;
+                }
+                _ => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        format!("Invalid char '{}' for binary number.", current_char),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+            }
+        }
+
+        if num_string.len() <= 2 {
+            return Err(PreprocessError::MessageWithRange(
+                "Binary number must have at least one digit after \"0b\".".to_owned(),
+                Range::new(&self.pop_position_from_store(), &self.last_position),
+            ));
+        }
+
+        let num_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+
+        Ok(TokenWithRange::new(
+            Token::Number(Number::Integer(IntegerNumber::new(
+                num_string,
+                is_unsigned,
+                integer_number_type,
+            ))),
+            num_range,
+        ))
     }
 
     fn tokenize_octal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
@@ -2377,8 +2456,8 @@ mod tests {
         position::Position,
         range::Range,
         token::{
-            CharType, IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token,
-            TokenWithRange,
+            CharType, FloatingPointNumber, FloatingPointNumberType, IntegerNumber,
+            IntegerNumberType, Number, Punctuator, StringType, Token, TokenWithRange,
         },
         tokenize::{
             PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS,
@@ -2830,13 +2909,13 @@ mod tests {
 
         // err: invalid char for decimal number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("12x34"),
+            tokenize_from_str_without_range_strip("1234x"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
-                    index: 2,
+                    index: 4,
                     line: 0,
-                    column: 2,
+                    column: 4,
                 }
             ))
         ));
@@ -2970,7 +3049,7 @@ mod tests {
 
         // err: invalid suffix for integer number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("11f"),
+            tokenize_from_str_without_range_strip("13f"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -2982,380 +3061,479 @@ mod tests {
         ));
     }
 
-    //     #[allow(clippy::approx_constant)]
-    //     #[test]
-    //     fn test_tokenize_decimal_number_floating_point() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("3.14").unwrap(),
-    //             vec![Token::Number(NumberToken::F64(3.14))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("+1.414").unwrap(),
-    //             vec![Token::Plus, Token::Number(NumberToken::F64(1.414))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("-2.718").unwrap(),
-    //             vec![Token::Minus, Token::Number(NumberToken::F64(2.718))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("2.998e8").unwrap(),
-    //             vec![Token::Number(NumberToken::F64(2.998e8))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("2.998e+8").unwrap(),
-    //             vec![Token::Number(NumberToken::F64(2.998e+8))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("6.626e-34").unwrap(),
-    //             vec![Token::Number(NumberToken::F64(6.626e-34))]
-    //         );
-    //
-    //         // err: incomplete floating point number since ends with '.'
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("123."),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 3,
-    //                     line: 0,
-    //                     column: 3,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: incomplete floating point number since ends with 'e'
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("123e"),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 3,
-    //                     line: 0,
-    //                     column: 3,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: multiple '.' (point)
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("1.23.456"),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 4,
-    //                     line: 0,
-    //                     column: 4,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: multiple 'e' (exponent)
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("1e23e456"),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 4,
-    //                     line: 0,
-    //                     column: 4,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: unsupports start with dot
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip(".123"),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 0,
-    //                     line: 0,
-    //                     column: 0,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //     }
-    //
+    #[allow(clippy::approx_constant)]
+    #[test]
+    fn test_tokenize_floating_point_decimal_number() {
+        assert_eq!(
+            tokenize_from_str_without_range_strip("3.14").unwrap(),
+            vec![Token::Number(Number::FloatingPoint(
+                FloatingPointNumber::new("3.14".to_owned(), false, FloatingPointNumberType::Double)
+            ))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("1.4'14").unwrap(),
+            vec![Token::Number(Number::FloatingPoint(
+                FloatingPointNumber::new(
+                    "1.414".to_owned(),
+                    false,
+                    FloatingPointNumberType::Double
+                )
+            ))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip(".5").unwrap(),
+            vec![Token::Number(Number::FloatingPoint(
+                FloatingPointNumber::new("0.5".to_owned(), false, FloatingPointNumberType::Double)
+            ))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("5.").unwrap(),
+            vec![Token::Number(Number::FloatingPoint(
+                FloatingPointNumber::new("5.0".to_owned(), false, FloatingPointNumberType::Double)
+            ))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("2.998e8").unwrap(),
+            vec![Token::Number(Number::FloatingPoint(
+                FloatingPointNumber::new(
+                    "2.998e8".to_owned(),
+                    false,
+                    FloatingPointNumberType::Double
+                )
+            ))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("2.998e+8").unwrap(),
+            vec![Token::Number(Number::FloatingPoint(
+                FloatingPointNumber::new(
+                    "2.998e+8".to_owned(),
+                    false,
+                    FloatingPointNumberType::Double
+                )
+            ))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("6.626e-34").unwrap(),
+            vec![Token::Number(Number::FloatingPoint(
+                FloatingPointNumber::new(
+                    "6.626e-34".to_owned(),
+                    false,
+                    FloatingPointNumberType::Double
+                )
+            ))]
+        );
+
+        // testing token's location
+
+        assert_eq!(
+            tokenize_from_str("3.14 6.022e23").unwrap(),
+            vec![
+                TokenWithRange::new(
+                    Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                        "3.14".to_owned(),
+                        false,
+                        FloatingPointNumberType::Double
+                    ))),
+                    Range::from_detail_and_length(0, 0, 0, 4)
+                ),
+                TokenWithRange::new(
+                    Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                        "6.022e23".to_owned(),
+                        false,
+                        FloatingPointNumberType::Double
+                    ))),
+                    Range::from_detail_and_length(5, 0, 5, 8)
+                ),
+            ]
+        );
+
+        // err: incomplete floating point number since it ends with 'e'
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("123e"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 3,
+                    line: 0,
+                    column: 3,
+                }
+            ))
+        ));
+
+        // err: multiple '.' (point)
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("1.23.456"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 4,
+                    line: 0,
+                    column: 4,
+                }
+            ))
+        ));
+
+        // err: multiple 'e' (exponent)
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("1e23e456"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 4,
+                    line: 0,
+                    column: 4,
+                }
+            ))
+        ));
+
+        // err: invalid char for floating-point decimal number
+        // err: multiple 'e' (exponent)
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("2.718x"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 5,
+                    line: 0,
+                    column: 5,
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_tokenize_floating_point_decimal_number_with_suffix() {
+        assert_eq!(
+            tokenize_from_str_without_range_strip("1.0f 2.0F 3.0l 4.0L").unwrap(),
+            vec![
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "1.0".to_owned(),
+                    false,
+                    FloatingPointNumberType::Float
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "2.0".to_owned(),
+                    false,
+                    FloatingPointNumberType::Float
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "3.0".to_owned(),
+                    false,
+                    FloatingPointNumberType::LongDouble
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "4.0".to_owned(),
+                    false,
+                    FloatingPointNumberType::LongDouble
+                )))
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("1.0dd 2.0DD 3.0df 4.0DF 5.0dl 6.0DL").unwrap(),
+            vec![
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "1.0".to_owned(),
+                    true,
+                    FloatingPointNumberType::Double
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "2.0".to_owned(),
+                    true,
+                    FloatingPointNumberType::Double
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "3.0".to_owned(),
+                    true,
+                    FloatingPointNumberType::Float
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "4.0".to_owned(),
+                    true,
+                    FloatingPointNumberType::Float
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "5.0".to_owned(),
+                    true,
+                    FloatingPointNumberType::LongDouble
+                ))),
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    "6.0".to_owned(),
+                    true,
+                    FloatingPointNumberType::LongDouble
+                )))
+            ]
+        );
+
+        // err: invalid suffix for floating-point number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("1.23ll"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 4,
+                    line: 0,
+                    column: 4,
+                }
+            ))
+        ));
+    }
 
     #[test]
     fn test_tokenize_binary_number() {
-        //         assert_eq!(
-        //             tokenize_from_str_without_range_strip("0b1100").unwrap(),
-        //             vec![Token::Number(NumberToken::I32(0b1100))]
-        //         );
-        //
-        //         assert_eq!(
-        //             tokenize_from_str_without_range_strip("-0b1010").unwrap(),
-        //             vec![Token::Minus, Token::Number(NumberToken::I32(0b1010))]
-        //         );
-        //
-        //         assert_eq!(
-        //             tokenize_from_str_without_range_strip("+0b0101").unwrap(),
-        //             vec![Token::Plus, Token::Number(NumberToken::I32(0b0101))]
-        //         );
-        //
-        //         // location
-        //
-        //         assert_eq!(
-        //             tokenize_from_str("0b10 0b0101").unwrap(),
-        //             vec![
-        //                 TokenWithRange::new(
-        //                     Token::Number(NumberToken::I32(0b10)),
-        //                     Range::from_detail_and_length( 0, 0, 0,),
-        //                     4
-        //                 ),
-        //                 TokenWithRange::new(
-        //                     Token::Number(NumberToken::I32(0b0101)),
-        //                     Range::from_detail_and_length( 5, 0, 5,),
-        //                     6
-        //                 ),
-        //             ]
-        //         );
-        //
-        //         // err: does not support binary floating point
-        //         assert!(matches!(
-        //             tokenize_from_str_without_range_strip("0b11.10"),
-        //             Err(PreprocessError::MessageWithPosition(
-        //                 _,
-        //                 Location {
-        //                     /* unit: 0, */
-        //                     index: 4,
-        //                     line: 0,
-        //                     column: 4,
-        //                     length: 0
-        //                 }
-        //             ))
-        //         ));
-        //
-        //         // err: binary number overflow
-        //         assert!(matches!(
-        //             tokenize_from_str_without_range_strip("0b1_0000_0000_0000_0000_0000_0000_0000_0000"),
-        //             Err(PreprocessError::MessageWithPosition(
-        //                 _,
-        //                 Location {
-        //                     /* unit: 0, */
-        //                     index: 0,
-        //                     line: 0,
-        //                     column: 0,
-        //                     length: 43
-        //                 }
-        //             ))
-        //         ));
-        //
-        //         // err: invalid char for binary number
-        //         assert!(matches!(
-        //             tokenize_from_str_without_range_strip("0b101xyz"),
-        //             Err(PreprocessError::MessageWithPosition(
-        //                 _,
-        //                 Location {
-        //                     /* unit: 0, */
-        //                     index: 5,
-        //                     line: 0,
-        //                     column: 5,
-        //                     length: 0
-        //                 }
-        //             ))
-        //         ));
-        //
-        //         // err: empty binary number
-        //         assert!(matches!(
-        //             tokenize_from_str_without_range_strip("0b"),
-        //             Err(PreprocessError::MessageWithPosition(
-        //                 _,
-        //                 Location {
-        //                     /* unit: 0, */
-        //                     index: 0,
-        //                     line: 0,
-        //                     column: 0,
-        //                     length: 2
-        //                 }
-        //             ))
-        //         ));
+        assert_eq!(
+            tokenize_from_str_without_range_strip("0b0100").unwrap(),
+            vec![Token::Number(Number::Integer(IntegerNumber::new(
+                "0b0100".to_owned(),
+                false,
+                IntegerNumberType::Default
+            )))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("0b0110'1001").unwrap(),
+            vec![Token::Number(Number::Integer(IntegerNumber::new(
+                "0b01101001".to_owned(),
+                false,
+                IntegerNumberType::Default
+            )))]
+        );
+
+        // testing token's location
+
+        assert_eq!(
+            tokenize_from_str("0b0110 0b1000").unwrap(),
+            vec![
+                TokenWithRange::new(
+                    Token::Number(Number::Integer(IntegerNumber::new(
+                        "0b0110".to_owned(),
+                        false,
+                        IntegerNumberType::Default
+                    ))),
+                    Range::from_detail_and_length(0, 0, 0, 6)
+                ),
+                TokenWithRange::new(
+                    Token::Number(Number::Integer(IntegerNumber::new(
+                        "0b1000".to_owned(),
+                        false,
+                        IntegerNumberType::Default
+                    ))),
+                    Range::from_detail_and_length(7, 0, 7, 6)
+                ),
+            ]
+        );
+
+        // err: does not support binary floating point
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("0b10.10"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 4,
+                    line: 0,
+                    column: 4,
+                }
+            ))
+        ));
+
+        // err: invalid digit for binary number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("0b123"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 3,
+                    line: 0,
+                    column: 3,
+                }
+            ))
+        ));
+
+        // err: invalid char for binary number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("0b1x"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 3,
+                    line: 0,
+                    column: 3,
+                }
+            ))
+        ));
+
+        // err: empty binary number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("0b"),
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 0,
+                        line: 0,
+                        column: 0,
+                    },
+                    end_included: Position {
+                        index: 1,
+                        line: 0,
+                        column: 1,
+                    }
+                }
+            ))
+        ));
     }
 
     #[test]
     fn test_tokenize_binary_number_with_suffix() {
-        //         // general
-        //         {
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b11i32").unwrap(),
-        //                 vec![Token::Number(NumberToken::I32(0b11))]
-        //             );
-        //
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b11_i32").unwrap(),
-        //                 vec![Token::Number(NumberToken::I32(0b11))]
-        //             );
-        //
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b11__i32").unwrap(),
-        //                 vec![Token::Number(NumberToken::I32(0b11))]
-        //             );
-        //
-        //             // location
-        //
-        //             // "0b101_i16 0b1010_u32"
-        //             //  01234567890123456789  // index
-        //             assert_eq!(
-        //                 tokenize_from_str("0b101_i16 0b1010_i32").unwrap(),
-        //                 vec![
-        //                     TokenWithRange::new(
-        //                         Token::Number(NumberToken::I16(0b101)),
-        //                         Range::from_detail_and_length( 0, 0, 0),
-        //                         9
-        //                     ),
-        //                     TokenWithRange::new(
-        //                         Token::Number(NumberToken::I32(0b1010)),
-        //                         Range::from_detail_and_length( 10, 0, 10),
-        //                         10
-        //                     ),
-        //                 ]
-        //             );
-        //         }
-        //
-        //         // byte
-        //         {
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b0111_1111_i8").unwrap(),
-        //                 vec![Token::Number(NumberToken::I8(0x7f_i8 as u8))]
-        //             );
-        //
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b1111_1111_i8").unwrap(),
-        //                 vec![Token::Number(NumberToken::I8(0xff_u8))]
-        //             );
-        //
-        //             // err: unsigned overflow
-        //             assert!(matches!(
-        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_i8"),
-        //                 Err(PreprocessError::MessageWithPosition(
-        //                     _,
-        //                     Location {
-        //                         /* unit: 0, */
-        //                         index: 0,
-        //                         line: 0,
-        //                         column: 0,
-        //                         length: 16
-        //                     }
-        //                 ))
-        //             ));
-        //         }
-        //
-        //         // short
-        //         {
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b0111_1111_1111_1111_i16").unwrap(),
-        //                 vec![Token::Number(NumberToken::I16(0x7fff_i16 as u16))]
-        //             );
-        //
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b1111_1111_1111_1111_i16").unwrap(),
-        //                 vec![Token::Number(NumberToken::I16(0xffff_u16))]
-        //             );
-        //
-        //             // err: unsigned overflow
-        //             assert!(matches!(
-        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_1111_1111_i16"),
-        //                 Err(PreprocessError::MessageWithPosition(
-        //                     _,
-        //                     Location {
-        //                         /* unit: 0, */
-        //                         index: 0,
-        //                         line: 0,
-        //                         column: 0,
-        //                         length: 27
-        //                     }
-        //                 ))
-        //             ));
-        //         }
-        //
-        //         // int
-        //         {
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b0111_1111_1111_1111__1111_1111_1111_1111_i32")
-        //                     .unwrap(),
-        //                 vec![Token::Number(NumberToken::I32(0x7fff_ffff_i32 as u32))]
-        //             );
-        //
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b1111_1111_1111_1111__1111_1111_1111_1111_i32")
-        //                     .unwrap(),
-        //                 vec![Token::Number(NumberToken::I32(0xffff_ffff_u32))]
-        //             );
-        //
-        //             // err: unsigned overflow
-        //             assert!(matches!(
-        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_1111_1111__1111_1111_1111_1111_i32"),
-        //                 Err(PreprocessError::MessageWithPosition(
-        //                     _,
-        //                     Location {
-        //                         /* unit: 0, */
-        //                         index: 0,
-        //                         line: 0,
-        //                         column: 0,
-        //                         length: 48
-        //                     }
-        //                 ))
-        //             ));
-        //         }
-        //
-        //         // long
-        //         {
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b0111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64").unwrap(),
-        //                 vec![Token::Number(NumberToken::I64(0x7fff_ffff_ffff_ffff_i64 as u64))]
-        //             );
-        //
-        //             assert_eq!(
-        //                 tokenize_from_str_without_range_strip("0b1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64").unwrap(),
-        //                 vec![Token::Number(NumberToken::I64(0xffff_ffff_ffff_ffff_u64))]
-        //             );
-        //
-        //             // err: unsigned overflow
-        //             assert!(matches!(
-        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64"),
-        //                 Err(PreprocessError::MessageWithPosition(
-        //                     _,
-        //                     Location {
-        //                         /* unit: 0, */
-        //                         index: 0,
-        //                         line: 0,
-        //                         column: 0,
-        //                         length: 90
-        //                     }
-        //                 ))
-        //             ));
-        //         }
-        //
-        //         // err: does not support binary floating pointer number (invalid char 'f' for binary number)
-        //         assert!(matches!(
-        //             tokenize_from_str_without_range_strip("0b11_f32"),
-        //             Err(PreprocessError::MessageWithPosition(
-        //                 _,
-        //                 Location {
-        //                     /* unit: 0, */
-        //                     index: 5,
-        //                     line: 0,
-        //                     column: 5,
-        //                     length: 0
-        //                 }
-        //             ))
-        //         ));
+        assert_eq!(
+            tokenize_from_str_without_range_strip("0b01u 0b10U").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b01".to_owned(),
+                    true,
+                    IntegerNumberType::Default
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b10".to_owned(),
+                    true,
+                    IntegerNumberType::Default
+                )))
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("0b001l 0b010L 0b011ll 0b100LL 0b101wb 0b110WB")
+                .unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b001".to_owned(),
+                    false,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b010".to_owned(),
+                    false,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b011".to_owned(),
+                    false,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b100".to_owned(),
+                    false,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b101".to_owned(),
+                    false,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b110".to_owned(),
+                    false,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip(
+                "0b001ul 0b010UL 0b011ull 0b100ULL 0b101uwb 0b110UWB"
+            )
+            .unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b001".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b010".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b011".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b100".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b101".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b110".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip(
+                "0b001lu 0b010LU 0b011llu 0b100LLU 0b101wbu 0b110WBU"
+            )
+            .unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b001".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b010".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b011".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b100".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b101".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "0b110".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        // err: invalid suffix for integer number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("0b01f"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 4,
+                    line: 0,
+                    column: 4,
+                }
+            ))
+        ));
     }
 
     #[test]
