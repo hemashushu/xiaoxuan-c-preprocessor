@@ -12,7 +12,10 @@ use crate::{
     peekableiter::PeekableIter,
     position::Position,
     range::Range,
-    token::{CharType, IntegerNumberType, Punctuator, StringType, Token, TokenWithRange},
+    token::{
+        CharType, FloatingPointNumber, FloatingPointNumberType, IntegerNumber, IntegerNumberType,
+        Number, Punctuator, StringType, Token, TokenWithRange,
+    },
 };
 
 const PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES: usize = 2;
@@ -102,18 +105,6 @@ fn merge_continued_lines(
                     }
                 }
             }
-            // '\r' if matches!(
-            //     chars.peek(0),
-            //     Some(CharWithPosition {
-            //         character: '\n',
-            //         ..
-            //     })
-            // ) =>
-            // {
-            //     // Convert Windows-style line ending "\r\n" to a single '\n'
-            //     let newline = chars.next(); // Consume '\n'
-            //     merged.push(newline.unwrap());
-            // }
             _ => {
                 // Leave all other characters unchanged
                 merged.push(char_with_position);
@@ -352,13 +343,13 @@ impl Tokenizer<'_> {
                     token_with_ranges.push(self.tokenize_char(CharType::Int)?);
                 }
                 '"' => {
-                    // todo
-                    // if last_identifier == "define" || last_identifier == "embed" {
-                    // // extra file path
-                    // todo
-
-                    // string
-                    token_with_ranges.push(self.tokenize_string(StringType::Char)?);
+                    if get_last_token_type(&token_with_ranges) == TokenType::DirectiveInclude {
+                        // string in `#include` or `#embed` directive
+                        token_with_ranges.push(self.tokenize_filepath(false)?);
+                    } else {
+                        // normal string
+                        token_with_ranges.push(self.tokenize_string(StringType::Char)?);
+                    }
                 }
                 '+' => {
                     if self.peek_char_and_equals(1, '+') {
@@ -592,12 +583,10 @@ impl Tokenizer<'_> {
                     }
                 }
                 '<' => {
-                    // todo
-                    // if last_identifier == "define" || last_identifier == "embed" {
-                    // // extra file path
-                    // todo
-
-                    if self.peek_char_and_equals(1, '=') {
+                    if get_last_token_type(&token_with_ranges) == TokenType::DirectiveInclude {
+                        // string in `#include` or `#embed` directive
+                        token_with_ranges.push(self.tokenize_filepath(true)?);
+                    } else if self.peek_char_and_equals(1, '=') {
                         // `<=`
                         self.push_peek_position_into_store();
 
@@ -758,8 +747,7 @@ impl Tokenizer<'_> {
                 '.' => {
                     if matches!(self.peek_char(1), Some('0'..'9')) {
                         // This is a number with a leading dot, e.g., `.5`
-                        // token_with_ranges.push(self.tokenize_floating_point_number_decimal(true)?);
-                        todo!()
+                        token_with_ranges.push(self.tokenize_decimal_number(true)?);
                     } else if self.peek_char_and_equals(1, '.') && self.peek_char_and_equals(2, '.')
                     {
                         // `...`
@@ -802,22 +790,49 @@ impl Tokenizer<'_> {
                     ));
                 }
                 '[' => {
-                    // `[`
-                    self.next_char(); // consume '['
+                    if self.peek_char_and_equals(1, '[') {
+                        // `[[`
+                        self.push_peek_position_into_store();
 
-                    token_with_ranges.push(TokenWithRange::new(
-                        Token::Punctuator(Punctuator::BracketOpen),
-                        Range::from_position(&self.last_position),
-                    ));
+                        self.next_char(); // consume '['
+                        self.next_char(); // consume '['
+
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::AttributeOpen),
+                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                        ));
+                    } else {
+                        // `[`
+                        self.next_char(); // consume '['
+
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::BracketOpen),
+                            Range::from_position(&self.last_position),
+                        ));
+                    }
                 }
                 ']' => {
-                    // `]`
-                    self.next_char(); // consume ']'
+                    if self.peek_char_and_equals(1, ']') {
+                        // `]]`
+                        self.push_peek_position_into_store();
 
-                    token_with_ranges.push(TokenWithRange::new(
-                        Token::Punctuator(Punctuator::BracketClose),
-                        Range::from_position(&self.last_position),
-                    ));
+                        self.next_char(); // consume ']'
+                        self.next_char(); // consume ']'
+
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::AttributeClose),
+                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                        ));
+                        continue; // skip the next token
+                    } else {
+                        // `]`
+                        self.next_char(); // consume ']'
+
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::BracketClose),
+                            Range::from_position(&self.last_position),
+                        ));
+                    }
                 }
                 '(' => {
                     // `(`
@@ -847,13 +862,26 @@ impl Tokenizer<'_> {
                     ));
                 }
                 ':' => {
-                    // `:`
-                    self.next_char(); // consume ':'
+                    if self.peek_char_and_equals(1, ':') {
+                        // `::`
+                        self.push_peek_position_into_store();
 
-                    token_with_ranges.push(TokenWithRange::new(
-                        Token::Punctuator(Punctuator::Colon),
-                        Range::from_position(&self.last_position),
-                    ));
+                        self.next_char(); // consume ':'
+                        self.next_char(); // consume ':'
+
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::Namespace),
+                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                        ));
+                    } else {
+                        // `:`
+                        self.next_char(); // consume ':'
+
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::Colon),
+                            Range::from_position(&self.last_position),
+                        ));
+                    }
                 }
                 '#' => {
                     if self.peek_char_and_equals(1, '#') {
@@ -885,13 +913,17 @@ impl Tokenizer<'_> {
                     // binary number
                     token_with_ranges.push(self.tokenize_binary_number()?);
                 }
+                '0' if matches!(self.peek_char(1), Some('.')) => {
+                    // decimal number
+                    token_with_ranges.push(self.tokenize_decimal_number(false)?);
+                }
                 '0' => {
                     // octal number
                     token_with_ranges.push(self.tokenize_octal_number()?);
                 }
                 '1'..='9' => {
                     // decimal number
-                    token_with_ranges.push(self.tokenize_decimal_number()?);
+                    token_with_ranges.push(self.tokenize_decimal_number(false)?);
                 }
                 'L' | 'u' | 'U' if matches!(self.peek_char(1), Some('\'' | '"')) => {
                     let prefix = *current_char;
@@ -945,11 +977,28 @@ impl Tokenizer<'_> {
                 }
                 'a'..='z' | 'A'..='Z' | '_' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{10ffff}' => {
                     // identifier
-                    token_with_ranges.push(self.tokenize_identifier()?);
-                    // todo!
-                    // if last_identifier == "define" {
-                    //     // check if it is a function-like macro
-                    // todo!
+                    let token_with_range = self.tokenize_identifier()?;
+
+                    if get_last_token_type(&token_with_ranges) == TokenType::DirectiveDefine
+                        && self.peek_char_and_equals(0, '(')
+                    {
+                        // If the last token is a `#define` directive, and it is followed by '(' immediately,
+                        // it indicates that the identifier is a function-like macro.
+                        if let TokenWithRange {
+                            token: Token::Identifier(id),
+                            range,
+                        } = token_with_range
+                        {
+                            let function_like_macro_identifier =
+                                Token::FunctionLikeMacroIdentifier(id);
+                            token_with_ranges
+                                .push(TokenWithRange::new(function_like_macro_identifier, range));
+                        } else {
+                            unreachable!()
+                        }
+                    } else {
+                        token_with_ranges.push(token_with_range);
+                    }
                 }
                 current_char => {
                     return Err(PreprocessError::MessageWithPosition(
@@ -964,12 +1013,14 @@ impl Tokenizer<'_> {
     }
 
     fn tokenize_identifier(&mut self) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
         // key_nameT  //
         // ^       ^__// to here
         // |__________// current char, validated
         //
         // current char = the character of `iter.upstream.peek(0)``
         // T = terminator chars || EOF
+        // ```
 
         //         let mut name_string = String::new();
         //         let mut found_double_colon = false; // to indicate whether the variant separator "::" is found
@@ -1059,282 +1110,155 @@ impl Tokenizer<'_> {
         //
         //         Ok(TokenWithRange::new(token, name_range))
 
+        // todo
+        // unicode normalization
+
         todo!()
     }
 
-    fn tokenize_decimal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
+    fn tokenize_decimal_number(
+        &mut self,
+        leading_dot: bool,
+    ) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
         // 123456T  //
         // ^     ^__// to here
         // |________// current char, validated
         //
         // T = terminator chars || EOF
+        //
+        // samples:
+        // - 123
+        // - 3.14
+        // - 2.99e8
+        // - 2.99e+8
+        // - 6.672e-34
+        // ```
 
-        //         let mut num_string = String::new();
-        //         let mut num_type: Option<NumberType> = None; // "_ixx", "_uxx", "_fxx"
-        //         let mut found_point = false; // to indicated whether char '.' is found
-        //         let mut found_e = false; // to indicated whether char 'e' is found
-        //
-        //         // samples:
-        //         //
-        //         // 123
-        //         // 3.14
-        //         // 2.99e8
-        //         // 2.99e+8
-        //         // 6.672e-34
-        //
-        //         self.push_peek_position_into_store();
-        //
-        //         while let Some(current_char) = self.peek_char(0) {
-        //             match current_char {
-        //                 '0'..='9' => {
-        //                     // valid digits for decimal number
-        //                     num_string.push(*current_char);
-        //
-        //                     self.next_char(); // consume digit
-        //                 }
-        //                 '_' => {
-        //                     self.next_char(); // consume '_'
-        //                 }
-        //                 '.' if !found_point => {
-        //                     found_point = true;
-        //                     num_string.push(*current_char);
-        //
-        //                     self.next_char(); // consume '.'
-        //                 }
-        //                 'e' if !found_e => {
-        //                     found_e = true;
-        //
-        //                     // 123e45
-        //                     // 123e+45
-        //                     // 123e-45
-        //                     if self.peek_char_and_equals(1, '-') {
-        //                         num_string.push_str("e-");
-        //                         self.next_char(); // consume 'e'
-        //                         self.next_char(); // consume '-'
-        //                     } else if self.peek_char_and_equals(1, '+') {
-        //                         num_string.push_str("e+");
-        //                         self.next_char(); // consume 'e'
-        //                         self.next_char(); // consume '+'
-        //                     } else {
-        //                         num_string.push(*current_char);
-        //                         self.next_char(); // consume 'e'
-        //                     }
-        //                 }
-        //                 'i' | 'f' if num_type.is_none() && matches!(self.peek_char(1), Some('0'..='9')) => {
-        //                     let nt = self.lex_number_type_suffix()?;
-        //                     num_type.replace(nt);
-        //                     break;
-        //                 }
-        //                 ' ' | '\t' | '\r' | '\n' | ',' | ':' | '=' | '+' | '-' | '{' | '}' | '[' | ']'
-        //                 | '(' | ')' | '/' | '"' => {
-        //                     // terminator chars
-        //                     break;
-        //                 }
-        //                 _ => {
-        //                     return Err(PreprocessError::MessageWithPosition(
-        //                         format!("Invalid char '{}' for decimal number.", current_char),
-        //                         *self.peek_position(0).unwrap(),
-        //                     ));
-        //                 }
-        //             }
-        //         }
-        //
-        //         // check syntax
-        //         if num_string.ends_with('.') {
-        //             return Err(PreprocessError::MessageWithPosition(
-        //                 "Decimal number can not ends with \".\".".to_owned(),
-        //                 self.last_position,
-        //             ));
-        //         }
-        //
-        //         if num_string.ends_with('e') {
-        //             return Err(PreprocessError::MessageWithPosition(
-        //                 "Decimal number can not ends with \"e\".".to_owned(),
-        //                 self.last_position,
-        //             ));
-        //         }
-        //
-        //         let num_range = Location::from_position_pair_with_end_included(
-        //             &self.pop_position_from_store(),
-        //             &self.last_position,
-        //         );
-        //
-        //         let num_token: NumberToken = if let Some(nt) = num_type {
-        //             // numbers with explicit type
-        //             match nt {
-        //                 NumberType::I8 => {
-        //                     let v = num_string.parse::<u8>().map_err(|_| {
-        //                         PreprocessError::MessageWithPosition(
-        //                             format!("Can not convert \"{}\" to i8 integer number.", num_string),
-        //                             num_range,
-        //                         )
-        //                     })?;
-        //
-        //                     NumberToken::I8(v)
-        //                 }
-        //                 NumberType::I16 => {
-        //                     let v = num_string.parse::<u16>().map_err(|_| {
-        //                         PreprocessError::MessageWithPosition(
-        //                             format!("Can not convert \"{}\" to i16 integer number.", num_string),
-        //                             num_range,
-        //                         )
-        //                     })?;
-        //
-        //                     NumberToken::I16(v)
-        //                 }
-        //                 NumberType::I32 => {
-        //                     let v = num_string.parse::<u32>().map_err(|_| {
-        //                         PreprocessError::MessageWithPosition(
-        //                             format!("Can not convert \"{}\" to i32 integer number.", num_string),
-        //                             num_range,
-        //                         )
-        //                     })?;
-        //
-        //                     NumberToken::I32(v)
-        //                 }
-        //                 NumberType::I64 => {
-        //                     let v = num_string.parse::<u64>().map_err(|_| {
-        //                         PreprocessError::MessageWithPosition(
-        //                             format!("Can not convert \"{}\" to i64 integer number.", num_string),
-        //                             num_range,
-        //                         )
-        //                     })?;
-        //
-        //                     NumberToken::I64(v)
-        //                 }
-        //                 NumberType::F32 => {
-        //                     let v = num_string.parse::<f32>().map_err(|_| {
-        //                         PreprocessError::MessageWithPosition(
-        //                             format!(
-        //                                 "Can not convert \"{}\" to f32 floating-point number.",
-        //                                 num_string
-        //                             ),
-        //                             num_range,
-        //                         )
-        //                     })?;
-        //
-        //                     // overflow when parsing from string
-        //                     if v.is_infinite() {
-        //                         return Err(PreprocessError::MessageWithPosition(
-        //                             format!("F32 floating point number \"{}\" is overflow.", num_string),
-        //                             num_range,
-        //                         ));
-        //                     }
-        //
-        //                     NumberToken::F32(v)
-        //                 }
-        //                 NumberType::F64 => {
-        //                     let v = num_string.parse::<f64>().map_err(|_| {
-        //                         PreprocessError::MessageWithPosition(
-        //                             format!(
-        //                                 "Can not convert \"{}\" to f64 floating-point number.",
-        //                                 num_string
-        //                             ),
-        //                             num_range,
-        //                         )
-        //                     })?;
-        //
-        //                     // overflow when parsing from string
-        //                     if v.is_infinite() {
-        //                         return Err(PreprocessError::MessageWithPosition(
-        //                             format!("F64 floating point number \"{}\" is overflow.", num_string),
-        //                             num_range,
-        //                         ));
-        //                     }
-        //
-        //                     NumberToken::F64(v)
-        //                 }
-        //             }
-        //         } else if found_point || found_e {
-        //             // the default floating-point number type is f64
-        //
-        //             let v = num_string.parse::<f64>().map_err(|_| {
-        //                 PreprocessError::MessageWithPosition(
-        //                     format!(
-        //                         "Can not convert \"{}\" to f64 floating-point number.",
-        //                         num_string
-        //                     ),
-        //                     num_range,
-        //                 )
-        //             })?;
-        //
-        //             // overflow when parsing from string
-        //             if v.is_infinite() {
-        //                 return Err(PreprocessError::MessageWithPosition(
-        //                     format!("F64 floating point number \"{}\" is overflow.", num_string),
-        //                     num_range,
-        //                 ));
-        //             }
-        //
-        //             NumberToken::F64(v)
-        //         } else {
-        //             // the default integer number type is i32
-        //
-        //             let v = num_string.parse::<u32>().map_err(|_| {
-        //                 PreprocessError::MessageWithPosition(
-        //                     format!("Can not convert \"{}\" to i32 integer number.", num_string,),
-        //                     num_range,
-        //                 )
-        //             })?;
-        //
-        //             NumberToken::I32(v)
-        //         };
-        //
-        //         Ok(TokenWithRange::new(Token::Number(num_token), num_range))
-        todo!()
-    }
+        let mut num_string = String::new();
+        let mut found_point = leading_dot; // to indicated whether char '.' is found
+        let mut found_e = false; // to indicated whether char 'e' is found
 
-    fn tokenize_decimal_number_suffix(&mut self) -> Result<IntegerNumberType, PreprocessError> {
-        // iddT  //
-        // ^^ ^__// to here
-        // ||____// d = 0..9, validated
-        // |_____// current char, validated
-        //
-        // i = i/f
-        // d = 0..=9
-        // T = terminator chars || EOF
-        //
-        //         self.push_peek_position_into_store();
-        //
-        //         let first_char = self.next_char().unwrap(); // consume char 'i/u/f'
-        //
-        //         let mut type_name = String::new();
-        //         type_name.push(first_char);
-        //
-        //         while let Some(current_char) = self.peek_char(0) {
-        //             match current_char {
-        //                 '0'..='9' => {
-        //                     // valid char for type name
-        //                     type_name.push(*current_char);
-        //
-        //                     // consume digit
-        //                     self.next_char();
-        //                 }
-        //                 _ => {
-        //                     break;
-        //                 }
-        //             }
-        //         }
-        //
-        //         let type_range = Location::from_position_pair_with_end_included(
-        //             &self.pop_position_from_store(),
-        //             &self.last_position,
-        //         );
-        //
-        //         let nt = NumberType::from_str(&type_name)
-        //             .map_err(|msg| PreprocessError::MessageWithPosition(msg, type_range))?;
-        //
-        //         Ok(nt)
-        todo!()
+        let mut is_unsigned = false;
+        let mut integer_number_type = IntegerNumberType::Default;
+
+        let mut is_decimal = false; // suffix 'dd', 'df', and 'dl'.
+        let mut floating_point_number_type = FloatingPointNumberType::Double; // default floating-point number type is `double`
+
+        self.push_peek_position_into_store();
+
+        while let Some(current_char) = self.peek_char(0) {
+            match current_char {
+                '0'..='9' => {
+                    // valid digits for decimal number
+                    num_string.push(*current_char);
+                    self.next_char(); // Consumes digit
+                }
+                '\'' => {
+                    self.next_char(); // Consumes '\''
+                }
+                '.' if !found_point => {
+                    found_point = true;
+                    num_string.push(*current_char);
+
+                    self.next_char(); // consumes '.'
+                }
+                'e' | 'E' if !found_e => {
+                    found_e = true;
+
+                    if self.peek_char_and_equals(1, '-') {
+                        num_string.push_str("e-");
+                        self.next_char(); // consumes 'e' or 'E'
+                        self.next_char(); // consumes '-'
+                    } else if self.peek_char_and_equals(1, '+') {
+                        num_string.push_str("e+");
+                        self.next_char(); // consumes 'e' or 'E'
+                        self.next_char(); // consumes '+'
+                    } else {
+                        num_string.push('e');
+                        self.next_char(); // consumes 'e' or 'E'
+                    }
+                }
+                'u' | 'U' | 'l' | 'L' | 'w' | 'W' | 'f' | 'F' | 'd' | 'D' => {
+                    if found_e || found_point {
+                        // floating-point number suffixes
+                        let suffix = self.tokenize_floating_point_number_suffix()?;
+                        is_decimal = suffix.0;
+                        floating_point_number_type = suffix.1;
+                    } else {
+                        // integer number suffix
+                        let suffix = self.tokenize_integer_number_suffix()?;
+                        is_unsigned = suffix.0;
+                        integer_number_type = suffix.1;
+                    }
+
+                    break;
+                }
+                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                    // terminator, all punctuation and whitespace, per ASCII table
+                    break;
+                }
+                _ => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        format!("Invalid char '{}' for decimal number.", current_char),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+            }
+        }
+
+        // check syntax
+        if num_string.ends_with('e') {
+            return Err(PreprocessError::MessageWithPosition(
+                "Decimal number can not ends with character \"e\".".to_owned(),
+                self.last_position,
+            ));
+        }
+
+        // normalize
+        if leading_dot {
+            // if the number starts with a dot, e.g. `.5`, then we should add a leading zero
+            num_string.insert(0, '0');
+        }
+
+        if num_string.ends_with('.') {
+            // if the number ends with a dot, e.g. `1.`, then we should add a trailing zero
+            num_string.push('0');
+        }
+
+        let num_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+
+        if found_e || found_point {
+            Ok(TokenWithRange::new(
+                Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
+                    num_string,
+                    is_decimal,
+                    floating_point_number_type,
+                ))),
+                num_range,
+            ))
+        } else {
+            Ok(TokenWithRange::new(
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    num_string,
+                    is_unsigned,
+                    integer_number_type,
+                ))),
+                num_range,
+            ))
+        }
     }
 
     fn tokenize_hexadecimal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
         // 0xaabbT  //
         // ^^    ^__// to here
         // ||_______// validated
         // |________// current char, validated
         //
         // T = terminator chars || EOF
+        // ```
+
         //
         //         self.push_peek_position_into_store();
         //
@@ -1562,28 +1486,248 @@ impl Tokenizer<'_> {
     }
 
     fn tokenize_binary_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
         // 0b101010T  //
         // ^^      ^__// to here
         // ||________// validated
         // |_________// current char, validated
         //
         // T = terminator chars || EOF
+        // ```
         todo!()
     }
 
     fn tokenize_octal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
         // 01234567T  //
-        // ^       ^__// to here
-        // |__________// current char, validated
+        // ^^      ^__// to here
+        // ||_________// next char, it is not 'x', 'b', '.', validated
+        // |__________// current char, it is '0', validated
         //
         // T = terminator chars || EOF
-        todo!()
+        // ```
+
+        // Save the start position of the octal number (i.e. the first '0')
+        self.push_peek_position_into_store();
+
+        let mut num_string = String::new();
+        let mut is_unsigned = false;
+        let mut integer_number_type = IntegerNumberType::Default;
+
+        while let Some(current_char) = self.peek_char(0) {
+            match current_char {
+                '0'..='7' => {
+                    // valid digits for octal number
+                    num_string.push(*current_char);
+                    self.next_char(); // Consumes digit
+                }
+                '\'' => {
+                    self.next_char(); // Consumes '\''
+                }
+                'u' | 'U' | 'l' | 'L' | 'w' | 'W' => {
+                    // integer suffix
+                    let suffix = self.tokenize_integer_number_suffix()?;
+                    is_unsigned = suffix.0;
+                    integer_number_type = suffix.1;
+                    break;
+                }
+                '8'..='9' | '.' | 'e' | 'E' => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        format!("Invalid digit '{}' for octal number.", current_char),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                    // terminator, all punctuation and whitespace, per ASCII table
+                    break;
+                }
+                _ => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        format!("Invalid char '{}' for octal number.", current_char),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+            }
+        }
+
+        let num_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+
+        Ok(TokenWithRange::new(
+            Token::Number(Number::Integer(IntegerNumber::new(
+                num_string,
+                is_unsigned,
+                integer_number_type,
+            ))),
+            num_range,
+        ))
+    }
+
+    fn tokenize_integer_number_suffix(
+        &mut self,
+    ) -> Result<(/* is_unsigned */ bool, IntegerNumberType), PreprocessError> {
+        // integer number suffixes consist of the following groups:
+        // - group 1: `u`, `U`
+        // - group 2: `l`, `L`, `ll`, `LL`, `wb`, `WB`
+        // Both groups are optional, and can be combined.
+
+        // to indicate whether the number is unsigned
+        let mut is_unsigned = false;
+
+        // to indicate the integer number type
+        let mut integer_number_type = IntegerNumberType::Default;
+
+        while let Some(current_char) = self.peek_char(0) {
+            match current_char {
+                'u' | 'U' => {
+                    is_unsigned = true;
+                    self.next_char(); // consume char 'u' or 'U'
+                }
+                'l' if self.peek_char_and_equals(1, 'l') => {
+                    self.next_char(); // consume char 'l'
+                    self.next_char(); // consume char 'l'
+                    integer_number_type = IntegerNumberType::LongLong;
+                }
+                'L' if self.peek_char_and_equals(1, 'L') => {
+                    self.next_char(); // consume char 'L'
+                    self.next_char(); // consume char 'L'
+                    integer_number_type = IntegerNumberType::LongLong;
+                }
+                'l' => {
+                    self.next_char(); // consume char 'l'
+                    integer_number_type = IntegerNumberType::Long;
+                }
+                'L' => {
+                    self.next_char(); // consume char 'L'
+                    integer_number_type = IntegerNumberType::Long;
+                }
+                'w' if self.peek_char_and_equals(1, 'b') => {
+                    self.next_char(); // consume char 'w'
+                    self.next_char(); // consume char 'b'
+                    integer_number_type = IntegerNumberType::BitInt;
+                }
+                'W' if self.peek_char_and_equals(1, 'B') => {
+                    self.next_char(); // consume char 'W'
+                    self.next_char(); // consume char 'B'
+                    integer_number_type = IntegerNumberType::BitInt;
+                }
+                'd' | 'D' => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        "Integer number can not have \"dd\", \"df\", or \"dl\" suffix.".to_owned(),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                'f' | 'F' => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        "Integer number can not have 'f' or 'F' suffix.".to_owned(),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        Ok((is_unsigned, integer_number_type))
+    }
+
+    fn tokenize_floating_point_number_suffix(
+        &mut self,
+    ) -> Result<(/* is_decimal */ bool, FloatingPointNumberType), PreprocessError> {
+        // possible suffix for floating-point number:
+        // `f`, `F`, `l`, `L`, `dd`, `df`, `dl`, `DD`, `DF`, `DL`
+
+        // to indicate whether the number is decimal
+        let mut is_decimal = false;
+
+        // to indicate the floating-point number type
+        let mut floating_point_number_type = FloatingPointNumberType::Double; // default floating-point number type is `double`
+
+        while let Some(current_char) = self.peek_char(0) {
+            match current_char {
+                'd' if self.peek_char_and_equals(1, 'd') => {
+                    self.next_char(); // consume char 'd'
+                    self.next_char(); // consume char 'd'
+                    is_decimal = true;
+                    floating_point_number_type = FloatingPointNumberType::Double;
+                }
+                'D' if self.peek_char_and_equals(1, 'D') => {
+                    self.next_char(); // consume char 'D'
+                    self.next_char(); // consume char 'D'
+                    is_decimal = true;
+                    floating_point_number_type = FloatingPointNumberType::Double;
+                }
+                'd' if self.peek_char_and_equals(1, 'f') => {
+                    self.next_char(); // consume char 'd'
+                    self.next_char(); // consume char 'f'
+                    is_decimal = true;
+                    floating_point_number_type = FloatingPointNumberType::Float;
+                }
+                'D' if self.peek_char_and_equals(1, 'F') => {
+                    self.next_char(); // consume char 'D'
+                    self.next_char(); // consume char 'F'
+                    is_decimal = true;
+                    floating_point_number_type = FloatingPointNumberType::Float;
+                }
+                'd' if self.peek_char_and_equals(1, 'l') => {
+                    self.next_char(); // consume char 'd'
+                    self.next_char(); // consume char 'l'
+                    is_decimal = true;
+                    floating_point_number_type = FloatingPointNumberType::LongDouble;
+                }
+                'D' if self.peek_char_and_equals(1, 'L') => {
+                    self.next_char(); // consume char 'd'
+                    self.next_char(); // consume char 'l'
+                    is_decimal = true;
+                    floating_point_number_type = FloatingPointNumberType::LongDouble;
+                }
+                'f' | 'F' => {
+                    self.next_char(); // consumes char 'f' or 'F'
+                    floating_point_number_type = FloatingPointNumberType::Float;
+                }
+                'u' | 'U' => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        "Floating-point number can not have 'u' or 'U' suffix.".to_owned(),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                'l' if self.peek_char_and_equals(1, 'l') => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        "Floating-point number can not have 'll' or 'LL' suffix.".to_owned(),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                'L' if self.peek_char_and_equals(1, 'L') => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        "Floating-point number can not have 'll' or 'LL' suffix.".to_owned(),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                'l' | 'L' => {
+                    self.next_char(); // consumes char 'l' or 'L'
+                    floating_point_number_type = FloatingPointNumberType::LongDouble;
+                }
+                'w' | 'W' => {
+                    return Err(PreprocessError::MessageWithPosition(
+                        "Floating-point number can not have \"wb\" or \"WB\" suffix.".to_owned(),
+                        *self.peek_position(0).unwrap(),
+                    ));
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        Ok((is_decimal, floating_point_number_type))
     }
 
     fn tokenize_char(&mut self, char_type: CharType) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
         // 'a'?  //
         // ^  ^__// to here
         // |_____// current char, validated
+        // ```
 
         // save the start position of the char literal (i.e. the first "'")
         self.push_peek_position_into_store();
@@ -1872,9 +2016,11 @@ impl Tokenizer<'_> {
         &mut self,
         string_type: StringType,
     ) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
         // "abc"?  //
         // ^    ^__// to here
         // |_______// current char, validated
+        // ```
 
         // save the start position of the string literal (i.e. the first '"')
         self.push_peek_position_into_store();
@@ -2142,6 +2288,82 @@ impl Tokenizer<'_> {
             final_string_range,
         ))
     }
+
+    fn tokenize_filepath(
+        &mut self,
+        angle_bracket: bool,
+    ) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
+        // <path>?  //
+        // ^    ^___// to here
+        // |________// current char, validated
+        // ```
+
+        // save the start position of the file path (i.e. the first '<' or '"')
+        self.push_peek_position_into_store();
+
+        let mut final_path = String::new();
+
+        loop {
+            if let Some(current_char) = self.next_char() {
+                match current_char {
+                    '>' if angle_bracket => {
+                        break;
+                    }
+                    '"' if !angle_bracket => {
+                        break;
+                    }
+                    '\n' | '\r' => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "File path cannot contain new line characters.".to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    _ => {
+                        final_path.push(current_char);
+                    }
+                }
+            } else {
+                // Incomplete file path (`<...EOF` or `"...EOF`).
+                return Err(PreprocessError::UnexpectedEndOfDocument(
+                    "Incomplete file path.".to_owned(),
+                ));
+            }
+        }
+
+        let final_path_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+
+        Ok(TokenWithRange::new(
+            Token::IncludingFilePath(final_path),
+            final_path_range,
+        ))
+    }
+}
+
+// Get the type of last token to handle special cases (since C preprocessor
+// is not strict language, its syntax is inconsistent).
+//
+// - File path in `#define` and `#embed` directives.
+// - Parentheses following an identifier in function-like macro definitions.
+fn get_last_token_type(token_with_ranges: &[TokenWithRange]) -> TokenType {
+    if let Some(TokenWithRange { token, .. }) = token_with_ranges.last() {
+        match token {
+            Token::Identifier(id) if id == "include" || id == "embed" => {
+                TokenType::DirectiveInclude
+            }
+            Token::Identifier(id) if id == "define" => TokenType::DirectiveDefine,
+            _ => TokenType::Other,
+        }
+    } else {
+        TokenType::Other
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum TokenType {
+    DirectiveInclude,
+    DirectiveDefine,
+    Other,
 }
 
 #[cfg(test)]
@@ -2154,7 +2376,10 @@ mod tests {
         peekableiter::PeekableIter,
         position::Position,
         range::Range,
-        token::{CharType, Punctuator, StringType, Token, TokenWithRange},
+        token::{
+            CharType, IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token,
+            TokenWithRange,
+        },
         tokenize::{
             PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS,
             PEEK_BUFFER_LENGTH_REMOVE_SHEBANG, pre_tokenize,
@@ -2168,8 +2393,12 @@ mod tests {
             Token::Identifier(s.to_owned())
         }
 
-        pub fn new_number(s: &str) -> Self {
-            Token::Number(s.to_owned())
+        pub fn new_integer_number(i: i32) -> Self {
+            Token::Number(Number::Integer(IntegerNumber::new(
+                i.to_string(),
+                false,
+                IntegerNumberType::Default,
+            )))
         }
 
         pub fn new_char(c: char) -> Self {
@@ -2369,7 +2598,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("?,.->{}[]();:...###").unwrap(),
+            tokenize_from_str_without_range_strip("?,.->{}[]();:...###[[]]::").unwrap(),
             vec![
                 Token::Punctuator(Punctuator::QuestionMark),
                 Token::Punctuator(Punctuator::Comma),
@@ -2386,6 +2615,9 @@ mod tests {
                 Token::Punctuator(Punctuator::Ellipsis),
                 Token::Punctuator(Punctuator::PoundPound),
                 Token::Punctuator(Punctuator::Pound),
+                Token::Punctuator(Punctuator::AttributeOpen),
+                Token::Punctuator(Punctuator::AttributeClose),
+                Token::Punctuator(Punctuator::Namespace),
             ]
         );
 
@@ -2552,94 +2784,204 @@ mod tests {
         );
     }
 
-    //     #[test]
-    //     fn test_tokenize_decimal_number() {
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("(211)").unwrap(),
-    //             vec![
-    //                 Token::Punctuator(Punctuator::ParenthesisOpen),
-    //                 Token::Number(NumberToken::I32(211)),
-    //                 Token::Punctuator(Punctuator::ParenthesisClose),
-    //             ]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("211").unwrap(),
-    //             vec![Token::Number(NumberToken::I32(211))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("-2017").unwrap(),
-    //             vec![Token::Minus, Token::Number(NumberToken::I32(2017))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("+2024").unwrap(),
-    //             vec![Token::Plus, Token::Number(NumberToken::I32(2024))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("223_211").unwrap(),
-    //             vec![Token::Number(NumberToken::I32(223_211))]
-    //         );
-    //
-    //         assert_eq!(
-    //             tokenize_from_str_without_range_strip("223 211").unwrap(),
-    //             vec![
-    //                 Token::Number(NumberToken::I32(223)),
-    //                 Token::Number(NumberToken::I32(211)),
-    //             ]
-    //         );
-    //
-    //         // location
-    //
-    //         assert_eq!(
-    //             tokenize_from_str("223 211").unwrap(),
-    //             vec![
-    //                 TokenWithRange::new(
-    //                     Token::Number(NumberToken::I32(223)),
-    //                     Range::from_detail_and_length( 0, 0, 0,),
-    //                     3
-    //                 ),
-    //                 TokenWithRange::new(
-    //                     Token::Number(NumberToken::I32(211)),
-    //                     Range::from_detail_and_length( 4, 0, 4,),
-    //                     3
-    //                 ),
-    //             ]
-    //         );
-    //
-    //         // err: invalid char for decimal number
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("12x34"),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 2,
-    //                     line: 0,
-    //                     column: 2,
-    //                     length: 0
-    //                 }
-    //             ))
-    //         ));
-    //
-    //         // err: integer number overflow
-    //         assert!(matches!(
-    //             tokenize_from_str_without_range_strip("4_294_967_296"),
-    //             Err(PreprocessError::MessageWithPosition(
-    //                 _,
-    //                 Position {
-    //                     /* unit: 0, */
-    //                     index: 0,
-    //                     line: 0,
-    //                     column: 0,
-    //                     length: 13
-    //                 }
-    //             ))
-    //         ));
-    //     }
-    //
+    #[test]
+    fn test_tokenize_decimal_number() {
+        assert_eq!(
+            tokenize_from_str_without_range_strip("211").unwrap(),
+            vec![Token::Number(Number::Integer(IntegerNumber::new(
+                211.to_string(),
+                false,
+                IntegerNumberType::Default
+            )))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("20'25").unwrap(),
+            vec![Token::Number(Number::Integer(IntegerNumber::new(
+                2025.to_string(),
+                false,
+                IntegerNumberType::Default
+            )))]
+        );
+
+        // testing token's location
+
+        assert_eq!(
+            tokenize_from_str("223 211").unwrap(),
+            vec![
+                TokenWithRange::new(
+                    Token::Number(Number::Integer(IntegerNumber::new(
+                        223.to_string(),
+                        false,
+                        IntegerNumberType::Default
+                    ))),
+                    Range::from_detail_and_length(0, 0, 0, 3)
+                ),
+                TokenWithRange::new(
+                    Token::Number(Number::Integer(IntegerNumber::new(
+                        211.to_string(),
+                        false,
+                        IntegerNumberType::Default
+                    ))),
+                    Range::from_detail_and_length(4, 0, 4, 3)
+                ),
+            ]
+        );
+
+        // err: invalid char for decimal number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("12x34"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 2,
+                    line: 0,
+                    column: 2,
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_tokenize_decimal_number_with_suffix() {
+        assert_eq!(
+            tokenize_from_str_without_range_strip("1u 2U").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "1".to_owned(),
+                    true,
+                    IntegerNumberType::Default
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "2".to_owned(),
+                    true,
+                    IntegerNumberType::Default
+                )))
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("1l 2L 3ll 4LL 5wb 6WB").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "1".to_owned(),
+                    false,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "2".to_owned(),
+                    false,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "3".to_owned(),
+                    false,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "4".to_owned(),
+                    false,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "5".to_owned(),
+                    false,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "6".to_owned(),
+                    false,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("1ul 2UL 3ull 4ULL 5uwb 6UWB").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "1".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "2".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "3".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "4".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "5".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "6".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("1lu 2LU 3llu 4LLU 5wbu 6WBU").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "1".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "2".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "3".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "4".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "5".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "6".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        // err: invalid suffix for integer number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("11f"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 2,
+                    line: 0,
+                    column: 2,
+                }
+            ))
+        ));
+    }
+
     //     #[allow(clippy::approx_constant)]
     //     #[test]
     //     fn test_tokenize_decimal_number_floating_point() {
@@ -2749,223 +3091,506 @@ mod tests {
     //         ));
     //     }
     //
-    //     #[test]
-    //     fn test_tokenize_decimal_number_with_suffix() {
-    //         // general
-    //         {
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("11i32").unwrap(),
-    //                 vec![Token::Number(NumberToken::I32(11))]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("11_i32").unwrap(),
-    //                 vec![Token::Number(NumberToken::I32(11))]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("11__i32").unwrap(),
-    //                 vec![Token::Number(NumberToken::I32(11))]
-    //             );
-    //
-    //             // location
-    //
-    //             // "101_i16 103_u32" // text
-    //             //  012345678901234  // index
-    //             assert_eq!(
-    //                 tokenize_from_str("101_i16 103_i32").unwrap(),
-    //                 vec![
-    //                     TokenWithRange::new(
-    //                         Token::Number(NumberToken::I16(101)),
-    //                         Range::from_detail_and_length( 0, 0, 0),
-    //                         7
-    //                     ),
-    //                     TokenWithRange::new(
-    //                         Token::Number(NumberToken::I32(103)),
-    //                         Range::from_detail_and_length( 8, 0, 8),
-    //                         7
-    //                     ),
-    //                 ]
-    //             );
-    //         }
-    //
-    //         // byte
-    //         {
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("127_i8").unwrap(),
-    //                 vec![Token::Number(NumberToken::I8(127))]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("255_i8").unwrap(),
-    //                 vec![Token::Number(NumberToken::I8(255))]
-    //             );
-    //
-    //             // err: unsigned overflow
-    //             assert!(matches!(
-    //                 tokenize_from_str_without_range_strip("256_i8"),
-    //                 Err(PreprocessError::MessageWithPosition(
-    //                     _,
-    //                     Position {
-    //                         /* unit: 0, */
-    //                         index: 0,
-    //                         line: 0,
-    //                         column: 0,
-    //                         length: 6
-    //                     }
-    //                 ))
-    //             ));
-    //         }
-    //
-    //         // short
-    //         {
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("32767_i16").unwrap(),
-    //                 vec![Token::Number(NumberToken::I16(32767))]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("65535_i16").unwrap(),
-    //                 vec![Token::Number(NumberToken::I16(65535))]
-    //             );
-    //
-    //             // err: unsigned overflow
-    //             assert!(matches!(
-    //                 tokenize_from_str_without_range_strip("65536_i16"),
-    //                 Err(PreprocessError::MessageWithPosition(
-    //                     _,
-    //                     Position {
-    //                         /* unit: 0, */
-    //                         index: 0,
-    //                         line: 0,
-    //                         column: 0,
-    //                         length: 9
-    //                     }
-    //                 ))
-    //             ));
-    //         }
-    //
-    //         // int
-    //         {
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("2_147_483_647_i32").unwrap(),
-    //                 vec![Token::Number(NumberToken::I32(2_147_483_647i32 as u32))]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("4_294_967_295_i32").unwrap(),
-    //                 vec![Token::Number(NumberToken::I32(u32::MAX))]
-    //             );
-    //
-    //             // err: unsigned overflow
-    //             assert!(matches!(
-    //                 tokenize_from_str_without_range_strip("4_294_967_296_i32"),
-    //                 Err(PreprocessError::MessageWithPosition(
-    //                     _,
-    //                     Position {
-    //                         /* unit: 0, */
-    //                         index: 0,
-    //                         line: 0,
-    //                         column: 0,
-    //                         length: 17
-    //                     }
-    //                 ))
-    //             ));
-    //         }
-    //
-    //         // long
-    //         {
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("9_223_372_036_854_775_807_i64").unwrap(),
-    //                 vec![Token::Number(NumberToken::I64(
-    //                     9_223_372_036_854_775_807i64 as u64
-    //                 )),]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("18_446_744_073_709_551_615_i64").unwrap(),
-    //                 vec![Token::Number(NumberToken::I64(u64::MAX))]
-    //             );
-    //
-    //             // err: unsigned overflow
-    //             assert!(matches!(
-    //                 tokenize_from_str_without_range_strip("18_446_744_073_709_551_616_i64"),
-    //                 Err(PreprocessError::MessageWithPosition(
-    //                     _,
-    //                     Position {
-    //                         /* unit: 0, */
-    //                         index: 0,
-    //                         line: 0,
-    //                         column: 0,
-    //                         length: 30
-    //                     }
-    //                 ))
-    //             ));
-    //         }
-    //
-    //         // float
-    //         {
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("3.402_823_5e+38_f32").unwrap(),
-    //                 vec![Token::Number(NumberToken::F32(3.402_823_5e38f32))]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("1.175_494_4e-38_f32").unwrap(),
-    //                 vec![Token::Number(NumberToken::F32(1.175_494_4e-38f32))]
-    //             );
-    //
-    //             // err: overflow
-    //             assert!(matches!(
-    //                 tokenize_from_str_without_range_strip("3.4e39_f32"),
-    //                 Err(PreprocessError::MessageWithPosition(
-    //                     _,
-    //                     Position {
-    //                         /* unit: 0, */
-    //                         index: 0,
-    //                         line: 0,
-    //                         column: 0,
-    //                         length: 10
-    //                     }
-    //                 ))
-    //             ));
-    //         }
-    //
-    //         // double
-    //         {
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("1.797_693_134_862_315_7e+308_f64").unwrap(),
-    //                 vec![Token::Number(NumberToken::F64(
-    //                     1.797_693_134_862_315_7e308_f64
-    //                 )),]
-    //             );
-    //
-    //             assert_eq!(
-    //                 tokenize_from_str_without_range_strip("2.2250738585072014e-308_f64").unwrap(),
-    //                 vec![Token::Number(NumberToken::F64(2.2250738585072014e-308f64)),]
-    //             );
-    //
-    //             // err: overflow
-    //             assert!(matches!(
-    //                 tokenize_from_str_without_range_strip("1.8e309_f64"),
-    //                 Err(PreprocessError::MessageWithPosition(
-    //                     _,
-    //                     Position {
-    //                         /* unit: 0, */
-    //                         index: 0,
-    //                         line: 0,
-    //                         column: 0,
-    //                         length: 11
-    //                     }
-    //                 ))
-    //             ));
-    //         }
-    //     }
-    //
-    //     #[test]
-    //     fn test_tokenize_octal_number() {
-    //         todo!()
-    //     }
+
+    #[test]
+    fn test_tokenize_binary_number() {
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip("0b1100").unwrap(),
+        //             vec![Token::Number(NumberToken::I32(0b1100))]
+        //         );
+        //
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip("-0b1010").unwrap(),
+        //             vec![Token::Minus, Token::Number(NumberToken::I32(0b1010))]
+        //         );
+        //
+        //         assert_eq!(
+        //             tokenize_from_str_without_range_strip("+0b0101").unwrap(),
+        //             vec![Token::Plus, Token::Number(NumberToken::I32(0b0101))]
+        //         );
+        //
+        //         // location
+        //
+        //         assert_eq!(
+        //             tokenize_from_str("0b10 0b0101").unwrap(),
+        //             vec![
+        //                 TokenWithRange::new(
+        //                     Token::Number(NumberToken::I32(0b10)),
+        //                     Range::from_detail_and_length( 0, 0, 0,),
+        //                     4
+        //                 ),
+        //                 TokenWithRange::new(
+        //                     Token::Number(NumberToken::I32(0b0101)),
+        //                     Range::from_detail_and_length( 5, 0, 5,),
+        //                     6
+        //                 ),
+        //             ]
+        //         );
+        //
+        //         // err: does not support binary floating point
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("0b11.10"),
+        //             Err(PreprocessError::MessageWithPosition(
+        //                 _,
+        //                 Location {
+        //                     /* unit: 0, */
+        //                     index: 4,
+        //                     line: 0,
+        //                     column: 4,
+        //                     length: 0
+        //                 }
+        //             ))
+        //         ));
+        //
+        //         // err: binary number overflow
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("0b1_0000_0000_0000_0000_0000_0000_0000_0000"),
+        //             Err(PreprocessError::MessageWithPosition(
+        //                 _,
+        //                 Location {
+        //                     /* unit: 0, */
+        //                     index: 0,
+        //                     line: 0,
+        //                     column: 0,
+        //                     length: 43
+        //                 }
+        //             ))
+        //         ));
+        //
+        //         // err: invalid char for binary number
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("0b101xyz"),
+        //             Err(PreprocessError::MessageWithPosition(
+        //                 _,
+        //                 Location {
+        //                     /* unit: 0, */
+        //                     index: 5,
+        //                     line: 0,
+        //                     column: 5,
+        //                     length: 0
+        //                 }
+        //             ))
+        //         ));
+        //
+        //         // err: empty binary number
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("0b"),
+        //             Err(PreprocessError::MessageWithPosition(
+        //                 _,
+        //                 Location {
+        //                     /* unit: 0, */
+        //                     index: 0,
+        //                     line: 0,
+        //                     column: 0,
+        //                     length: 2
+        //                 }
+        //             ))
+        //         ));
+    }
+
+    #[test]
+    fn test_tokenize_binary_number_with_suffix() {
+        //         // general
+        //         {
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b11i32").unwrap(),
+        //                 vec![Token::Number(NumberToken::I32(0b11))]
+        //             );
+        //
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b11_i32").unwrap(),
+        //                 vec![Token::Number(NumberToken::I32(0b11))]
+        //             );
+        //
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b11__i32").unwrap(),
+        //                 vec![Token::Number(NumberToken::I32(0b11))]
+        //             );
+        //
+        //             // location
+        //
+        //             // "0b101_i16 0b1010_u32"
+        //             //  01234567890123456789  // index
+        //             assert_eq!(
+        //                 tokenize_from_str("0b101_i16 0b1010_i32").unwrap(),
+        //                 vec![
+        //                     TokenWithRange::new(
+        //                         Token::Number(NumberToken::I16(0b101)),
+        //                         Range::from_detail_and_length( 0, 0, 0),
+        //                         9
+        //                     ),
+        //                     TokenWithRange::new(
+        //                         Token::Number(NumberToken::I32(0b1010)),
+        //                         Range::from_detail_and_length( 10, 0, 10),
+        //                         10
+        //                     ),
+        //                 ]
+        //             );
+        //         }
+        //
+        //         // byte
+        //         {
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b0111_1111_i8").unwrap(),
+        //                 vec![Token::Number(NumberToken::I8(0x7f_i8 as u8))]
+        //             );
+        //
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b1111_1111_i8").unwrap(),
+        //                 vec![Token::Number(NumberToken::I8(0xff_u8))]
+        //             );
+        //
+        //             // err: unsigned overflow
+        //             assert!(matches!(
+        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_i8"),
+        //                 Err(PreprocessError::MessageWithPosition(
+        //                     _,
+        //                     Location {
+        //                         /* unit: 0, */
+        //                         index: 0,
+        //                         line: 0,
+        //                         column: 0,
+        //                         length: 16
+        //                     }
+        //                 ))
+        //             ));
+        //         }
+        //
+        //         // short
+        //         {
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b0111_1111_1111_1111_i16").unwrap(),
+        //                 vec![Token::Number(NumberToken::I16(0x7fff_i16 as u16))]
+        //             );
+        //
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b1111_1111_1111_1111_i16").unwrap(),
+        //                 vec![Token::Number(NumberToken::I16(0xffff_u16))]
+        //             );
+        //
+        //             // err: unsigned overflow
+        //             assert!(matches!(
+        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_1111_1111_i16"),
+        //                 Err(PreprocessError::MessageWithPosition(
+        //                     _,
+        //                     Location {
+        //                         /* unit: 0, */
+        //                         index: 0,
+        //                         line: 0,
+        //                         column: 0,
+        //                         length: 27
+        //                     }
+        //                 ))
+        //             ));
+        //         }
+        //
+        //         // int
+        //         {
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b0111_1111_1111_1111__1111_1111_1111_1111_i32")
+        //                     .unwrap(),
+        //                 vec![Token::Number(NumberToken::I32(0x7fff_ffff_i32 as u32))]
+        //             );
+        //
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b1111_1111_1111_1111__1111_1111_1111_1111_i32")
+        //                     .unwrap(),
+        //                 vec![Token::Number(NumberToken::I32(0xffff_ffff_u32))]
+        //             );
+        //
+        //             // err: unsigned overflow
+        //             assert!(matches!(
+        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_1111_1111__1111_1111_1111_1111_i32"),
+        //                 Err(PreprocessError::MessageWithPosition(
+        //                     _,
+        //                     Location {
+        //                         /* unit: 0, */
+        //                         index: 0,
+        //                         line: 0,
+        //                         column: 0,
+        //                         length: 48
+        //                     }
+        //                 ))
+        //             ));
+        //         }
+        //
+        //         // long
+        //         {
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b0111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64").unwrap(),
+        //                 vec![Token::Number(NumberToken::I64(0x7fff_ffff_ffff_ffff_i64 as u64))]
+        //             );
+        //
+        //             assert_eq!(
+        //                 tokenize_from_str_without_range_strip("0b1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64").unwrap(),
+        //                 vec![Token::Number(NumberToken::I64(0xffff_ffff_ffff_ffff_u64))]
+        //             );
+        //
+        //             // err: unsigned overflow
+        //             assert!(matches!(
+        //                 tokenize_from_str_without_range_strip("0b1_1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64"),
+        //                 Err(PreprocessError::MessageWithPosition(
+        //                     _,
+        //                     Location {
+        //                         /* unit: 0, */
+        //                         index: 0,
+        //                         line: 0,
+        //                         column: 0,
+        //                         length: 90
+        //                     }
+        //                 ))
+        //             ));
+        //         }
+        //
+        //         // err: does not support binary floating pointer number (invalid char 'f' for binary number)
+        //         assert!(matches!(
+        //             tokenize_from_str_without_range_strip("0b11_f32"),
+        //             Err(PreprocessError::MessageWithPosition(
+        //                 _,
+        //                 Location {
+        //                     /* unit: 0, */
+        //                     index: 5,
+        //                     line: 0,
+        //                     column: 5,
+        //                     length: 0
+        //                 }
+        //             ))
+        //         ));
+    }
+
+    #[test]
+    fn test_tokenize_octal_number() {
+        assert_eq!(
+            tokenize_from_str_without_range_strip("0").unwrap(),
+            vec![Token::Number(Number::Integer(IntegerNumber::new(
+                "0".to_owned(),
+                false,
+                IntegerNumberType::Default
+            )))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("01'100").unwrap(),
+            vec![Token::Number(Number::Integer(IntegerNumber::new(
+                "01100".to_owned(),
+                false,
+                IntegerNumberType::Default
+            )))]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("0775").unwrap(),
+            vec![Token::Number(Number::Integer(IntegerNumber::new(
+                "0775".to_owned(),
+                false,
+                IntegerNumberType::Default
+            )))]
+        );
+
+        // testing token's location
+
+        assert_eq!(
+            tokenize_from_str("01 0600").unwrap(),
+            vec![
+                TokenWithRange::new(
+                    Token::Number(Number::Integer(IntegerNumber::new(
+                        "01".to_owned(),
+                        false,
+                        IntegerNumberType::Default
+                    ))),
+                    Range::from_detail_and_length(0, 0, 0, 2)
+                ),
+                TokenWithRange::new(
+                    Token::Number(Number::Integer(IntegerNumber::new(
+                        "0600".to_owned(),
+                        false,
+                        IntegerNumberType::Default
+                    ))),
+                    Range::from_detail_and_length(3, 0, 3, 4)
+                ),
+            ]
+        );
+
+        // err: does not support octal floating point
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("0100.10"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 4,
+                    line: 0,
+                    column: 4,
+                }
+            ))
+        ));
+
+        // err: invalid digit for octal number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("0778"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 3,
+                    line: 0,
+                    column: 3,
+                }
+            ))
+        ));
+
+        // err: invalid char for octal number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("077x"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 3,
+                    line: 0,
+                    column: 3,
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_tokenize_octal_number_with_suffix() {
+        assert_eq!(
+            tokenize_from_str_without_range_strip("01u 02U").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "01".to_owned(),
+                    true,
+                    IntegerNumberType::Default
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "02".to_owned(),
+                    true,
+                    IntegerNumberType::Default
+                )))
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("01l 02L 03ll 04LL 05wb 06WB").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "01".to_owned(),
+                    false,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "02".to_owned(),
+                    false,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "03".to_owned(),
+                    false,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "04".to_owned(),
+                    false,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "05".to_owned(),
+                    false,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "06".to_owned(),
+                    false,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("01ul 02UL 03ull 04ULL 05uwb 06UWB").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "01".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "02".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "03".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "04".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "05".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "06".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        assert_eq!(
+            tokenize_from_str_without_range_strip("01lu 02LU 03llu 04LLU 05wbu 06WBU").unwrap(),
+            vec![
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "01".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "02".to_owned(),
+                    true,
+                    IntegerNumberType::Long
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "03".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "04".to_owned(),
+                    true,
+                    IntegerNumberType::LongLong
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "05".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+                Token::Number(Number::Integer(IntegerNumber::new(
+                    "06".to_owned(),
+                    true,
+                    IntegerNumberType::BitInt
+                ))),
+            ]
+        );
+
+        // err: invalid suffix for integer number
+        assert!(matches!(
+            tokenize_from_str_without_range_strip("01f"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 2,
+                    line: 0,
+                    column: 2,
+                }
+            ))
+        ));
+    }
+
     //     #[test]
     //     fn test_tokenize_hex_number() {
     //         assert_eq!(
