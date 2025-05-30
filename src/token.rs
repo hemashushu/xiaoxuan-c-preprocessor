@@ -13,6 +13,9 @@ pub enum Token {
     // An identifier, as in C: any sequence of letters (including non-Latin letters such as Chinese ideograms),
     // digits, or underscores, starting with a letter or underscore.
     // C keywords are not treated specially by the preprocessor.
+    //
+    // Identifiers may contain namespace separators (`::`) in attribute names,
+    // e.g., `[[foo::bar]]`, `[[some::attribute(123)]]`.
     Identifier(String),
 
     // A preprocessing number, which includes all standard integer and floating-point constants in C.
@@ -27,7 +30,7 @@ pub enum Token {
     // String and character constants are written as "..." or '...'.
     // Embedded quotes must be escaped with a backslash, e.g., '\'' represents the character constant for a single quote.
     //
-    // see: https://en.cppreference.com/w/c/language/string_literal.html
+    // See: https://en.cppreference.com/w/c/language/string_literal.html
     String(String, StringType),
 
     // A (single) character constant, e.g., 'a', '\t', '文', '\u6587', and '\U2005E'.
@@ -53,14 +56,14 @@ pub enum Token {
     // - line break (newline).
     //
     // The null directive (# followed by a line break) is allowed and has no effect.
-    // see: https://en.cppreference.com/w/c/preprocessor.html
+    // See: https://en.cppreference.com/w/c/preprocessor.html
     Newline,
 
     // The file path of the directive `#include` or `#embed`.
     //
-    // Although the file path is a string either, but it is not a string literal
+    // Although the file path is also a string, it is not a string literal
     // because it does not support escape sequences like `\x40`, `\"`, etc.
-    IncludingFilePath(String),
+    FilePath(String),
 
     // The identifier of a function-like macro. e.g.
     //
@@ -69,11 +72,11 @@ pub enum Token {
     // ```
     //
     // An identifier in the `#define` directive
-    // is followed by a parenthesis `(` immediately represents a function-like macro identifier,
-    // while an identifier in the `#include` directive is followed by a space representing
+    // that is immediately followed by a parenthesis `(` represents a function-like macro identifier,
+    // while an identifier in the `#include` directive followed by a space represents
     // an object-like macro identifier.
-    // This is an exception because the whitespaces are ignored in the C language, thus
-    // a special type of token is needed to distinguish.
+    // This is an exception because whitespaces are typically ignored in the C language, thus
+    // a special type of token is needed to make this distinction.
     FunctionLikeMacroIdentifier(String),
 }
 
@@ -142,7 +145,6 @@ pub enum Punctuator {
     Ellipsis,         // '...', Variadic arguments in function definitions
     AttributeOpen,    // '[[' for attributes in C23, e.g., [[nodiscard]]
     AttributeClose,   // ']]' for attributes in C23, e.g., [[nodiscard]]
-    Namespace,        // '::', used in attribute with a namespace, such as [[foo::bar]]
 
     // Punctuators used in C preprocessor directives
     Pound,      // '#'
