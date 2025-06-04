@@ -7,6 +7,10 @@
 use crate::range::Range;
 
 /// Represents a token type for the C preprocessor.
+///
+/// After preprocessing, the tokens `Newline`, `FilePath`, `FunctionLikeMacroIdentifier`
+/// `Pound` and `PoundPound` will not be present in the final token stream.
+///
 /// See: https://gcc.gnu.org/onlinedocs/cpp/Tokenization.html
 #[derive(Debug, PartialEq)]
 pub enum Token {
@@ -83,13 +87,13 @@ pub enum Token {
 #[derive(Debug, PartialEq)]
 pub enum Punctuator {
     // Arithmetic Operators
-    Addition,       // '+'
-    Subtraction,    // '-'
-    Multiplication, // '*', also is operator `Dereference`
-    Division,       // '/'
-    Modulus,        // '%'
-    Increment,      // '++'
-    Decrement,      // '--'
+    Add,      // '+'
+    Subtract, // '-'
+    Multiply, // '*', also is operator `Dereference`
+    Divide,   // '/'
+    Modulo,   // '%'
+    Increase, // '++'
+    Decrease, // '--'
 
     // Relational Operators
     Equal,              // '=='
@@ -113,17 +117,17 @@ pub enum Punctuator {
     ShiftRight, // '>>', note that there is no `>>>` (logical right shift) operator in C
 
     // Assignment Operators
-    Assignment,           // '='
-    AddAssignment,        // '+='
-    SubtractAssignment,   // '-='
-    MultiplyAssignment,   // '*='
-    DivideAssignment,     // '/='
-    ModulusAssignment,    // '%='
-    BitwiseAndAssignment, // '&='
-    BitwiseOrAssignment,  // '|='
-    BitwiseXorAssignment, // '^='
-    ShiftLeftAssignment,  // '<<='
-    ShiftRightAssignment, // '>>='
+    Assign,           // '='
+    AddAssign,        // '+='
+    SubtractAssign,   // '-='
+    MultiplyAssign,   // '*='
+    DivideAssign,     // '/='
+    ModulusAssign,    // '%='
+    BitwiseAndAssign, // '&='
+    BitwiseOrAssign,  // '|='
+    BitwiseXorAssign, // '^='
+    ShiftLeftAssign,  // '<<='
+    ShiftRightAssign, // '>>='
 
     // Conditional Operator
     QuestionMark, // '?'
@@ -151,7 +155,7 @@ pub enum Punctuator {
     PoundPound, // '##'
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CharType {
     Int, // Normal character, e.g., 'a', '1', '文', note that the data type is `int` instead of `char`.
     Wide, // Wide character, e.g., L'a', L'文', data type is `wchar_t`
@@ -160,7 +164,7 @@ pub enum CharType {
     UTF8, // UTF-8 character, e.g., u8'a', u8'文', data type is `char8_t`
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum StringType {
     Char,  // Normal string, e.g., "hello", "文", data type is `char[]`
     Wide,  // Wide string, e.g., L"hello", L"文", data type is `wchar_t[]`
@@ -169,7 +173,7 @@ pub enum StringType {
     UTF8,  // UTF-8 string, e.g., u8"hello", u8"文", data type is `char8_t[]`
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum IntegerNumberType {
     Default, // no suffix, e.g., 123, the type of the integer constant is the first type in which the value can fit.
     Long,    // suffix "l", "L", e.g., 123l, 123L
@@ -194,7 +198,7 @@ impl IntegerNumber {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum FloatingPointNumberType {
     Double,     // no suffix, e.g., 1.23, an unsuffixed floating constant has type `double`.
     Float,      // suffix "f", "F", e.g., 1.23f, 1.23F

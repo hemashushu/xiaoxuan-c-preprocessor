@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "ancpp"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -40,14 +48,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5033c97c4262335cded6d6fc3e5c18ab755e1a3dc96376350f3d8e9f009ad956"
 dependencies = [
  "tinyvec",
-]
-
-[[package]]
-name = "xiaoxuan-c-preprocessor"
-version = "0.1.0"
-dependencies = [
- "pretty_assertions",
- "unicode-normalization",
 ]
 
 [[package]]

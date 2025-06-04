@@ -24,7 +24,15 @@ use unicode_normalization::UnicodeNormalization;
 const PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES: usize = 2;
 const PEEK_BUFFER_LENGTH_REMOVE_COMMENTS: usize = 2;
 const PEEK_BUFFER_LENGTH_REMOVE_SHEBANG: usize = 3;
-const PEEK_BUFFER_LENGTH_TOKENIZE: usize = 4;
+const PEEK_BUFFER_LENGTH_LEX: usize = 4;
+
+pub fn lex_from_str(s: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
+    let chars = pre_lex(s)?;
+    let mut chars_iter = chars.into_iter();
+    let mut peekable_char_iter = PeekableIter::new(&mut chars_iter, PEEK_BUFFER_LENGTH_LEX);
+    let mut tokenizer = Lexer::new(&mut peekable_char_iter);
+    tokenizer.lex()
+}
 
 // Preprocessing steps before tokenization.
 // See: https://gcc.gnu.org/onlinedocs/cpp/Initial-processing.html
@@ -33,7 +41,7 @@ const PEEK_BUFFER_LENGTH_TOKENIZE: usize = 4;
 // 2. (not supported) Trigraph sequences are replaced with their corresponding single characters if enabled.
 // 3. Lines ending with a backslash ('\') are joined with the following line.
 // 4. All comments are replaced by a single space character.
-fn pre_tokenize(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessError> {
+fn pre_lex(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessError> {
     let mut chars = source_text.chars();
     let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
     let mut peekable_char_position_iter = PeekableIter::new(
@@ -219,15 +227,7 @@ fn remove_shebang(
     Ok(pure)
 }
 
-pub fn tokenize_from_str(s: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
-    let chars = pre_tokenize(s)?;
-    let mut chars_iter = chars.into_iter();
-    let mut peekable_char_iter = PeekableIter::new(&mut chars_iter, PEEK_BUFFER_LENGTH_TOKENIZE);
-    let mut tokenizer = Tokenizer::new(&mut peekable_char_iter);
-    tokenizer.tokenize()
-}
-
-struct Tokenizer<'a> {
+struct Lexer<'a> {
     upstream: &'a mut PeekableIter<'a, CharWithPosition>,
 
     // The last position of the character consumed by `next_char()`.
@@ -239,7 +239,7 @@ struct Tokenizer<'a> {
     stored_positions: Vec<Position>,
 }
 
-impl<'a> Tokenizer<'a> {
+impl<'a> Lexer<'a> {
     fn new(upstream: &'a mut PeekableIter<'a, CharWithPosition>) -> Self {
         Self {
             upstream,
@@ -293,8 +293,7 @@ impl<'a> Tokenizer<'a> {
         self.push_position_into_store(&last_position);
     }
 
-    /// Saves the current position (i.e., the next character's position) to the stack.
-    /// This is equivalent to `self.peek_position(0)`.
+    /// Saves the current position (i.e., the `self.peek_position(0)`) to the stack.
     fn push_peek_position_into_store(&mut self) {
         let position = *self.peek_position(0).unwrap();
         self.push_position_into_store(&position);
@@ -309,8 +308,8 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
-impl Tokenizer<'_> {
-    fn tokenize(&mut self) -> Result<Vec<TokenWithRange>, PreprocessError> {
+impl Lexer<'_> {
+    fn lex(&mut self) -> Result<Vec<TokenWithRange>, PreprocessError> {
         let mut token_with_ranges = vec![];
 
         while let Some(current_char) = self.peek_char(0) {
@@ -340,15 +339,17 @@ impl Tokenizer<'_> {
                 }
                 '\'' => {
                     // char
-                    token_with_ranges.push(self.tokenize_char(CharType::Int)?);
+                    token_with_ranges.push(self.lex_char(CharType::Int)?);
                 }
                 '"' => {
-                    if is_last_token_directive_macro_include(&token_with_ranges) {
-                        // string in `#include` or `#embed` directive
-                        token_with_ranges.push(self.tokenize_filepath(false)?);
+                    if is_last_token_directive_macro_include(&token_with_ranges) ||
+                    is_function_has_include(&token_with_ranges) {
+                        // file path in `#include` or `#embed` directive, or
+                        // file path in `__has_include` or `__has_embed` function.
+                        token_with_ranges.push(self.lex_filepath()?);
                     } else {
                         // normal string
-                        token_with_ranges.push(self.tokenize_string(StringType::Char)?);
+                        token_with_ranges.push(self.lex_string(StringType::Char)?);
                     }
                 }
                 '+' => {
@@ -360,7 +361,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '+'
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Increment),
+                            Token::Punctuator(Punctuator::Increase),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '=') {
@@ -371,7 +372,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::AddAssignment),
+                            Token::Punctuator(Punctuator::AddAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else {
@@ -379,7 +380,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '+'
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Addition),
+                            Token::Punctuator(Punctuator::Add),
                             Range::from_position(&self.last_position),
                         ));
                     }
@@ -393,7 +394,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '-'
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Decrement),
+                            Token::Punctuator(Punctuator::Decrease),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '=') {
@@ -404,7 +405,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::SubtractAssignment),
+                            Token::Punctuator(Punctuator::SubtractAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '>') {
@@ -423,7 +424,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '-'
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Subtraction),
+                            Token::Punctuator(Punctuator::Subtract),
                             Range::from_position(&self.last_position),
                         ));
                     }
@@ -437,7 +438,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::MultiplyAssignment),
+                            Token::Punctuator(Punctuator::MultiplyAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else {
@@ -445,7 +446,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '*'
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Multiplication),
+                            Token::Punctuator(Punctuator::Multiply),
                             Range::from_position(&self.last_position),
                         ));
                     }
@@ -459,7 +460,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::DivideAssignment),
+                            Token::Punctuator(Punctuator::DivideAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else {
@@ -467,7 +468,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '/'
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Division),
+                            Token::Punctuator(Punctuator::Divide),
                             Range::from_position(&self.last_position),
                         ));
                     }
@@ -481,7 +482,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::ModulusAssignment),
+                            Token::Punctuator(Punctuator::ModulusAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else {
@@ -489,7 +490,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '%'
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Modulus),
+                            Token::Punctuator(Punctuator::Modulo),
                             Range::from_position(&self.last_position),
                         ));
                     }
@@ -511,7 +512,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Assignment),
+                            Token::Punctuator(Punctuator::Assign),
                             Range::from_position(&self.last_position),
                         ));
                     }
@@ -562,7 +563,7 @@ impl Tokenizer<'_> {
                             self.next_char(); // consume '='
 
                             token_with_ranges.push(TokenWithRange::new(
-                                Token::Punctuator(Punctuator::ShiftRightAssignment),
+                                Token::Punctuator(Punctuator::ShiftRightAssign),
                                 Range::new(&self.pop_position_from_store(), &self.last_position),
                             ));
                         } else {
@@ -583,9 +584,11 @@ impl Tokenizer<'_> {
                     }
                 }
                 '<' => {
-                    if is_last_token_directive_macro_include(&token_with_ranges) {
-                        // string in `#include` or `#embed` directive
-                        token_with_ranges.push(self.tokenize_filepath(true)?);
+                    if is_last_token_directive_macro_include(&token_with_ranges) ||
+                        is_function_has_include(&token_with_ranges) {
+                        // file path in `#include` or `#embed` directive, or
+                        // file path in `__has_include` or `__has_embed` function.
+                        token_with_ranges.push(self.lex_angle_filepath()?);
                     } else if self.peek_char_and_equals(1, '=') {
                         // `<=`
                         self.push_peek_position_into_store();
@@ -609,7 +612,7 @@ impl Tokenizer<'_> {
                             self.next_char(); // consume '='
 
                             token_with_ranges.push(TokenWithRange::new(
-                                Token::Punctuator(Punctuator::ShiftLeftAssignment),
+                                Token::Punctuator(Punctuator::ShiftLeftAssign),
                                 Range::new(&self.pop_position_from_store(), &self.last_position),
                             ));
                         } else {
@@ -649,7 +652,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::BitwiseAndAssignment),
+                            Token::Punctuator(Punctuator::BitwiseAndAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else {
@@ -682,7 +685,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::BitwiseOrAssignment),
+                            Token::Punctuator(Punctuator::BitwiseOrAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else {
@@ -704,7 +707,7 @@ impl Tokenizer<'_> {
                         self.next_char(); // consume '='
 
                         token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::BitwiseXorAssignment),
+                            Token::Punctuator(Punctuator::BitwiseXorAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
                     } else {
@@ -747,7 +750,7 @@ impl Tokenizer<'_> {
                 '.' => {
                     if matches!(self.peek_char(1), Some('0'..'9')) {
                         // This is a number with a leading dot, e.g., `.5`
-                        token_with_ranges.push(self.tokenize_decimal_number(true)?);
+                        token_with_ranges.push(self.lex_decimal_number(true)?);
                     } else if self.peek_char_and_equals(1, '.') && self.peek_char_and_equals(2, '.')
                     {
                         // `...`
@@ -894,23 +897,23 @@ impl Tokenizer<'_> {
                 }
                 '0' if matches!(self.peek_char(1), Some('x' | 'X')) => {
                     // hexadecimal number
-                    token_with_ranges.push(self.tokenize_hexadecimal_number()?);
+                    token_with_ranges.push(self.lex_hexadecimal_number()?);
                 }
                 '0' if matches!(self.peek_char(1), Some('b' | 'B')) => {
                     // binary number
-                    token_with_ranges.push(self.tokenize_binary_number()?);
+                    token_with_ranges.push(self.lex_binary_number()?);
                 }
                 '0' if matches!(self.peek_char(1), Some('.')) => {
                     // decimal number
-                    token_with_ranges.push(self.tokenize_decimal_number(false)?);
+                    token_with_ranges.push(self.lex_decimal_number(false)?);
                 }
                 '0' => {
                     // octal number
-                    token_with_ranges.push(self.tokenize_octal_number()?);
+                    token_with_ranges.push(self.lex_octal_number()?);
                 }
                 '1'..='9' => {
                     // decimal number
-                    token_with_ranges.push(self.tokenize_decimal_number(false)?);
+                    token_with_ranges.push(self.lex_decimal_number(false)?);
                 }
                 'L' | 'u' | 'U' if matches!(self.peek_char(1), Some('\'' | '"')) => {
                     let prefix = *current_char;
@@ -929,7 +932,7 @@ impl Tokenizer<'_> {
                             'U' => CharType::UTF32,
                             _ => unreachable!(),
                         };
-                        self.tokenize_char(char_type)?
+                        self.lex_char(char_type)?
                     } else {
                         let string_type = match prefix {
                             'L' => StringType::Wide,
@@ -937,7 +940,7 @@ impl Tokenizer<'_> {
                             'U' => StringType::UTF32,
                             _ => unreachable!(),
                         };
-                        self.tokenize_string(string_type)?
+                        self.lex_string(string_type)?
                     };
 
                     token_with_ranges.push(token_with_range);
@@ -955,16 +958,16 @@ impl Tokenizer<'_> {
                     self.next_char(); // consume '8'
 
                     let token_with_range = if literal_char {
-                        self.tokenize_char(CharType::UTF8)?
+                        self.lex_char(CharType::UTF8)?
                     } else {
-                        self.tokenize_string(StringType::UTF8)?
+                        self.lex_string(StringType::UTF8)?
                     };
 
                     token_with_ranges.push(token_with_range);
                 }
                 'a'..='z' | 'A'..='Z' | '_' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{10ffff}' => {
                     // identifier
-                    let token_with_range = self.tokenize_identifier()?;
+                    let token_with_range = self.lex_identifier()?;
 
                     if is_last_token_directive_macro_define(&token_with_ranges)
                         && self.peek_char_and_equals(0, '(')
@@ -1000,7 +1003,7 @@ impl Tokenizer<'_> {
         Ok(token_with_ranges)
     }
 
-    fn tokenize_identifier(&mut self) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_identifier(&mut self) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // key_nameT  //
         // ^       ^__// to here
@@ -1085,10 +1088,7 @@ impl Tokenizer<'_> {
         ))
     }
 
-    fn tokenize_decimal_number(
-        &mut self,
-        leading_dot: bool,
-    ) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_decimal_number(&mut self, leading_dot: bool) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // 123456T  //
         // ^     ^__// to here
@@ -1171,12 +1171,12 @@ impl Tokenizer<'_> {
                 'u' | 'U' | 'l' | 'L' | 'w' | 'W' | 'f' | 'F' | 'd' | 'D' => {
                     if found_e || found_point {
                         // floating-point number suffixes
-                        let suffix = self.tokenize_floating_point_number_suffix()?;
+                        let suffix = self.lex_floating_point_number_suffix()?;
                         is_decimal = suffix.0;
                         floating_point_number_type = suffix.1;
                     } else {
                         // integer number suffix
-                        let suffix = self.tokenize_integer_number_suffix()?;
+                        let suffix = self.lex_integer_number_suffix()?;
                         is_unsigned = suffix.0;
                         integer_number_type = suffix.1;
                     }
@@ -1233,7 +1233,7 @@ impl Tokenizer<'_> {
         }
     }
 
-    fn tokenize_hexadecimal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_hexadecimal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // 0xaabbT  //
         // ^^    ^__// to here
@@ -1273,7 +1273,7 @@ impl Tokenizer<'_> {
                 'f' | 'F' | 'd' | 'D' if found_p => {
                     // 'f' is allowed only in the hex floating point literal mode,
                     // and the character 'p' should be present, e.g. 0x1.2p3f)
-                    let suffix = self.tokenize_floating_point_number_suffix()?;
+                    let suffix = self.lex_floating_point_number_suffix()?;
                     is_decimal = suffix.0;
                     floating_point_number_type = suffix.1;
                     break;
@@ -1347,12 +1347,12 @@ impl Tokenizer<'_> {
                 'u' | 'U' | 'l' | 'L' | 'w' | 'W' => {
                     if found_p || found_point {
                         // floating-point number suffixes
-                        let suffix = self.tokenize_floating_point_number_suffix()?;
+                        let suffix = self.lex_floating_point_number_suffix()?;
                         is_decimal = suffix.0;
                         floating_point_number_type = suffix.1;
                     } else {
                         // integer number suffix
-                        let suffix = self.tokenize_integer_number_suffix()?;
+                        let suffix = self.lex_integer_number_suffix()?;
                         is_unsigned = suffix.0;
                         integer_number_type = suffix.1;
                     }
@@ -1420,7 +1420,7 @@ impl Tokenizer<'_> {
         }
     }
 
-    fn tokenize_binary_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_binary_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // 0b101010T  //
         // ^^      ^__// to here
@@ -1453,7 +1453,7 @@ impl Tokenizer<'_> {
                 }
                 'u' | 'U' | 'l' | 'L' | 'w' | 'W' => {
                     // integer suffix
-                    let suffix = self.tokenize_integer_number_suffix()?;
+                    let suffix = self.lex_integer_number_suffix()?;
                     is_unsigned = suffix.0;
                     integer_number_type = suffix.1;
                     break;
@@ -1496,7 +1496,7 @@ impl Tokenizer<'_> {
         ))
     }
 
-    fn tokenize_octal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_octal_number(&mut self) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // 01234567T  //
         // ^^      ^__// to here
@@ -1525,7 +1525,7 @@ impl Tokenizer<'_> {
                 }
                 'u' | 'U' | 'l' | 'L' | 'w' | 'W' => {
                     // integer suffix
-                    let suffix = self.tokenize_integer_number_suffix()?;
+                    let suffix = self.lex_integer_number_suffix()?;
                     is_unsigned = suffix.0;
                     integer_number_type = suffix.1;
                     break;
@@ -1561,7 +1561,7 @@ impl Tokenizer<'_> {
         ))
     }
 
-    fn tokenize_integer_number_suffix(
+    fn lex_integer_number_suffix(
         &mut self,
     ) -> Result<(/* is_unsigned */ bool, IntegerNumberType), PreprocessError> {
         // integer number suffixes consist of the two groups:
@@ -1630,7 +1630,7 @@ impl Tokenizer<'_> {
         Ok((is_unsigned, integer_number_type))
     }
 
-    fn tokenize_floating_point_number_suffix(
+    fn lex_floating_point_number_suffix(
         &mut self,
     ) -> Result<(/* is_decimal */ bool, FloatingPointNumberType), PreprocessError> {
         // possible suffix for floating-point number:
@@ -1721,7 +1721,7 @@ impl Tokenizer<'_> {
         Ok((is_decimal, floating_point_number_type))
     }
 
-    fn tokenize_char(&mut self, char_type: CharType) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_char(&mut self, char_type: CharType) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // 'a'?  //
         // ^  ^__// to here
@@ -2011,10 +2011,7 @@ impl Tokenizer<'_> {
         ))
     }
 
-    fn tokenize_string(
-        &mut self,
-        string_type: StringType,
-    ) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_string(&mut self, string_type: StringType) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // "abc"?  //
         // ^    ^__// to here
@@ -2288,35 +2285,48 @@ impl Tokenizer<'_> {
         ))
     }
 
-    fn tokenize_filepath(
-        &mut self,
-        angle_bracket: bool,
-    ) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_filepath(&mut self) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
-        // <path>?  //
+        // "path"?  //
         // ^    ^___// to here
         // |________// current char, validated
         // ```
 
-        // save the start position of the file path (i.e. the first '<' or '"')
+        // save the start position of the file path (i.e. the first '"')
         self.push_peek_position_into_store();
 
         let mut final_path = String::new();
 
-        self.next_char(); // Consumes '<' or '"'
+        self.next_char(); // Consumes '"'
 
         loop {
             if let Some(current_char) = self.next_char() {
                 match current_char {
-                    '>' if angle_bracket => {
+                    '"' => {
                         break;
                     }
-                    '"' if !angle_bracket => {
-                        break;
+                    '\\' | '\'' => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Invalid character in file path.".to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    '/' if self.peek_char_and_equals(0, '/') => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Line comments are not allowed in file paths.".to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    '/' if self.peek_char_and_equals(0, '*') => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Block comments are not allowed in file paths.".to_owned(),
+                            self.last_position,
+                        ));
                     }
                     '\n' | '\r' => {
                         return Err(PreprocessError::MessageWithPosition(
-                            "File path cannot contain new line characters.".to_owned(),
+                            "Incomplete file path, expected a closing double quote '\"' but found a newline character."
+                                .to_owned(),
                             self.last_position,
                         ));
                     }
@@ -2339,16 +2349,90 @@ impl Tokenizer<'_> {
             final_path_range,
         ))
     }
+
+    fn lex_angle_filepath(&mut self) -> Result<TokenWithRange, PreprocessError> {
+        // ```diagram
+        // <path>?  //
+        // ^    ^___// to here
+        // |________// current char, validated
+        // ```
+
+        // save the start position of the file path (i.e. the first '<')
+        self.push_peek_position_into_store();
+
+        let mut final_path = String::new();
+
+        self.next_char(); // Consumes '<'
+
+        loop {
+            if let Some(current_char) = self.next_char() {
+                match current_char {
+                    '>' => {
+                        break;
+                    }
+                    '\\' | '\'' => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Invalid character in file path.".to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    '"' => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Double quotes are not allowed in angle-bracket file paths.".to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    '/' if self.peek_char_and_equals(0, '/') => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Line comments are not allowed in file paths.".to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    '/' if self.peek_char_and_equals(0, '*') => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Block comments are not allowed in file paths.".to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    '\n' | '\r' => {
+                        return Err(PreprocessError::MessageWithPosition(
+                            "Incomplete file path, expected a closing angle bracket '>' but found a newline character."
+                                .to_owned(),
+                            self.last_position,
+                        ));
+                    }
+                    _ => {
+                        final_path.push(current_char);
+                    }
+                }
+            } else {
+                // Incomplete file path (`<...EOF`).
+                return Err(PreprocessError::UnexpectedEndOfDocument(
+                    "Incomplete file path.".to_owned(),
+                ));
+            }
+        }
+
+        let final_path_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+
+        Ok(TokenWithRange::new(
+            Token::FilePath(final_path),
+            final_path_range,
+        ))
+    }
 }
 
-/// Check if the last token in the given token list is a directive macro `include`.
+/// Checks whether the last token in the provided token list is a directive macro, specifically `include` or `embed`.
 ///
-/// C preprocessor is not strict language, there are two syntax is inconsistent:
-/// - File path in `#define` and `#embed` directives, it is not string literal.
-/// - There cann't be whitespace between the  identifier and opening parenthese in function-like macro definitions.
+/// The C preprocessor is not a strictly defined language, and there are some inconsistencies in its syntax:
+/// - In the `#include` and `#embed` directives, the file path is not a string literal.
+/// - In the `has_include` and `has_embed` functions, the file path is not a string literal.
+/// - In function-like macro definitions, there cannot be whitespace between the macro identifier and the opening parenthesis.
 ///
-/// the tokenizer handle these "exceptions" using functions `is_last_token_directive_macro_include`
-/// and `is_last_token_directive_macro_define`.
+/// The tokenizer handles these "exceptions" using the functions:
+/// - `is_last_token_directive_macro_include`
+/// - `is_function_has_include`
+/// - `is_last_token_directive_macro_define`
 fn is_last_token_directive_macro_include(token_with_ranges: &[TokenWithRange]) -> bool {
     if matches!(token_with_ranges.last(),
         Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "include" || id == "embed")
@@ -2359,6 +2443,29 @@ fn is_last_token_directive_macro_include(token_with_ranges: &[TokenWithRange]) -
     }
 }
 
+fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
+    let length = token_with_ranges.len();
+    if length >= 2
+        && matches!(
+            token_with_ranges.get(length - 2),
+            Some(TokenWithRange {
+                token: Token::Punctuator(Punctuator::ParenthesisOpen),
+                ..
+            })
+        )
+        && matches!(token_with_ranges.last(),
+        Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "__has_include" || id == "__has_embed")
+    {
+        true
+    } else {
+        false
+    }
+}
+
+/// Checks whether the last token in the provided token list is the `define` directive macro.
+///
+/// This is used to identify function-like macro definitions, which require the macro name to be
+/// immediately followed by an opening parenthesis with no intervening whitespace.
 fn is_last_token_directive_macro_define(token_with_ranges: &[TokenWithRange]) -> bool {
     if matches!(token_with_ranges.last(),
     Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "define")
@@ -2376,6 +2483,10 @@ mod tests {
     use crate::{
         PreprocessError,
         charwithposition::{CharWithPosition, CharsWithPositionIter},
+        lexer::{
+            PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS,
+            PEEK_BUFFER_LENGTH_REMOVE_SHEBANG, pre_lex,
+        },
         peekableiter::PeekableIter,
         position::Position,
         range::Range,
@@ -2383,13 +2494,9 @@ mod tests {
             CharType, FloatingPointNumber, FloatingPointNumberType, IntegerNumber,
             IntegerNumberType, Number, Punctuator, StringType, Token, TokenWithRange,
         },
-        tokenize::{
-            PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS,
-            PEEK_BUFFER_LENGTH_REMOVE_SHEBANG, pre_tokenize,
-        },
     };
 
-    use super::{merge_continued_lines, remove_comments, remove_shebang, tokenize_from_str};
+    use super::{lex_from_str, merge_continued_lines, remove_comments, remove_shebang};
 
     impl Token {
         pub fn new_identifier(s: &str) -> Self {
@@ -2413,8 +2520,8 @@ mod tests {
         }
     }
 
-    fn tokenize_from_str_without_range_strip(s: &str) -> Result<Vec<Token>, PreprocessError> {
-        let tokens = tokenize_from_str(s)?
+    fn lex_from_str_with_range_strip(s: &str) -> Result<Vec<Token>, PreprocessError> {
+        let tokens = lex_from_str(s)?
             .into_iter()
             .map(|e| e.token)
             .collect::<Vec<Token>>();
@@ -2532,11 +2639,11 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_tokenize() {
+    fn test_pre_lex() {
         let source_text = "0/\\\n/foo\n1/\\\n*bar*/2";
         // chars index: 012 3 45678 901 2 3456789
 
-        let clean = pre_tokenize(source_text).unwrap();
+        let clean = pre_lex(source_text).unwrap();
 
         assert_eq!(
             clean,
@@ -2554,17 +2661,17 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_punctuator() {
+    fn test_lex_punctuator() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("+-*/%++--==!=><>=<=&&||!&|^~<<>>").unwrap(),
+            lex_from_str_with_range_strip("+-*/%++--==!=><>=<=&&||!&|^~<<>>").unwrap(),
             vec![
-                Token::Punctuator(Punctuator::Addition),
-                Token::Punctuator(Punctuator::Subtraction),
-                Token::Punctuator(Punctuator::Multiplication),
-                Token::Punctuator(Punctuator::Division),
-                Token::Punctuator(Punctuator::Modulus),
-                Token::Punctuator(Punctuator::Increment),
-                Token::Punctuator(Punctuator::Decrement),
+                Token::Punctuator(Punctuator::Add),
+                Token::Punctuator(Punctuator::Subtract),
+                Token::Punctuator(Punctuator::Multiply),
+                Token::Punctuator(Punctuator::Divide),
+                Token::Punctuator(Punctuator::Modulo),
+                Token::Punctuator(Punctuator::Increase),
+                Token::Punctuator(Punctuator::Decrease),
                 Token::Punctuator(Punctuator::Equal,),
                 Token::Punctuator(Punctuator::NotEqual,),
                 Token::Punctuator(Punctuator::GreaterThan,),
@@ -2584,24 +2691,24 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("=+=-=*=/=%=&=|=^=<<=>>=").unwrap(),
+            lex_from_str_with_range_strip("=+=-=*=/=%=&=|=^=<<=>>=").unwrap(),
             vec![
-                Token::Punctuator(Punctuator::Assignment),
-                Token::Punctuator(Punctuator::AddAssignment),
-                Token::Punctuator(Punctuator::SubtractAssignment),
-                Token::Punctuator(Punctuator::MultiplyAssignment),
-                Token::Punctuator(Punctuator::DivideAssignment),
-                Token::Punctuator(Punctuator::ModulusAssignment),
-                Token::Punctuator(Punctuator::BitwiseAndAssignment),
-                Token::Punctuator(Punctuator::BitwiseOrAssignment),
-                Token::Punctuator(Punctuator::BitwiseXorAssignment),
-                Token::Punctuator(Punctuator::ShiftLeftAssignment),
-                Token::Punctuator(Punctuator::ShiftRightAssignment),
+                Token::Punctuator(Punctuator::Assign),
+                Token::Punctuator(Punctuator::AddAssign),
+                Token::Punctuator(Punctuator::SubtractAssign),
+                Token::Punctuator(Punctuator::MultiplyAssign),
+                Token::Punctuator(Punctuator::DivideAssign),
+                Token::Punctuator(Punctuator::ModulusAssign),
+                Token::Punctuator(Punctuator::BitwiseAndAssign),
+                Token::Punctuator(Punctuator::BitwiseOrAssign),
+                Token::Punctuator(Punctuator::BitwiseXorAssign),
+                Token::Punctuator(Punctuator::ShiftLeftAssign),
+                Token::Punctuator(Punctuator::ShiftRightAssign),
             ]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("?,.->{}[]();:...###[[]]").unwrap(),
+            lex_from_str_with_range_strip("?,.->{}[]();:...###[[]]").unwrap(),
             vec![
                 Token::Punctuator(Punctuator::QuestionMark),
                 Token::Punctuator(Punctuator::Comma),
@@ -2629,7 +2736,7 @@ mod tests {
         // test punctuations `>>>=`,
         // it will be divided into  `>>` and `>=`.
         assert_eq!(
-            tokenize_from_str(">>>=").unwrap(),
+            lex_from_str(">>>=").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::ShiftRight),
@@ -2645,18 +2752,18 @@ mod tests {
         // test punctuations `++++=`,
         // it will be divided into  `++`, `++` and `=`.
         assert_eq!(
-            tokenize_from_str("++++=").unwrap(),
+            lex_from_str("++++=").unwrap(),
             vec![
                 TokenWithRange::new(
-                    Token::Punctuator(Punctuator::Increment),
+                    Token::Punctuator(Punctuator::Increase),
                     Range::from_detail_and_length(0, 0, 0, 2),
                 ),
                 TokenWithRange::new(
-                    Token::Punctuator(Punctuator::Increment),
+                    Token::Punctuator(Punctuator::Increase),
                     Range::from_detail_and_length(2, 0, 2, 2),
                 ),
                 TokenWithRange::new(
-                    Token::Punctuator(Punctuator::Assignment),
+                    Token::Punctuator(Punctuator::Assign),
                     Range::from_detail_and_length(4, 0, 4, 1),
                 ),
             ]
@@ -2665,7 +2772,7 @@ mod tests {
         // test punctuations `>====`,
         // it will be divided into  `>=`, `==`, and `=`.
         assert_eq!(
-            tokenize_from_str(">====").unwrap(),
+            lex_from_str(">====").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::GreaterThanOrEqual),
@@ -2676,7 +2783,7 @@ mod tests {
                     Range::from_detail_and_length(2, 0, 2, 2),
                 ),
                 TokenWithRange::new(
-                    Token::Punctuator(Punctuator::Assignment),
+                    Token::Punctuator(Punctuator::Assign),
                     Range::from_detail_and_length(4, 0, 4, 1),
                 ),
             ]
@@ -2685,7 +2792,7 @@ mod tests {
         // test punctuations `.....`,
         // it will be divided into  `...`, `.`, and `.`.
         assert_eq!(
-            tokenize_from_str(".....").unwrap(),
+            lex_from_str(".....").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::Ellipsis),
@@ -2704,11 +2811,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_whitespaces() {
-        assert_eq!(tokenize_from_str_without_range_strip("  ").unwrap(), vec![]);
+    fn test_lex_whitespaces() {
+        assert_eq!(lex_from_str_with_range_strip("  ").unwrap(), vec![]);
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("()").unwrap(),
+            lex_from_str_with_range_strip("()").unwrap(),
             vec![
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::Punctuator(Punctuator::ParenthesisClose)
@@ -2716,7 +2823,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("(  )").unwrap(),
+            lex_from_str_with_range_strip("(  )").unwrap(),
             vec![
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::Punctuator(Punctuator::ParenthesisClose)
@@ -2724,7 +2831,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("(\t\r\n\n\n)").unwrap(),
+            lex_from_str_with_range_strip("(\t\r\n\n\n)").unwrap(),
             vec![
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::Newline,
@@ -2736,7 +2843,7 @@ mod tests {
 
         // location
         assert_eq!(
-            tokenize_from_str("()").unwrap(),
+            lex_from_str("()").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::ParenthesisOpen),
@@ -2750,7 +2857,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str("(  )").unwrap(),
+            lex_from_str("(  )").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::ParenthesisOpen),
@@ -2765,9 +2872,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_decimal_number() {
+    fn test_lex_decimal_number() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("211").unwrap(),
+            lex_from_str_with_range_strip("211").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 211.to_string(),
                 false,
@@ -2776,7 +2883,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("20'25").unwrap(),
+            lex_from_str_with_range_strip("20'25").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 2025.to_string(),
                 false,
@@ -2787,7 +2894,7 @@ mod tests {
         // testing token's location
 
         assert_eq!(
-            tokenize_from_str("223 211").unwrap(),
+            lex_from_str("223 211").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Number(Number::Integer(IntegerNumber::new(
@@ -2810,7 +2917,7 @@ mod tests {
 
         // err: invalid char for decimal number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("1234x"),
+            lex_from_str_with_range_strip("1234x"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -2823,9 +2930,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_decimal_number_with_suffix() {
+    fn test_lex_decimal_number_with_suffix() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("1u 2U").unwrap(),
+            lex_from_str_with_range_strip("1u 2U").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
@@ -2841,7 +2948,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("1l 2L 3ll 4LL 5wb 6WB").unwrap(),
+            lex_from_str_with_range_strip("1l 2L 3ll 4LL 5wb 6WB").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
@@ -2877,7 +2984,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("1ul 2UL 3ull 4ULL 5uwb 6UWB").unwrap(),
+            lex_from_str_with_range_strip("1ul 2UL 3ull 4ULL 5uwb 6UWB").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
@@ -2915,7 +3022,7 @@ mod tests {
         // also test `lu`, `LU`, `llu`, `LLU`, `wbu`, `WBU` suffixes.
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("1lu 2LU 3llu 4LLU 5wbu 6WBU").unwrap(),
+            lex_from_str_with_range_strip("1lu 2LU 3llu 4LLU 5wbu 6WBU").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
@@ -2952,7 +3059,7 @@ mod tests {
 
         // err: invalid suffix for integer number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("13f"),
+            lex_from_str_with_range_strip("13f"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -2965,16 +3072,16 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_floating_point_decimal_number() {
+    fn test_lex_floating_point_decimal_number() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("3.14").unwrap(),
+            lex_from_str_with_range_strip("3.14").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new("3.14".to_owned(), false, FloatingPointNumberType::Double)
             ))]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("1.4'14").unwrap(),
+            lex_from_str_with_range_strip("1.4'14").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "1.414".to_owned(),
@@ -2986,7 +3093,7 @@ mod tests {
 
         // floating-point number with exponent
         assert_eq!(
-            tokenize_from_str_without_range_strip("2.998e8").unwrap(),
+            lex_from_str_with_range_strip("2.998e8").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "2.998e8".to_owned(),
@@ -2998,7 +3105,7 @@ mod tests {
 
         // floating-point number with exponent and sign
         assert_eq!(
-            tokenize_from_str_without_range_strip("2.998e+8").unwrap(),
+            lex_from_str_with_range_strip("2.998e+8").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "2.998e+8".to_owned(),
@@ -3010,7 +3117,7 @@ mod tests {
 
         // floating-point number with exponent and negative sign
         assert_eq!(
-            tokenize_from_str_without_range_strip("6.626e-34").unwrap(),
+            lex_from_str_with_range_strip("6.626e-34").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "6.626e-34".to_owned(),
@@ -3023,7 +3130,7 @@ mod tests {
         // automatically complete the floating-point number
         // by insert '0' before the point '.'
         assert_eq!(
-            tokenize_from_str_without_range_strip(".5").unwrap(),
+            lex_from_str_with_range_strip(".5").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new("0.5".to_owned(), false, FloatingPointNumberType::Double)
             ))]
@@ -3032,7 +3139,7 @@ mod tests {
         // automatically complete the floating-point number
         // by appending '0' after the point '.'
         assert_eq!(
-            tokenize_from_str_without_range_strip("5.").unwrap(),
+            lex_from_str_with_range_strip("5.").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new("5.0".to_owned(), false, FloatingPointNumberType::Double)
             ))]
@@ -3041,7 +3148,7 @@ mod tests {
         // testing token's location
 
         assert_eq!(
-            tokenize_from_str("3.14 6.022e23").unwrap(),
+            lex_from_str("3.14 6.022e23").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
@@ -3064,7 +3171,7 @@ mod tests {
 
         // err: incomplete floating point number since it ends with 'e' (empty exponent)
         assert!(matches!(
-            tokenize_from_str_without_range_strip("123e"),
+            lex_from_str_with_range_strip("123e"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -3084,7 +3191,7 @@ mod tests {
 
         // err: multiple '.' (point)
         assert!(matches!(
-            tokenize_from_str_without_range_strip("1.23.456"),
+            lex_from_str_with_range_strip("1.23.456"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3097,7 +3204,7 @@ mod tests {
 
         // err: multiple 'e' (exponent)
         assert!(matches!(
-            tokenize_from_str_without_range_strip("1e23e456"),
+            lex_from_str_with_range_strip("1e23e456"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3111,7 +3218,7 @@ mod tests {
         // err: invalid char for floating-point decimal number
         // err: multiple 'e' (exponent)
         assert!(matches!(
-            tokenize_from_str_without_range_strip("2.718x"),
+            lex_from_str_with_range_strip("2.718x"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3124,9 +3231,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_floating_point_decimal_number_with_suffix() {
+    fn test_lex_floating_point_decimal_number_with_suffix() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("1.0f 2.0F 3.0l 4.0L").unwrap(),
+            lex_from_str_with_range_strip("1.0f 2.0F 3.0l 4.0L").unwrap(),
             vec![
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "1.0".to_owned(),
@@ -3152,7 +3259,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("1.0dd 2.0DD 3.0df 4.0DF 5.0dl 6.0DL").unwrap(),
+            lex_from_str_with_range_strip("1.0dd 2.0DD 3.0df 4.0DF 5.0dl 6.0DL").unwrap(),
             vec![
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "1.0".to_owned(),
@@ -3189,7 +3296,7 @@ mod tests {
 
         // err: invalid suffix for floating-point number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("1.23ll"),
+            lex_from_str_with_range_strip("1.23ll"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3202,9 +3309,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_binary_number() {
+    fn test_lex_binary_number() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("0b0100").unwrap(),
+            lex_from_str_with_range_strip("0b0100").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0b0100".to_owned(),
                 false,
@@ -3213,7 +3320,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("0b0110'1001").unwrap(),
+            lex_from_str_with_range_strip("0b0110'1001").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0b01101001".to_owned(),
                 false,
@@ -3224,7 +3331,7 @@ mod tests {
         // testing token's location
 
         assert_eq!(
-            tokenize_from_str("0b0110 0b1000").unwrap(),
+            lex_from_str("0b0110 0b1000").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Number(Number::Integer(IntegerNumber::new(
@@ -3247,7 +3354,7 @@ mod tests {
 
         // err: does not support binary floating point
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0b10.10"),
+            lex_from_str_with_range_strip("0b10.10"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3260,7 +3367,7 @@ mod tests {
 
         // err: invalid digit for binary number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0b123"),
+            lex_from_str_with_range_strip("0b123"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3273,7 +3380,7 @@ mod tests {
 
         // err: invalid char for binary number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0b1x"),
+            lex_from_str_with_range_strip("0b1x"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3286,7 +3393,7 @@ mod tests {
 
         // err: empty binary number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0b"),
+            lex_from_str_with_range_strip("0b"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -3306,9 +3413,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_binary_number_with_suffix() {
+    fn test_lex_binary_number_with_suffix() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("0b01u 0b10U").unwrap(),
+            lex_from_str_with_range_strip("0b01u 0b10U").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b01".to_owned(),
@@ -3324,8 +3431,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("0b001l 0b010L 0b011ll 0b100LL 0b101wb 0b110WB")
-                .unwrap(),
+            lex_from_str_with_range_strip("0b001l 0b010L 0b011ll 0b100LL 0b101wb 0b110WB").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b001".to_owned(),
@@ -3361,10 +3467,8 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(
-                "0b001ul 0b010UL 0b011ull 0b100ULL 0b101uwb 0b110UWB"
-            )
-            .unwrap(),
+            lex_from_str_with_range_strip("0b001ul 0b010UL 0b011ull 0b100ULL 0b101uwb 0b110UWB")
+                .unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b001".to_owned(),
@@ -3401,7 +3505,7 @@ mod tests {
 
         // err: invalid suffix for integer number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0b01f"),
+            lex_from_str_with_range_strip("0b01f"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3414,9 +3518,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_octal_number() {
+    fn test_lex_octal_number() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("0").unwrap(),
+            lex_from_str_with_range_strip("0").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0".to_owned(),
                 false,
@@ -3425,7 +3529,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("01'100").unwrap(),
+            lex_from_str_with_range_strip("01'100").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "01100".to_owned(),
                 false,
@@ -3434,7 +3538,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("0775").unwrap(),
+            lex_from_str_with_range_strip("0775").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0775".to_owned(),
                 false,
@@ -3445,7 +3549,7 @@ mod tests {
         // testing token's location
 
         assert_eq!(
-            tokenize_from_str("01 0600").unwrap(),
+            lex_from_str("01 0600").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Number(Number::Integer(IntegerNumber::new(
@@ -3468,7 +3572,7 @@ mod tests {
 
         // err: does not support octal floating point
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0100.10"),
+            lex_from_str_with_range_strip("0100.10"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3481,7 +3585,7 @@ mod tests {
 
         // err: invalid digit for octal number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0778"),
+            lex_from_str_with_range_strip("0778"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3494,7 +3598,7 @@ mod tests {
 
         // err: invalid char for octal number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("077x"),
+            lex_from_str_with_range_strip("077x"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3507,9 +3611,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_octal_number_with_suffix() {
+    fn test_lex_octal_number_with_suffix() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("01u 02U").unwrap(),
+            lex_from_str_with_range_strip("01u 02U").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "01".to_owned(),
@@ -3525,7 +3629,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("01l 02L 03ll 04LL 05wb 06WB").unwrap(),
+            lex_from_str_with_range_strip("01l 02L 03ll 04LL 05wb 06WB").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "01".to_owned(),
@@ -3561,7 +3665,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("01ul 02UL 03ull 04ULL 05uwb 06UWB").unwrap(),
+            lex_from_str_with_range_strip("01ul 02UL 03ull 04ULL 05uwb 06UWB").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "01".to_owned(),
@@ -3598,7 +3702,7 @@ mod tests {
 
         // err: invalid suffix for integer number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("01f"),
+            lex_from_str_with_range_strip("01f"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3611,9 +3715,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_hexadecimal_number() {
+    fn test_lex_hexadecimal_number() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("0xabcdef").unwrap(),
+            lex_from_str_with_range_strip("0xabcdef").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0xabcdef".to_owned(),
                 false,
@@ -3622,7 +3726,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x1234'5678").unwrap(),
+            lex_from_str_with_range_strip("0x1234'5678").unwrap(),
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0x12345678".to_owned(),
                 false,
@@ -3633,7 +3737,7 @@ mod tests {
         // testing token's location
 
         assert_eq!(
-            tokenize_from_str("0x90ab 0xcd12").unwrap(),
+            lex_from_str("0x90ab 0xcd12").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Number(Number::Integer(IntegerNumber::new(
@@ -3656,7 +3760,7 @@ mod tests {
 
         // err: invalid char for hex number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x1234x"),
+            lex_from_str_with_range_strip("0x1234x"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3669,7 +3773,7 @@ mod tests {
 
         // err: empty hex number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x"),
+            lex_from_str_with_range_strip("0x"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -3689,9 +3793,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_hexadecimal_number_with_suffix() {
+    fn test_lex_hexadecimal_number_with_suffix() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x1au 0x2bU").unwrap(),
+            lex_from_str_with_range_strip("0x1au 0x2bU").unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x1a".to_owned(),
@@ -3707,10 +3811,8 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(
-                "0x12abl 0x34cdL 0x56efll 0x78aaLL 0x90bbwb 0xffffWB"
-            )
-            .unwrap(),
+            lex_from_str_with_range_strip("0x12abl 0x34cdL 0x56efll 0x78aaLL 0x90bbwb 0xffffWB")
+                .unwrap(),
             vec![
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x12ab".to_owned(),
@@ -3746,7 +3848,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 "0x12abul 0x34cdUL 0x56efull 0x78aaULL 0x90bbuwb 0xffffUWB"
             )
             .unwrap(),
@@ -3786,9 +3888,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_hexadecimal_number_floating_point() {
+    fn test_lex_hexadecimal_number_floating_point() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x1.4p3").unwrap(),
+            lex_from_str_with_range_strip("0x1.4p3").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "0x1.4p3".to_owned(),
@@ -3801,7 +3903,7 @@ mod tests {
         // floating-point number with separator '\''
         // value is std::f32::consts::PI (3.1415927f32)
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x1.921f'b6p1").unwrap(),
+            lex_from_str_with_range_strip("0x1.921f'b6p1").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "0x1.921fb6p1".to_owned(),
@@ -3814,7 +3916,7 @@ mod tests {
         // floating-point number with exponent and sign
         // value is std::f64::consts::E (2.718281828459045f64)
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x1.5bf0a8b145769p+1").unwrap(),
+            lex_from_str_with_range_strip("0x1.5bf0a8b145769p+1").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "0x1.5bf0a8b145769p+1".to_owned(),
@@ -3828,7 +3930,7 @@ mod tests {
         // value is std::f64::consts::LN_2
         // https://observablehq.com/@jrus/hexfloat
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x1.62e42fefa39efp-1").unwrap(),
+            lex_from_str_with_range_strip("0x1.62e42fefa39efp-1").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "0x1.62e42fefa39efp-1".to_owned(),
@@ -3841,7 +3943,7 @@ mod tests {
         // automatically complete the hexadecimal floating-point number
         // by insert '0' before the point '.'
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x.1234p5").unwrap(),
+            lex_from_str_with_range_strip("0x.1234p5").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "0x0.1234p5".to_owned(),
@@ -3854,7 +3956,7 @@ mod tests {
         // automatically complete the hexadecimal floating-point number
         // by appending '0' after the point '.'
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x123.p4").unwrap(),
+            lex_from_str_with_range_strip("0x123.p4").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
                 FloatingPointNumber::new(
                     "0x123.0p4".to_owned(),
@@ -3867,7 +3969,7 @@ mod tests {
         // testing token's location
 
         assert_eq!(
-            tokenize_from_str("0x1.2p3 0xa.bp+12").unwrap(),
+            lex_from_str("0x1.2p3 0xa.bp+12").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
@@ -3890,7 +3992,7 @@ mod tests {
 
         // err: missing the exponent
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x1.23"),
+            lex_from_str_with_range_strip("0x1.23"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -3910,7 +4012,7 @@ mod tests {
 
         // err: empty the exponent
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x1.23p"),
+            lex_from_str_with_range_strip("0x1.23p"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -3930,7 +4032,7 @@ mod tests {
 
         // err: multiple '.' (point)
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x1.2.3"),
+            lex_from_str_with_range_strip("0x1.2.3"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3943,7 +4045,7 @@ mod tests {
 
         // err: multiple 'p' (exponent)
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x1.2p3p4"),
+            lex_from_str_with_range_strip("0x1.2p3p4"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3956,7 +4058,7 @@ mod tests {
 
         // err: invalid exponent (dot '.' after 'p')
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x1.23p4.5"),
+            lex_from_str_with_range_strip("0x1.23p4.5"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -3969,9 +4071,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_hexadecimal_number_floating_point_with_suffix() {
+    fn test_lex_hexadecimal_number_floating_point_with_suffix() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("0x1.2p3f 0x2.3p4F 0x3.4p5l 0x4.5p6L").unwrap(),
+            lex_from_str_with_range_strip("0x1.2p3f 0x2.3p4F 0x3.4p5l 0x4.5p6L").unwrap(),
             vec![
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x1.2p3".to_owned(),
@@ -3997,7 +4099,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 "0x1.2p3dd 0x2.3p4DD 0x3.4p5df 0x4.5p6DF 0x5.6p7dl 0x6.7p8DL"
             )
             .unwrap(),
@@ -4037,7 +4139,7 @@ mod tests {
 
         // err: invalid suffix for floating-point number
         assert!(matches!(
-            tokenize_from_str_without_range_strip("0x1.23ll"),
+            lex_from_str_with_range_strip("0x1.23ll"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -4050,111 +4152,111 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_char() {
+    fn test_lex_char() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("'a'").unwrap(),
+            lex_from_str_with_range_strip("'a'").unwrap(),
             vec![Token::new_char('a')]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("'a' 'z'").unwrap(),
+            lex_from_str_with_range_strip("'a' 'z'").unwrap(),
             vec![Token::new_char('a'), Token::new_char('z')]
         );
 
         // CJK
         assert_eq!(
-            tokenize_from_str_without_range_strip("'文'").unwrap(),
+            lex_from_str_with_range_strip("'文'").unwrap(),
             vec![Token::new_char('文')]
         );
 
         // emoji
         assert_eq!(
-            tokenize_from_str_without_range_strip("'😊'").unwrap(),
+            lex_from_str_with_range_strip("'😊'").unwrap(),
             vec![Token::new_char('😊')]
         );
 
         // escape char `\\`
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\\\'").unwrap(),
+            lex_from_str_with_range_strip("'\\\\'").unwrap(),
             vec![Token::new_char('\\')]
         );
 
         // escape char `\'`
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\\''").unwrap(),
+            lex_from_str_with_range_strip("'\\\''").unwrap(),
             vec![Token::new_char('\'')]
         );
 
         // escape char `"`
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\\"'").unwrap(),
+            lex_from_str_with_range_strip("'\\\"'").unwrap(),
             vec![Token::new_char('"')]
         );
 
         // escape char `\t`
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\t'").unwrap(),
+            lex_from_str_with_range_strip("'\\t'").unwrap(),
             vec![Token::new_char('\t')]
         );
 
         // escape char `\r`
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\r'").unwrap(),
+            lex_from_str_with_range_strip("'\\r'").unwrap(),
             vec![Token::new_char('\r')]
         );
 
         // escape char `\n`
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\n'").unwrap(),
+            lex_from_str_with_range_strip("'\\n'").unwrap(),
             vec![Token::new_char('\n')]
         );
 
         // escape char `\0`
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\0'").unwrap(),
+            lex_from_str_with_range_strip("'\\0'").unwrap(),
             vec![Token::new_char('\0')]
         );
 
         // escape char, octal
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\70'").unwrap(),
+            lex_from_str_with_range_strip("'\\70'").unwrap(),
             vec![Token::new_char('8')]
         );
 
         // escape char, octal
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\101'").unwrap(),
+            lex_from_str_with_range_strip("'\\101'").unwrap(),
             vec![Token::new_char('A')]
         );
 
         // escape char, hex
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\x38'").unwrap(),
+            lex_from_str_with_range_strip("'\\x38'").unwrap(),
             vec![Token::new_char('8')]
         );
 
         // escape char, hex
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\x41'").unwrap(),
+            lex_from_str_with_range_strip("'\\x41'").unwrap(),
             vec![Token::new_char('A')]
         );
 
         // escape char, unicode
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\u002d'").unwrap(),
+            lex_from_str_with_range_strip("'\\u002d'").unwrap(),
             vec![Token::new_char('-')]
         );
 
         // escape char, unicode
         assert_eq!(
-            tokenize_from_str_without_range_strip("'\\U00006587'").unwrap(),
+            lex_from_str_with_range_strip("'\\U00006587'").unwrap(),
             vec![Token::new_char('文')]
         );
 
         // location
 
         assert_eq!(
-            tokenize_from_str("'a' '文'").unwrap(),
+            lex_from_str("'a' '文'").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::new_char('a'),
@@ -4168,7 +4270,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str("'\\t'").unwrap(),
+            lex_from_str("'\\t'").unwrap(),
             vec![TokenWithRange::new(
                 Token::new_char('\t'),
                 Range::from_detail_and_length(0, 0, 0, 4)
@@ -4176,7 +4278,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str("'\\u6587'").unwrap(),
+            lex_from_str("'\\u6587'").unwrap(),
             vec![TokenWithRange::new(
                 Token::new_char('文'),
                 Range::from_detail_and_length(0, 0, 0, 8)
@@ -4185,7 +4287,7 @@ mod tests {
 
         // err: empty char
         assert!(matches!(
-            tokenize_from_str_without_range_strip("''"),
+            lex_from_str_with_range_strip("''"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4205,19 +4307,19 @@ mod tests {
 
         // err: incomplete char, missing the content, encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'"),
+            lex_from_str_with_range_strip("'"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete char, missing the closing single quote, encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'a"),
+            lex_from_str_with_range_strip("'a"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: invalid char, expect the right quote, encounter another char
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'ab"),
+            lex_from_str_with_range_strip("'ab"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -4230,7 +4332,7 @@ mod tests {
 
         // err: invalid char, expect the right quote, encounter char 'b'
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'ab'"),
+            lex_from_str_with_range_strip("'ab'"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -4243,7 +4345,7 @@ mod tests {
 
         // err: unsupported escape char `'\?'`
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#"'\?'"#),
+            lex_from_str_with_range_strip(r#"'\?'"#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4263,7 +4365,7 @@ mod tests {
 
         // err: incorrect hex escape `'\x3'`
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#"'\x3'"#),
+            lex_from_str_with_range_strip(r#"'\x3'"#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4285,7 +4387,7 @@ mod tests {
         // '\\u'
         // 01 23    // index
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'\\u'"),
+            lex_from_str_with_range_strip("'\\u'"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4305,7 +4407,7 @@ mod tests {
 
         // err: invalid unicode escape string, the number of digits should be 4 or 8.
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'\\u123"),
+            lex_from_str_with_range_strip("'\\u123"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4327,7 +4429,7 @@ mod tests {
         // '\\U1000111'
         // 01 234567890    // index
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'\\U1000111'"),
+            lex_from_str_with_range_strip("'\\U1000111'"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4349,7 +4451,7 @@ mod tests {
         // '\\U00123456'
         // 01 2345678901    // index
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'\\U00123456'"),
+            lex_from_str_with_range_strip("'\\U00123456'"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4369,7 +4471,7 @@ mod tests {
 
         // err: invalid char in the unicode escape sequence
         assert!(matches!(
-            tokenize_from_str_without_range_strip("'\\u12mn''"),
+            lex_from_str_with_range_strip("'\\u12mn''"),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4389,9 +4491,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_char_with_types() {
+    fn test_lex_char_with_types() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("'a' L'b' u'c' U'文' u8'😊'",).unwrap(),
+            lex_from_str_with_range_strip("'a' L'b' u'c' U'文' u8'😊'",).unwrap(),
             vec![
                 Token::Char('a', CharType::Int),
                 Token::Char('b', CharType::Wide),
@@ -4403,19 +4505,19 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_string() {
+    fn test_lex_string() {
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#""abc""#).unwrap(),
+            lex_from_str_with_range_strip(r#""abc""#).unwrap(),
             vec![Token::new_string("abc")]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#""abc" "xyz""#).unwrap(),
+            lex_from_str_with_range_strip(r#""abc" "xyz""#).unwrap(),
             vec![Token::new_string("abc"), Token::new_string("xyz")]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("\"abc\"\n\n\"xyz\"").unwrap(),
+            lex_from_str_with_range_strip("\"abc\"\n\n\"xyz\"").unwrap(),
             vec![
                 Token::new_string("abc"),
                 Token::Newline,
@@ -4426,7 +4528,7 @@ mod tests {
 
         // unicode
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"
                 "abc文字😊"
                 "#
@@ -4437,13 +4539,13 @@ mod tests {
 
         // empty string
         assert_eq!(
-            tokenize_from_str_without_range_strip("\"\"").unwrap(),
+            lex_from_str_with_range_strip("\"\"").unwrap(),
             vec![Token::new_string("")]
         );
 
         // escape chars
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"
                 "\\\'\"\t\r\n\0\x2d\u6587"
                 "#
@@ -4460,7 +4562,7 @@ mod tests {
         // ```
 
         assert_eq!(
-            tokenize_from_str(r#""abc" "文字😊""#).unwrap(),
+            lex_from_str(r#""abc" "文字😊""#).unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::new_string("abc"),
@@ -4475,31 +4577,31 @@ mod tests {
 
         // err: incomplete string, missing the content, encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip("\""),
+            lex_from_str_with_range_strip("\""),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closing double quote, encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip("\"abc"),
+            lex_from_str_with_range_strip("\"abc"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closing double quote, ends with '\n' and encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip("\"abc\n"),
+            lex_from_str_with_range_strip("\"abc\n"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closing double quote, ends with whitespaces and encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip("\"abc\n   "),
+            lex_from_str_with_range_strip("\"abc\n   "),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: unsupported escape char `'\?'`.
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\?xyz""#),
+            lex_from_str_with_range_strip(r#""abc\?xyz""#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4519,7 +4621,7 @@ mod tests {
 
         // err: incorrect hex escape `'\x3'`
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\x3xyz""#),
+            lex_from_str_with_range_strip(r#""abc\x3xyz""#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4544,7 +4646,7 @@ mod tests {
         // 01234 5  // index
         // ```
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\u""#),
+            lex_from_str_with_range_strip(r#""abc\u""#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4564,7 +4666,7 @@ mod tests {
 
         // err: invalid unicode escape string, the number of digits should be 4 or 8.
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\u123""#),
+            lex_from_str_with_range_strip(r#""abc\u123""#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4589,7 +4691,7 @@ mod tests {
         // 01234 567890234567   // index
         // ```
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\U1000111xyz""#),
+            lex_from_str_with_range_strip(r#""abc\U1000111xyz""#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4614,7 +4716,7 @@ mod tests {
         // 01234 5678901234567
         // ```
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\U00123456xyz""#),
+            lex_from_str_with_range_strip(r#""abc\U00123456xyz""#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4634,7 +4736,7 @@ mod tests {
 
         // err: invalid char in the unicode escape sequence
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\u12mnxyz""#),
+            lex_from_str_with_range_strip(r#""abc\u12mnxyz""#),
             Err(PreprocessError::MessageWithRange(
                 _,
                 Range {
@@ -4654,16 +4756,15 @@ mod tests {
 
         // err: incomplete string, missing the closing double quote, ends with unicode escape sequence and encounter EOF
         assert!(matches!(
-            tokenize_from_str_without_range_strip(r#""abc\u1234"#),
+            lex_from_str_with_range_strip(r#""abc\u1234"#),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
-    fn test_tokenize_string_with_types() {
+    fn test_lex_string_with_types() {
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#""abc" L"def" u"xyz" U"文字" u8"😊""#,)
-                .unwrap(),
+            lex_from_str_with_range_strip(r#""abc" L"def" u"xyz" U"文字" u8"😊""#,).unwrap(),
             vec![
                 Token::String("abc".to_owned(), StringType::Char),
                 Token::String("def".to_owned(), StringType::Wide),
@@ -4675,31 +4776,31 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_identifier() {
+    fn test_lex_identifier() {
         assert_eq!(
-            tokenize_from_str_without_range_strip("name").unwrap(),
+            lex_from_str_with_range_strip("name").unwrap(),
             vec![Token::new_identifier("name")]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("_abc").unwrap(),
+            lex_from_str_with_range_strip("_abc").unwrap(),
             vec![Token::new_identifier("_abc")]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip("__abc").unwrap(),
+            lex_from_str_with_range_strip("__abc").unwrap(),
             vec![Token::new_identifier("__abc")]
         );
 
         // contains double colons "::"
         assert_eq!(
-            tokenize_from_str_without_range_strip("foo::bar").unwrap(),
+            lex_from_str_with_range_strip("foo::bar").unwrap(),
             vec![Token::new_identifier("foo::bar")]
         );
 
         // contains unicode
         assert_eq!(
-            tokenize_from_str_without_range_strip("αβγ 文字 🍞🥛").unwrap(),
+            lex_from_str_with_range_strip("αβγ 文字 🍞🥛").unwrap(),
             vec![
                 Token::new_identifier("αβγ"),
                 Token::new_identifier("文字"),
@@ -4710,7 +4811,7 @@ mod tests {
         // test token's location
 
         assert_eq!(
-            tokenize_from_str("hello ANCC").unwrap(),
+            lex_from_str("hello ANCC").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::new_identifier("hello"),
@@ -4725,7 +4826,7 @@ mod tests {
 
         // err: invalid identifier
         assert!(matches!(
-            tokenize_from_str_without_range_strip("1abc"),
+            lex_from_str_with_range_strip("1abc"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -4738,9 +4839,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_filepath() {
+    fn test_lex_filepath() {
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#"<foo.h>"#).unwrap(),
+            lex_from_str_with_range_strip(r#"<foo.h>"#).unwrap(),
             vec![
                 Token::Punctuator(Punctuator::LessThan),
                 Token::new_identifier("foo"),
@@ -4751,7 +4852,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#"include <foo.h>"#).unwrap(),
+            lex_from_str_with_range_strip(r#"include <foo.h>"#).unwrap(),
             vec![
                 Token::new_identifier("include"),
                 Token::FilePath("foo.h".to_owned(),),
@@ -4759,7 +4860,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#"embed <foo.h>"#).unwrap(),
+            lex_from_str_with_range_strip(r#"embed <foo.h>"#).unwrap(),
             vec![
                 Token::new_identifier("embed"),
                 Token::FilePath("foo.h".to_owned(),),
@@ -4767,12 +4868,12 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#""bar.h""#).unwrap(),
+            lex_from_str_with_range_strip(r#""bar.h""#).unwrap(),
             vec![Token::new_string("bar.h"),]
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#"include "bar.h""#).unwrap(),
+            lex_from_str_with_range_strip(r#"include "bar.h""#).unwrap(),
             vec![
                 Token::new_identifier("include"),
                 Token::FilePath("bar.h".to_owned(),),
@@ -4780,7 +4881,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#"embed "bar.h""#).unwrap(),
+            lex_from_str_with_range_strip(r#"embed "bar.h""#).unwrap(),
             vec![
                 Token::new_identifier("embed"),
                 Token::FilePath("bar.h".to_owned(),),
@@ -4789,7 +4890,7 @@ mod tests {
 
         // test token's location
         assert_eq!(
-            tokenize_from_str("#include <path/to/header.h>").unwrap(),
+            lex_from_str("#include <path/to/header.h>").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::Pound),
@@ -4806,9 +4907,35 @@ mod tests {
             ]
         );
 
-        // err: invalid filepath, which contains newline character
+        // err: invalid character in filepath
         assert!(matches!(
-            tokenize_from_str_without_range_strip("#include <foo\nbar>"),
+            lex_from_str_with_range_strip("#include <foo\"bar>"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 13,
+                    line: 0,
+                    column: 13,
+                }
+            ))
+        ));
+
+        // err: invalid character in filepath
+        assert!(matches!(
+            lex_from_str_with_range_strip("#include <foo\\bar>"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 13,
+                    line: 0,
+                    column: 13,
+                }
+            ))
+        ));
+
+        // err: incomplete filepath, expect the closing '>'
+        assert!(matches!(
+            lex_from_str_with_range_strip("#include <foo\nbar>"),
             Err(PreprocessError::MessageWithPosition(
                 _,
                 Position {
@@ -4821,15 +4948,15 @@ mod tests {
 
         // err: incomplete filepath, missing the closing '>'
         assert!(matches!(
-            tokenize_from_str_without_range_strip("#include <foo.h"),
+            lex_from_str_with_range_strip("#include <foo.h"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
-    fn test_tokenize_function_like_macro_identifier() {
+    fn test_lex_function_like_macro_identifier() {
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#"#define foo (a)"#).unwrap(),
+            lex_from_str_with_range_strip(r#"#define foo (a)"#).unwrap(),
             vec![
                 Token::Punctuator(Punctuator::Pound),
                 Token::new_identifier("define"),
@@ -4841,7 +4968,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(r#"#define foo(a)"#).unwrap(),
+            lex_from_str_with_range_strip(r#"#define foo(a)"#).unwrap(),
             vec![
                 Token::Punctuator(Punctuator::Pound),
                 Token::new_identifier("define"),
@@ -4854,7 +4981,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_location() {
+    fn test_lex_location() {
         // ```diagram
         // "(\t\r\n\n\n)"
         //  0  2   4 5 6    // index
@@ -4864,7 +4991,7 @@ mod tests {
         // ```
 
         assert_eq!(
-            tokenize_from_str("(\t\r\n\n\n)").unwrap(),
+            lex_from_str("(\t\r\n\n\n)").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::ParenthesisOpen),
@@ -4889,7 +5016,7 @@ mod tests {
         // ```
 
         assert_eq!(
-            tokenize_from_str("[\n  pub\n    data\n]").unwrap(),
+            lex_from_str("[\n  pub\n    data\n]").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::BracketOpen),
@@ -4915,9 +5042,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_line_comment() {
+    fn test_lex_line_comment() {
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"
                 7 //11
                 13 17// 19 23
@@ -4937,7 +5064,7 @@ mod tests {
         // location
 
         assert_eq!(
-            tokenize_from_str("abc // def\n// uvw\nxyz").unwrap(),
+            lex_from_str("abc // def\n// uvw\nxyz").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::new_identifier("abc"),
@@ -4952,9 +5079,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_advance_block_comment() {
+    fn test_lex_advance_block_comment() {
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"
                 7 /* 11 13 */ 17
                 "#
@@ -4969,7 +5096,7 @@ mod tests {
 
         // line comment chars "//" within the block comment
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"
                 7 /* 11 // 13 17 */ 19
                 "#
@@ -4984,7 +5111,7 @@ mod tests {
 
         // block comment within the line comment
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"
                 7 // foo /*
                 11
@@ -5003,7 +5130,7 @@ mod tests {
         // location
 
         assert_eq!(
-            tokenize_from_str("foo /* hello */ bar").unwrap(),
+            lex_from_str("foo /* hello */ bar").unwrap(),
             vec![
                 TokenWithRange::new(
                     Token::new_identifier("foo"),
@@ -5018,33 +5145,33 @@ mod tests {
 
         // err: incomplete, missing `*/`
         assert!(matches!(
-            tokenize_from_str_without_range_strip("7 /* 11"),
+            lex_from_str_with_range_strip("7 /* 11"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete, missing `*/`, ends with newline
         assert!(matches!(
-            tokenize_from_str_without_range_strip("7 /* 11\n"),
+            lex_from_str_with_range_strip("7 /* 11\n"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete, missing `*/`
         assert!(matches!(
-            tokenize_from_str_without_range_strip("a /* b */ c /* d"),
+            lex_from_str_with_range_strip("a /* b */ c /* d"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete, missing `*/`, ends with newline
         assert!(matches!(
-            tokenize_from_str_without_range_strip("a /* b */ c /* d\n"),
+            lex_from_str_with_range_strip("a /* b */ c /* d\n"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
-    fn test_tokenize_advance_shebang() {
+    fn test_lex_advance_shebang() {
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"#!/usr/bin/env ancc
                 11
                 "#
@@ -5054,7 +5181,7 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize_from_str_without_range_strip(
+            lex_from_str_with_range_strip(
                 r#"
                 // this is an ANCC script file
                 /* set the executable bit for this file with `chmod` command:
