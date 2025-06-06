@@ -4,6 +4,8 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
+use std::fmt::Display;
+
 use crate::range::Range;
 
 /// Represents a token type for the C preprocessor.
@@ -157,20 +159,20 @@ pub enum Punctuator {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CharType {
-    Int, // Normal character, e.g., 'a', '1', '文', note that the data type is `int` instead of `char`.
-    Wide, // Wide character, e.g., L'a', L'文', data type is `wchar_t`
-    UTF16, // UTF-16 character, e.g., u'a', u'文', data type is `char16_t`
-    UTF32, // UTF-32 character, e.g., U'a', U'文', data type is `char32_t`
-    UTF8, // UTF-8 character, e.g., u8'a', u8'文', data type is `char8_t`
+    Default, // Default character, e.g., 'a', '1', '文', note that the data type is `int` instead of `char`.
+    Wide,    // Wide character, e.g., L'a', L'文', data type is `wchar_t`
+    UTF16,   // UTF-16 character, e.g., u'a', u'文', data type is `char16_t`
+    UTF32,   // UTF-32 character, e.g., U'a', U'文', data type is `char32_t`
+    UTF8,    // UTF-8 character, e.g., u8'a', u8'文', data type is `char8_t`
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum StringType {
-    Char,  // Normal string, e.g., "hello", "文", data type is `char[]`
-    Wide,  // Wide string, e.g., L"hello", L"文", data type is `wchar_t[]`
-    UTF16, // UTF-16 string, e.g., u"hello", u"文", data type is `char16_t[]`
-    UTF32, // UTF-32 string, e.g., U"hello", U"文", data type is `char32_t[]`
-    UTF8,  // UTF-8 string, e.g., u8"hello", u8"文", data type is `char8_t[]`
+    Default, // Default string, e.g., "hello", "文", data type is `char[]`
+    Wide,    // Wide string, e.g., L"hello", L"文", data type is `wchar_t[]`
+    UTF16,   // UTF-16 string, e.g., u"hello", u"文", data type is `char16_t[]`
+    UTF32,   // UTF-32 string, e.g., U"hello", U"文", data type is `char32_t[]`
+    UTF8,    // UTF-8 string, e.g., u8"hello", u8"文", data type is `char8_t[]`
 }
 
 #[derive(Debug, PartialEq)]
@@ -192,6 +194,23 @@ pub enum IntegerNumberType {
     Long,    // suffix "l", "L", e.g., 123l, 123L
     LongLong, // suffix "ll", "LL", e.g., 123ll, 123LL
     BitInt,  // suffix "wb", "WB", e.g., 123wb, 123WB
+}
+
+#[derive(Debug, PartialEq)]
+pub struct FloatingPointNumber {
+    pub value: String,
+
+    /// true for `_Decimal{32|64|128}`.
+    /// possible suffix are: `dd`, `DD`, `df`, `DF`, `dl`, `DL`
+    pub decimal: bool,
+    pub number_type: FloatingPointNumberType,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum FloatingPointNumberType {
+    Default,    // no suffix, e.g., 1.23, an unsuffixed floating constant has type `double`.
+    Float,      // suffix "f", "F", e.g., 1.23f, 1.23F
+    LongDouble, // suffix "l", "L", e.g., 1.23l, 1.23L
 }
 
 impl IntegerNumber {
@@ -222,23 +241,6 @@ impl IntegerNumber {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub struct FloatingPointNumber {
-    pub value: String,
-
-    /// true for `_Decimal{32|64|128}`.
-    /// possible suffix are: `dd`, `DD`, `df`, `DF`, `dl`, `DL`
-    pub decimal: bool,
-    pub number_type: FloatingPointNumberType,
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum FloatingPointNumberType {
-    Double,     // no suffix, e.g., 1.23, an unsuffixed floating constant has type `double`.
-    Float,      // suffix "f", "F", e.g., 1.23f, 1.23F
-    LongDouble, // suffix "l", "L", e.g., 1.23l, 1.23L
-}
-
 impl FloatingPointNumber {
     pub fn new(value: String, decimal: bool, number_type: FloatingPointNumberType) -> Self {
         Self {
@@ -258,5 +260,197 @@ pub struct TokenWithRange {
 impl TokenWithRange {
     pub fn new(token: Token, range: Range) -> Self {
         Self { token, range }
+    }
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Token::Identifier(s) => write!(f, "{}", s),
+            Token::Number(n) => write!(f, "{}", n),
+            Token::String(s, t) => {
+                let quote = match t {
+                    StringType::Default => "\"",
+                    StringType::Wide => "L\"",
+                    StringType::UTF16 => "u\"",
+                    StringType::UTF32 => "U\"",
+                    StringType::UTF8 => "u8\"",
+                };
+
+                // Escape special characters in the string
+                // ignore all other octal and hexadecimal escape sequences
+                let s = s
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\'', "\\'")
+                    .replace(27u8 as char, "\\e")
+                    .replace('\r', "\\r")
+                    .replace(12u8 as char, "\\f")
+                    .replace(11u8 as char, "\\v")
+                    .replace('\n', "\\n")
+                    .replace('\t', "\\t")
+                    .replace('\0', "\\0");
+
+                write!(f, "{}{}\"", quote, s)
+            }
+            Token::Char(c, t) => {
+                let prefix = match t {
+                    CharType::Default => "'",
+                    CharType::Wide => "L'",
+                    CharType::UTF16 => "u'",
+                    CharType::UTF32 => "U'",
+                    CharType::UTF8 => "u8'",
+                };
+
+                // Escape special character
+                // ignore all other octal and hexadecimal escape sequences
+                let c = match c {
+                    '\\' => "\\\\",
+                    '\"' => "\\\"",
+                    '\'' => "\\'",
+                    '\u{1b}' => "\\e",
+                    '\r' => "\\r",
+                    '\x0c' => "\\f",
+                    '\x0b' => "\\v",
+                    '\n' => "\\n",
+                    '\t' => "\\t",
+                    '\0' => "\\0",
+                    _ => {
+                        return write!(f, "{}{}'", prefix, c);
+                    }
+                };
+
+                write!(f, "{}{}'", prefix, c)
+            }
+            Token::Punctuator(p) => write!(f, "{}", p),
+            Token::Newline => write!(f, "\n"),
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
+}
+
+impl Display for Number {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Number::Integer(n) => write!(f, "{}", n),
+            Number::FloatingPoint(n) => write!(f, "{}", n),
+        }
+    }
+}
+
+impl Display for IntegerNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let suffix = if self.unsigned {
+            match self.number_type {
+                IntegerNumberType::Default => "u",
+                IntegerNumberType::Long => "ul",
+                IntegerNumberType::LongLong => "ull",
+                IntegerNumberType::BitInt => "uwb",
+            }
+        } else {
+            match self.number_type {
+                IntegerNumberType::Default => "",
+                IntegerNumberType::Long => "l",
+                IntegerNumberType::LongLong => "ll",
+                IntegerNumberType::BitInt => "wb",
+            }
+        };
+        write!(f, "{}{}", self.value, suffix)
+    }
+}
+
+impl Display for FloatingPointNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let suffix = if self.decimal {
+            match self.number_type {
+                FloatingPointNumberType::Default => "dd",
+                FloatingPointNumberType::Float => "df",
+                FloatingPointNumberType::LongDouble => "dl",
+            }
+        } else {
+            match self.number_type {
+                FloatingPointNumberType::Default => "",
+                FloatingPointNumberType::Float => "f",
+                FloatingPointNumberType::LongDouble => "l",
+            }
+        };
+        write!(f, "{}{}", self.value, suffix)
+    }
+}
+
+impl Display for Punctuator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let symbol = match self {
+            // Arithmetic Operators
+            Punctuator::Add => "+",
+            Punctuator::Subtract => "-",
+            Punctuator::Multiply => "*",
+            Punctuator::Divide => "/",
+            Punctuator::Modulo => "%",
+            Punctuator::Increase => "++",
+            Punctuator::Decrease => "--",
+
+            // Relational Operators
+            Punctuator::Equal => "==",
+            Punctuator::NotEqual => "!=",
+            Punctuator::GreaterThan => ">",
+            Punctuator::LessThan => "<",
+            Punctuator::GreaterThanOrEqual => ">=",
+            Punctuator::LessThanOrEqual => "<=",
+
+            // Logical Operators
+            Punctuator::And => "&&",
+            Punctuator::Or => "||",
+            Punctuator::Not => "!",
+
+            // Bitwise Operators
+            Punctuator::BitwiseAnd => "&",
+            Punctuator::BitwiseOr => "|",
+            Punctuator::BitwiseXor => "^",
+            Punctuator::BitwiseNot => "~",
+            Punctuator::ShiftLeft => "<<",
+            Punctuator::ShiftRight => ">>",
+
+            // Assignment Operators
+            Punctuator::Assign => "=",
+            Punctuator::AddAssign => "+=",
+            Punctuator::SubtractAssign => "-=",
+            Punctuator::MultiplyAssign => "*=",
+            Punctuator::DivideAssign => "/=",
+            Punctuator::ModulusAssign => "%=",
+            Punctuator::BitwiseAndAssign => "&=",
+            Punctuator::BitwiseOrAssign => "|=",
+            Punctuator::BitwiseXorAssign => "^=",
+            Punctuator::ShiftLeftAssign => "<<=",
+            Punctuator::ShiftRightAssign => ">>=",
+
+            // Conditional Operator
+            Punctuator::QuestionMark => "?",
+
+            // Miscellaneous Operators
+            Punctuator::Comma => ",",
+            Punctuator::Dot => ".",
+            Punctuator::Arrow => "->",
+
+            // Brackets and Delimiters
+            Punctuator::BraceOpen => "{",
+            Punctuator::BraceClose => "}",
+            Punctuator::BracketOpen => "[",
+            Punctuator::BracketClose => "]",
+            Punctuator::ParenthesisOpen => "(",
+            Punctuator::ParenthesisClose => ")",
+            Punctuator::Semicolon => ";",
+            Punctuator::Colon => ":",
+            Punctuator::Ellipsis => "...",
+            Punctuator::AttributeOpen => "[[",
+            Punctuator::AttributeClose => "]]",
+
+            // Punctuators used in C preprocessor directives
+            Punctuator::Pound => "#",
+            Punctuator::PoundPound => "##",
+        };
+        write!(f, "{}", symbol)
     }
 }

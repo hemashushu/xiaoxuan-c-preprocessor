@@ -481,14 +481,14 @@ impl Parser<'_> {
                 // Handle object-like macro definition
                 let name = id.clone();
                 let definition = parse_definition(self);
-                Define::ObjectLikeMacro { name, definition }
+                Define::ObjectLike { name, definition }
             }
             Some(Token::FunctionLikeMacroIdentifier(id)) => {
                 // Handle function-like macro definition
                 let name = id.clone();
                 let parameters = parse_parameters(self)?;
                 let definition = parse_definition(self);
-                Define::FunctionLikeMacro {
+                Define::FunctionLike {
                     name,
                     parameters,
                     definition,

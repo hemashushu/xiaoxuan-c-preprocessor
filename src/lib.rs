@@ -10,6 +10,7 @@ use position::Position;
 use range::Range;
 
 mod ast;
+mod ast_printer;
 mod charwithposition;
 mod lexer;
 mod parser;

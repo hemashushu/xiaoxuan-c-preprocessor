@@ -342,7 +342,7 @@ impl Lexer<'_> {
                 }
                 '\'' => {
                     // char
-                    token_with_ranges.push(self.lex_char(CharType::Int)?);
+                    token_with_ranges.push(self.lex_char(CharType::Default)?);
                 }
                 '"' => {
                     if is_last_token_directive_macro_include(&token_with_ranges)
@@ -353,7 +353,7 @@ impl Lexer<'_> {
                         token_with_ranges.push(self.lex_filepath()?);
                     } else {
                         // normal string
-                        token_with_ranges.push(self.lex_string(StringType::Char)?);
+                        token_with_ranges.push(self.lex_string(StringType::Default)?);
                     }
                 }
                 '+' => {
@@ -1125,7 +1125,7 @@ impl Lexer<'_> {
         let mut integer_number_type = IntegerNumberType::Default;
 
         let mut is_decimal = false; // suffix 'dd', 'df', and 'dl'.
-        let mut floating_point_number_type = FloatingPointNumberType::Double; // default floating-point number type is `double`
+        let mut floating_point_number_type = FloatingPointNumberType::Default; // default floating-point number type is `double`
 
         self.push_peek_position_into_store();
 
@@ -1280,7 +1280,7 @@ impl Lexer<'_> {
         let mut integer_number_type = IntegerNumberType::Default;
 
         let mut is_decimal = false; // suffix 'dd', 'df', and 'dl'.
-        let mut floating_point_number_type = FloatingPointNumberType::Double; // default floating-point number type is `double`
+        let mut floating_point_number_type = FloatingPointNumberType::Default; // default floating-point number type is `double`
 
         // Save the start position of the hexadecimal number (i.e. the first '0')
         self.push_peek_position_into_store();
@@ -1685,7 +1685,7 @@ impl Lexer<'_> {
         let mut is_decimal = false;
 
         // to indicate the floating-point number type
-        let mut floating_point_number_type = FloatingPointNumberType::Double; // default floating-point number type is `double`
+        let mut floating_point_number_type = FloatingPointNumberType::Default; // default floating-point number type is `double`
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
@@ -1693,13 +1693,13 @@ impl Lexer<'_> {
                     self.next_char(); // consume char 'd'
                     self.next_char(); // consume char 'd'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::Double;
+                    floating_point_number_type = FloatingPointNumberType::Default;
                 }
                 'D' if self.peek_char_and_equals(1, 'D') => {
                     self.next_char(); // consume char 'D'
                     self.next_char(); // consume char 'D'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::Double;
+                    floating_point_number_type = FloatingPointNumberType::Default;
                 }
                 'd' if self.peek_char_and_equals(1, 'f') => {
                     self.next_char(); // consume char 'd'
@@ -2557,11 +2557,11 @@ mod tests {
         }
 
         pub fn new_char(c: char) -> Self {
-            Token::Char(c, CharType::Int)
+            Token::Char(c, CharType::Default)
         }
 
         pub fn new_string(s: &str) -> Self {
-            Token::String(s.to_owned(), StringType::Char)
+            Token::String(s.to_owned(), StringType::Default)
         }
     }
 
@@ -3121,7 +3121,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip("3.14").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
-                FloatingPointNumber::new("3.14".to_owned(), false, FloatingPointNumberType::Double)
+                FloatingPointNumber::new("3.14".to_owned(), false, FloatingPointNumberType::Default)
             ))]
         );
 
@@ -3131,7 +3131,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "1.414".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3143,7 +3143,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "2.998e8".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3155,7 +3155,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "2.998e+8".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3167,7 +3167,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "6.626e-34".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3177,7 +3177,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip(".5").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
-                FloatingPointNumber::new("0.5".to_owned(), false, FloatingPointNumberType::Double)
+                FloatingPointNumber::new("0.5".to_owned(), false, FloatingPointNumberType::Default)
             ))]
         );
 
@@ -3186,7 +3186,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip("5.").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
-                FloatingPointNumber::new("5.0".to_owned(), false, FloatingPointNumberType::Double)
+                FloatingPointNumber::new("5.0".to_owned(), false, FloatingPointNumberType::Default)
             ))]
         );
 
@@ -3199,7 +3199,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "3.14".to_owned(),
                         false,
-                        FloatingPointNumberType::Double
+                        FloatingPointNumberType::Default
                     ))),
                     Range::from_detail_and_length(0, 0, 0, 4)
                 ),
@@ -3207,7 +3207,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "6.022e23".to_owned(),
                         false,
-                        FloatingPointNumberType::Double
+                        FloatingPointNumberType::Default
                     ))),
                     Range::from_detail_and_length(5, 0, 5, 8)
                 ),
@@ -3309,12 +3309,12 @@ mod tests {
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "1.0".to_owned(),
                     true,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "2.0".to_owned(),
                     true,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "3.0".to_owned(),
@@ -3940,7 +3940,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.4p3".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3953,7 +3953,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.921fb6p1".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3966,7 +3966,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.5bf0a8b145769p+1".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3980,7 +3980,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.62e42fefa39efp-1".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -3993,7 +3993,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x0.1234p5".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -4006,7 +4006,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x123.0p4".to_owned(),
                     false,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 )
             ))]
         );
@@ -4020,7 +4020,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "0x1.2p3".to_owned(),
                         false,
-                        FloatingPointNumberType::Double
+                        FloatingPointNumberType::Default
                     ))),
                     Range::from_detail_and_length(0, 0, 0, 7)
                 ),
@@ -4028,7 +4028,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "0xa.bp+12".to_owned(),
                         false,
-                        FloatingPointNumberType::Double
+                        FloatingPointNumberType::Default
                     ))),
                     Range::from_detail_and_length(8, 0, 8, 9)
                 ),
@@ -4152,12 +4152,12 @@ mod tests {
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x1.2p3".to_owned(),
                     true,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x2.3p4".to_owned(),
                     true,
-                    FloatingPointNumberType::Double
+                    FloatingPointNumberType::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x3.4p5".to_owned(),
@@ -4540,7 +4540,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip("'a' L'b' u'c' U'文' u8'😊'",).unwrap(),
             vec![
-                Token::Char('a', CharType::Int),
+                Token::Char('a', CharType::Default),
                 Token::Char('b', CharType::Wide),
                 Token::Char('c', CharType::UTF16),
                 Token::Char('文', CharType::UTF32),
@@ -4811,7 +4811,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip(r#""abc" L"def" u"xyz" U"文字" u8"😊""#,).unwrap(),
             vec![
-                Token::String("abc".to_owned(), StringType::Char),
+                Token::String("abc".to_owned(), StringType::Default),
                 Token::String("def".to_owned(), StringType::Wide),
                 Token::String("xyz".to_owned(), StringType::UTF16),
                 Token::String("文字".to_owned(), StringType::UTF32),

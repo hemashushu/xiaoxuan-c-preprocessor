@@ -68,11 +68,11 @@ pub struct Pragma {
 // https://en.cppreference.com/w/c/preprocessor/replace.html
 #[derive(Debug, PartialEq)]
 pub enum Define {
-    ObjectLikeMacro {
+    ObjectLike {
         name: String, // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
         definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO`
     },
-    FunctionLikeMacro {
+    FunctionLike {
         name: String,
         parameters: Vec<String>,
         definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO(x, y)`

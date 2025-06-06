@@ -21,3 +21,13 @@ impl Position {
         }
     }
 }
+
+impl Default for Position {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            line: 0,
+            column: 0,
+        }
+    }
+}

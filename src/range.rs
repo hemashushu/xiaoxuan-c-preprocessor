@@ -52,3 +52,12 @@ impl Range {
         }
     }
 }
+
+impl Default for Range {
+    fn default() -> Self {
+        Self {
+            start: Position::default(),
+            end_included: Position::default(),
+        }
+    }
+}
