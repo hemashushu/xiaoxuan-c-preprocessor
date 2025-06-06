@@ -12,7 +12,19 @@ use crate::{
 #[derive(Debug, PartialEq)]
 pub struct Program {
     pub statements: Vec<Statement>,
-    pub pragmas: Vec<Pragma>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Statement {
+    Pragma(Pragma),
+    Define(Define),
+    Undef(String, Range),
+    Include(Include),
+    Embed(Embed),
+    If(If),
+    Error(String),
+    Warning(String),
+    Code(Vec<TokenWithRange>),
 }
 
 // Implementation-defined behavior control
@@ -32,29 +44,15 @@ pub struct Program {
 //
 // where `arg` is either ON, OFF, or DEFAULT.
 //
-// Non-standard pragmas:
+// Non-standard pragmas (but supported by ANCPP):
 //
 // - `#pragma once`
-// - `#pragma pack ...` (ANCCP does not intend to support this pragma)
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/impl.html
 #[derive(Debug, PartialEq)]
 pub struct Pragma {
-    pub names: (String, Range),
-    pub arguments: Vec<TokenWithRange>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Statement {
-    Define(Define),
-    Undef(String, Range),
-    Include(Include),
-    Embed(Embed),
-    Condition(Condition),
-    Error(String),
-    Warning(String),
-    Code(Vec<TokenWithRange>),
+    pub parts: Vec<TokenWithRange>,
 }
 
 // Macro replacement
@@ -73,14 +71,14 @@ pub enum Statement {
 // https://en.cppreference.com/w/c/preprocessor/replace.html
 #[derive(Debug, PartialEq)]
 pub enum Define {
-    Object {
-        name: String,
-        code: Vec<TokenWithRange>, // This is optional
+    ObjectLikeMacro {
+        name: String, // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
+        definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO`
     },
-    Function {
+    FunctionLikeMacro {
         name: String,
         parameters: Vec<String>,
-        code: Vec<TokenWithRange>,
+        definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO(x, y)`
     },
 }
 
@@ -98,16 +96,18 @@ pub enum Define {
 // - `__has_include ( string-literal )`
 // - `__has_include ( < h-pp-tokens > )` (5) (since C23)
 //
-// ANCPP does not intend to support `#include "IDENTIFIER"` or `#include <IDENTIFIER>` syntax.
+// ANCPP supports `#include MACRO_NAME`, but does not support forms where
+// the macro name is enclosed in angle brackets or quotes.
+// For example, `#include <MACRO_NAME>` and `#include "MACRO_NAME"` are not supported.
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/include.html
 #[derive(Debug, PartialEq)]
 pub enum Include {
     Identifier(String, Range),
-    Detail {
+    FilePath {
         file_path: (String, Range),
-        is_system: bool,
+        is_system_header: bool,
     },
 }
 
@@ -126,15 +126,33 @@ pub enum Include {
 // - `__has_embed ( string-literal pp-balanced-token-sequence (optional) )`
 // - `__has_embed ( < h-pp-tokens > pp-balanced-token-sequence (optional) )` (5)
 //
-// ANCPP does not intend to support `#embed "IDENTIFIER"` or `#embed <IDENTIFIER>` syntax.
+// ANCPP supports `#embed MACRO_NAME`, but does not support forms where
+// the macro name is enclosed in angle brackets or quotes.
+// For example, `#embed <MACRO_NAME>` and `#embed "MACRO_NAME"` are not supported.
+//
+// Optional embed parameters can be specified after the required filename argument.
+// There are four standard parameters:
+// - `limit`: Specifies the maximum number of bytes to include from the resource.
+// - `prefix`: A balanced token sequence to prepend to the integer literal sequence, if not empty.
+// - `suffix`: A balanced token sequence to append to the integer literal sequence, if not empty.
+// - `if_empty`: A balanced token sequence to use as the expansion if the resource is empty.
+//
+// ANCPP does not support parameter names that are both prefixed and suffixed with two underscores,
+// such as `__prefix__`, `__suffix__`, and `__if_empty__`.
+//
+// ANCPP also does not support other vendor-specific parameters, such as `gnu::offset` and `gnu::base64`.
+//
+// Note: A "balanced token sequence" refers to a sequence of tokens in which
+// parentheses, brackets, and braces are properly balanced.
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/embed.html
 #[derive(Debug, PartialEq)]
 pub enum Embed {
     Identifier(String, Range),
-    Detail {
+    FilePath {
         file_path: (String, Range),
+        is_system_header: bool,
         limit: Option<usize>,
         suffix: Vec<TokenWithRange>,
         prefix: Vec<TokenWithRange>,
@@ -162,61 +180,20 @@ pub enum Embed {
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/conditional.html
 #[derive(Debug, PartialEq)]
+pub struct If {
+    pub branches: Vec<Branch>,
+    pub alternative: Option<Vec<Statement>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Branch {
+    pub condition: Condition,
+    pub consequence: Vec<Statement>,
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Condition {
-    If(Box<Expression>),
-    IfDef(String, Range),  // If the identifier is defined
-    IfNDef(String, Range), // If the identifier is not defined
-    Elif(Box<Expression>),
-    ElifDef(String, Range),  // If the identifier is defined
-    ElifNDef(String, Range), // If the identifier is not defined
-    Else,
-    EndIf,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Expression {
-    Number((Number, Range)),
-    Identifier((String, Range)),
-    Bool(bool),
-    Binary(BinaryOperator, Box<Expression>, Box<Expression>),
-    Unary(UnaryOperator, Box<Expression>),
-    FunctionCall(/* function name */ String, Vec<Expression>),
-    Group(Vec<Expression>),
-}
-
-#[derive(Debug, PartialEq)]
-pub enum BinaryOperator {
-    // Arithmetic operators
-    Add,      // '+'
-    Subtract, // '-'
-    Multiply, // '*'
-    Divide,   // '/'
-    Modulo,   // '%'
-
-    // Relational operators
-    Equal,              // '=='
-    NotEqual,           // '!='
-    GreaterThan,        // '>'
-    LessThan,           // '<'
-    GreaterThanOrEqual, // '>='
-    LessThanOrEqual,    // '<='
-
-    // Logical operators
-    And, // '&&'
-    Or,  // '||'
-
-    // Bitwise operators
-    BitwiseAnd, // '&', also used as the `AddressOf` operator
-    BitwiseOr,  // '|'
-    BitwiseXor, // '^'
-    ShiftLeft,  // '<<'
-    ShiftRight, // '>>' (note: C does not have a logical right shift `>>>`)
-}
-
-#[derive(Debug, PartialEq)]
-pub enum UnaryOperator {
-    Plus,       // '+', does not change the operand's value (included for symmetry with `Minus`)
-    Minus,      // '-', negation
-    LogicalNot, // '!'
-    BitwiseNot, // '~'
+    Expression(Vec<TokenWithRange>),
+    Defined(String, Range),
+    NotDefined(String, Range),
 }

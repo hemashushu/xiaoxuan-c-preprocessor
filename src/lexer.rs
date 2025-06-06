@@ -35,7 +35,9 @@ pub fn lex_from_str(s: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
 }
 
 // Preprocessing steps before tokenization.
-// See: https://gcc.gnu.org/onlinedocs/cpp/Initial-processing.html
+// See:
+// - https://gcc.gnu.org/onlinedocs/cpp/Initial-processing.html
+// - https://en.cppreference.com/w/c/language/translation_phases.html
 //
 // 1. (skipped) The input file is loaded into memory and split into lines.
 // 2. (not supported) Trigraph sequences are replaced with their corresponding single characters if enabled.
@@ -281,11 +283,11 @@ impl<'a> Lexer<'a> {
             Some(CharWithPosition { character, .. }) if character == &expected_char)
     }
 
-    fn peek_char_any_of(&self, offset: usize, expected_chars: &[char]) -> bool {
-        matches!(
-            self.upstream.peek(offset),
-            Some(CharWithPosition { character, .. }) if expected_chars.contains(character))
-    }
+    // fn peek_char_and_equals_any_of(&self, offset: usize, expected_chars: &[char]) -> bool {
+    //     matches!(
+    //         self.upstream.peek(offset),
+    //         Some(CharWithPosition { character, .. }) if expected_chars.contains(character))
+    // }
 
     /// Saves the last position to the stack.
     fn push_last_position_into_store(&mut self) {
@@ -314,8 +316,9 @@ impl Lexer<'_> {
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
-                ' ' | '\t' => {
-                    self.next_char(); // Skip whitespace
+                ' ' | '\t' | '\u{0b}' | '\u{0c}' => {
+                    // Skip whitespace (space, tab, vertical tab, form feed).
+                    self.next_char();
                 }
                 '\r' if self.peek_char_and_equals(1, '\n') => {
                     self.push_peek_position_into_store();
@@ -342,8 +345,9 @@ impl Lexer<'_> {
                     token_with_ranges.push(self.lex_char(CharType::Int)?);
                 }
                 '"' => {
-                    if is_last_token_directive_macro_include(&token_with_ranges) ||
-                    is_function_has_include(&token_with_ranges) {
+                    if is_last_token_directive_macro_include(&token_with_ranges)
+                        || is_function_has_include(&token_with_ranges)
+                    {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
                         token_with_ranges.push(self.lex_filepath()?);
@@ -584,8 +588,9 @@ impl Lexer<'_> {
                     }
                 }
                 '<' => {
-                    if is_last_token_directive_macro_include(&token_with_ranges) ||
-                        is_function_has_include(&token_with_ranges) {
+                    if is_last_token_directive_macro_include(&token_with_ranges)
+                        || is_function_has_include(&token_with_ranges)
+                    {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
                         token_with_ranges.push(self.lex_angle_filepath()?);
@@ -1064,7 +1069,15 @@ impl Lexer<'_> {
                     id_string.push(*current_char);
                     self.next_char(); // consume char
                 }
-                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                '\t'        // tab, 0x09
+                | '\n'      // line feed, 0x0A
+                | '\u{0b}'  // vertical tab, 0x0B
+                | '\u{0c}'  // form feed, 0x0C
+                | '\r'      // carriage return, 0x0D
+                | ' '..='/'
+                | ':'..='@'
+                | '['..='`'
+                | '{'..='~' => {
                     // terminator, all punctuation and whitespace, per ASCII table
                     break;
                 }
@@ -1183,7 +1196,15 @@ impl Lexer<'_> {
 
                     break;
                 }
-                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                '\t'        // tab, 0x09
+                | '\n'      // line feed, 0x0A
+                | '\u{0b}'  // vertical tab, 0x0B
+                | '\u{0c}'  // form feed, 0x0C
+                | '\r'      // carriage return, 0x0D
+                | ' '..='/'
+                | ':'..='@'
+                | '['..='`'
+                | '{'..='~' => {
                     // terminator, all punctuation and whitespace, per ASCII table
                     break;
                 }
@@ -1359,7 +1380,15 @@ impl Lexer<'_> {
 
                     break;
                 }
-                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                '\t'        // tab, 0x09
+                | '\n'      // line feed, 0x0A
+                | '\u{0b}'  // vertical tab, 0x0B
+                | '\u{0c}'  // form feed, 0x0C
+                | '\r'      // carriage return, 0x0D
+                | ' '..='/'
+                | ':'..='@'
+                | '['..='`'
+                | '{'..='~' => {
                     // terminator, all punctuation and whitespace, per ASCII table
                     break;
                 }
@@ -1464,7 +1493,15 @@ impl Lexer<'_> {
                         *self.peek_position(0).unwrap(),
                     ));
                 }
-                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                '\t'        // tab, 0x09
+                | '\n'      // line feed, 0x0A
+                | '\u{0b}'  // vertical tab, 0x0B
+                | '\u{0c}'  // form feed, 0x0C
+                | '\r'      // carriage return, 0x0D
+                | ' '..='/'
+                | ':'..='@'
+                | '['..='`'
+                | '{'..='~' => {
                     // terminator, all punctuation and whitespace, per ASCII table
                     break;
                 }
@@ -1536,7 +1573,15 @@ impl Lexer<'_> {
                         *self.peek_position(0).unwrap(),
                     ));
                 }
-                '\t' | '\n' | '\r' | ' '..='/' | ':'..='@' | '['..='`' | '{'..='~' => {
+                '\t'        // tab, 0x09
+                | '\n'      // line feed, 0x0A
+                | '\u{0b}'  // vertical tab, 0x0B
+                | '\u{0c}'  // form feed, 0x0C
+                | '\r'      // carriage return, 0x0D
+                | ' '..='/'
+                | ':'..='@'
+                | '['..='`'
+                | '{'..='~' => {
                     // terminator, all punctuation and whitespace, per ASCII table
                     break;
                 }
@@ -1747,12 +1792,12 @@ impl Lexer<'_> {
                                 match current_char2 {
                                     'a' => 7u8 as char,  // bell (BEL, ascii 7)
                                     'b' => 8u8 as char,  // backspace (BS, ascii 8)
-                                    'e' => 27u8 as char, // escape character (ESC, ascii 27){
-                                    'f' => 12u8 as char, // form feed (FF, ascii 12)
+                                    't' => '\t',         // horizontal tabulation (HT, ascii 9)
                                     'n' => '\n', // new line character (line feed, LF, ascii 10)
-                                    'r' => '\r', // carriage return (CR, ascii 13)
-                                    't' => '\t', // horizontal tabulation (HT, ascii 9)
                                     'v' => 11u8 as char, // vertical tabulation (VT, ascii 11)
+                                    'f' => 12u8 as char, // form feed (FF, ascii 12)
+                                    'r' => '\r', // carriage return (CR, ascii 13)
+                                    'e' => 27u8 as char, // escape character (ESC, ascii 27)
                                     '\\' => '\\', // backslash
                                     '\'' => '\'', // single quote
                                     '"' => '"',  // double quote
@@ -2040,12 +2085,12 @@ impl Lexer<'_> {
                                     match current_char2 {
                                         'a' => 7u8 as char,  // bell (BEL, ascii 7)
                                         'b' => 8u8 as char,  // backspace (BS, ascii 8)
-                                        'e' => 27u8 as char, // escape character (ESC, ascii 27){
-                                        'f' => 12u8 as char, // form feed (FF, ascii 12)
+                                        't' => '\t',         // horizontal tabulation (HT, ascii 9)
                                         'n' => '\n', // new line character (line feed, LF, ascii 10)
-                                        'r' => '\r', // carriage return (CR, ascii 13)
-                                        't' => '\t', // horizontal tabulation (HT, ascii 9)
                                         'v' => 11u8 as char, // vertical tabulation (VT, ascii 11)
+                                        'f' => 12u8 as char, // form feed (FF, ascii 12)
+                                        'r' => '\r', // carriage return (CR, ascii 13)
+                                        'e' => 27u8 as char, // escape character (ESC, ascii 27)
                                         '\\' => '\\', // backslash
                                         '\'' => '\'', // single quote
                                         '"' => '"',  // double quote
@@ -2345,7 +2390,7 @@ impl Lexer<'_> {
         let final_path_range = Range::new(&self.pop_position_from_store(), &self.last_position);
 
         Ok(TokenWithRange::new(
-            Token::FilePath(final_path),
+            Token::FilePath(final_path, false),
             final_path_range,
         ))
     }
@@ -2416,7 +2461,7 @@ impl Lexer<'_> {
         let final_path_range = Range::new(&self.pop_position_from_store(), &self.last_position);
 
         Ok(TokenWithRange::new(
-            Token::FilePath(final_path),
+            Token::FilePath(final_path, true),
             final_path_range,
         ))
     }
@@ -4855,7 +4900,7 @@ mod tests {
             lex_from_str_with_range_strip(r#"include <foo.h>"#).unwrap(),
             vec![
                 Token::new_identifier("include"),
-                Token::FilePath("foo.h".to_owned(),),
+                Token::FilePath("foo.h".to_owned(), true),
             ]
         );
 
@@ -4863,7 +4908,7 @@ mod tests {
             lex_from_str_with_range_strip(r#"embed <foo.h>"#).unwrap(),
             vec![
                 Token::new_identifier("embed"),
-                Token::FilePath("foo.h".to_owned(),),
+                Token::FilePath("foo.h".to_owned(), true),
             ]
         );
 
@@ -4876,7 +4921,7 @@ mod tests {
             lex_from_str_with_range_strip(r#"include "bar.h""#).unwrap(),
             vec![
                 Token::new_identifier("include"),
-                Token::FilePath("bar.h".to_owned(),),
+                Token::FilePath("bar.h".to_owned(), false),
             ]
         );
 
@@ -4884,7 +4929,7 @@ mod tests {
             lex_from_str_with_range_strip(r#"embed "bar.h""#).unwrap(),
             vec![
                 Token::new_identifier("embed"),
-                Token::FilePath("bar.h".to_owned(),),
+                Token::FilePath("bar.h".to_owned(), false),
             ]
         );
 
@@ -4901,7 +4946,7 @@ mod tests {
                     Range::from_detail_and_length(1, 0, 1, 7)
                 ),
                 TokenWithRange::new(
-                    Token::FilePath("path/to/header.h".to_owned()),
+                    Token::FilePath("path/to/header.h".to_owned(), true),
                     Range::from_detail_and_length(9, 0, 9, 18)
                 )
             ]

@@ -67,7 +67,7 @@ pub enum Token {
     //
     // Although the file path is also a string, it is not a string literal
     // because it does not support escape sequences like `\x40`, `\"`, etc.
-    FilePath(String),
+    FilePath(String, /* is_system_header */ bool),
 
     // The identifier of a function-like macro. e.g.
     //
@@ -84,7 +84,7 @@ pub enum Token {
     FunctionLikeMacroIdentifier(String),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Punctuator {
     // Arithmetic Operators
     Add,      // '+'
@@ -173,12 +173,10 @@ pub enum StringType {
     UTF8,  // UTF-8 string, e.g., u8"hello", u8"文", data type is `char8_t[]`
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum IntegerNumberType {
-    Default, // no suffix, e.g., 123, the type of the integer constant is the first type in which the value can fit.
-    Long,    // suffix "l", "L", e.g., 123l, 123L
-    LongLong, // suffix "ll", "LL", e.g., 123ll, 123LL
-    BitInt,  // suffix "wb", "WB", e.g., 123wb, 123WB
+#[derive(Debug, PartialEq)]
+pub enum Number {
+    Integer(IntegerNumber),
+    FloatingPoint(FloatingPointNumber),
 }
 
 #[derive(Debug, PartialEq)]
@@ -186,6 +184,14 @@ pub struct IntegerNumber {
     pub value: String,
     pub unsigned: bool, // true for unsigned integers, false for signed integers
     pub number_type: IntegerNumberType,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum IntegerNumberType {
+    Default, // no suffix, e.g., 123, the type of the integer constant is the first type in which the value can fit.
+    Long,    // suffix "l", "L", e.g., 123l, 123L
+    LongLong, // suffix "ll", "LL", e.g., 123ll, 123LL
+    BitInt,  // suffix "wb", "WB", e.g., 123wb, 123WB
 }
 
 impl IntegerNumber {
@@ -196,13 +202,24 @@ impl IntegerNumber {
             number_type,
         }
     }
-}
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum FloatingPointNumberType {
-    Double,     // no suffix, e.g., 1.23, an unsuffixed floating constant has type `double`.
-    Float,      // suffix "f", "F", e.g., 1.23f, 1.23F
-    LongDouble, // suffix "l", "L", e.g., 1.23l, 1.23L
+    pub fn as_u64(&self) -> Result<u64, std::num::ParseIntError> {
+        let (src, radix) = if self.value.starts_with("0x") {
+            // Hexadecimal number
+            (&self.value[2..], 16)
+        } else if self.value.starts_with("0b") {
+            // Binary number
+            (&self.value[2..], 2)
+        } else if self.value.starts_with("0") {
+            // Octal number
+            (&self.value[1..], 8)
+        } else {
+            // Decimal number
+            (&self.value[..], 10)
+        };
+
+        u64::from_str_radix(src, radix)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -215,6 +232,13 @@ pub struct FloatingPointNumber {
     pub number_type: FloatingPointNumberType,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum FloatingPointNumberType {
+    Double,     // no suffix, e.g., 1.23, an unsuffixed floating constant has type `double`.
+    Float,      // suffix "f", "F", e.g., 1.23f, 1.23F
+    LongDouble, // suffix "l", "L", e.g., 1.23l, 1.23L
+}
+
 impl FloatingPointNumber {
     pub fn new(value: String, decimal: bool, number_type: FloatingPointNumberType) -> Self {
         Self {
@@ -223,12 +247,6 @@ impl FloatingPointNumber {
             number_type,
         }
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Number {
-    Integer(IntegerNumber),
-    FloatingPoint(FloatingPointNumber),
 }
 
 #[derive(Debug, PartialEq)]
