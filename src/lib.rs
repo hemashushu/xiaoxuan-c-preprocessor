@@ -9,25 +9,22 @@ use std::fmt::Display;
 use position::Position;
 use range::Range;
 
+mod ast;
 mod charwithposition;
+mod lexer;
+mod parser;
 mod peekableiter;
 mod position;
 mod range;
 mod token;
-mod lexer;
-mod ast;
 
-mod parser;
 // pub mod processor;
+pub mod errorprinter;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum PreprocessError {
     Message(String),
     UnexpectedEndOfDocument(String),
-
-    // Note: The `index` field in `Position` may exceed the last valid index of the input string.
-    // For example, if the text is `'a`, a "char incomplete" error would have an index of 2,
-    // which is one past the end of the string.
     MessageWithPosition(String, Position),
     MessageWithRange(String, Range),
 }

@@ -16,7 +16,7 @@ use crate::{
 pub const PEEK_BUFFER_LENGTH_MERGE_STRINGS: usize = 2;
 pub const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
 
-pub fn parse_source_files(source_code: &str) -> Result<Program, PreprocessError> {
+pub fn parse_from_str(source_code: &str) -> Result<Program, PreprocessError> {
     let tokens = lex_from_str(source_code)?;
     let mut token_iter = tokens.into_iter();
     let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_PARSER);
@@ -901,18 +901,22 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    //
-    //     use anc_assembly::printer::print_to_string;
-    //
-    //     use super::parse_from_str;
-    //
-    //     fn format(s: &str) -> String {
-    //         match parse_from_str(s) {
-    //             Ok(module_node) => print_to_string(&module_node),
-    //             Err(parser_error) => panic!("{}", parser_error.with_source(s)),
-    //         }
-    //     }
-    //
+
+    use crate::parser::parse_from_str;
+
+    fn format(s: &str) -> String {
+        // match parse_from_str(s) {
+        //     Ok(program) => print_to_string(&program),
+        //     Err(err) => panic!("{}", err.with_source(s)),
+        // }
+        todo!()
+    }
+
+    #[test]
+    fn test_parse_code_statement() {
+        // todo
+    }
+
     //     //     #[test]
     //     //     fn test_parse_use_statement() {
     //     //         assert_eq!(format("use std::memory::copy"), "use std::memory::copy\n\n");

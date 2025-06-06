@@ -4,85 +4,109 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use crate::ParserError;
+use crate::PreprocessError;
 
-//                 /-- selection start
-//                 |                 /-- selection length
-//                 v                 v
-// prefix -->   ...snippet_source_text...  <-- suffix
-//                       ^^^^
-//                       |  \-- length
-//                       \----- offset
-struct SnippetRange {
-    prefix: bool,
-    suffix: bool,
-    selection_start: usize,
-    selection_length: usize,
-    offset: usize,
-    length: usize,
+// A struct representing a range of a snippet in the source text.
+//
+// ```diagram
+//                 /-- snippet offset in source text
+//                 |
+//                 |            |-- snippet length
+//                 v            v
+// prefix -->   ...sni[ppet]_text...  <-- suffix
+//                     ^^^^
+//                     |  |-- highlight length
+//                     |
+//                     \----- highlight offset in snippet text
+// ```
+struct SnippetAndIndication {
+    prefix_ellipsis: bool, // Whether the snippet should start with an ellipsis.
+    suffix_ellipsis: bool, // Whether the snippet should end with an ellipsis.
+    snippet_offset_in_source: usize, // The starting index of the snippet in the source text.
+    snippet_length: usize, // The length of the snippet in the source text.
+    highlight_offset_in_snippet: usize, // The offset of the highlight within the snippet.
+    highlight_length: usize, // The length of the highlight within the snippet.
 }
 
-fn calculate_snippet_range(
-    original_selection_start: usize,
-    original_selection_length: usize,
-    source_total_length: usize,
-) -> SnippetRange {
+/// Calculates the snippet and highlight indication based on the position and length
+/// of the highlighted text in the source.
+fn calculate_snippet_and_indication(
+    highlight_text_start_in_source: usize,
+    highlight_text_length: usize,
+    source_text_length: usize,
+) -> SnippetAndIndication {
+    // ```diagram
+    //
+    //     |-- leading text       |-- trailing text
+    //     v                      v
+    // |--------------|xxxxx|-----------------| <-- snippet text
+    //                   ^
+    //                   |-- highlight text
+    // ```
     const LEADING_LENGTH: usize = 15;
     const SNIPPET_LENGTH: usize = 40;
 
-    let (prefix, selection_start, offset) =
-        if source_total_length < SNIPPET_LENGTH || original_selection_start < LEADING_LENGTH {
-            (false, 0, original_selection_start)
-        } else if original_selection_start + SNIPPET_LENGTH > source_total_length {
+    let (prefix_ellipsis, snippet_offset_in_source, highlight_offset_in_snippet) =
+        if source_text_length < SNIPPET_LENGTH || highlight_text_start_in_source < LEADING_LENGTH {
+            (false, 0, highlight_text_start_in_source)
+        } else if highlight_text_start_in_source + SNIPPET_LENGTH > source_text_length {
             (
                 true,
-                source_total_length - SNIPPET_LENGTH,
-                original_selection_start - (source_total_length - SNIPPET_LENGTH),
+                source_text_length - SNIPPET_LENGTH,
+                highlight_text_start_in_source - (source_text_length - SNIPPET_LENGTH),
             )
         } else {
             (
                 true,
-                original_selection_start - LEADING_LENGTH,
+                highlight_text_start_in_source - LEADING_LENGTH,
                 LEADING_LENGTH,
             )
         };
 
-    let (suffix, selection_length) = if selection_start + SNIPPET_LENGTH >= source_total_length {
-        (false, source_total_length - selection_start)
+    let (suffix_ellipsis, snippet_length) =
+        if snippet_offset_in_source + SNIPPET_LENGTH >= source_text_length {
+            (false, source_text_length - snippet_offset_in_source)
+        } else {
+            (true, SNIPPET_LENGTH)
+        };
+
+    let highlight_length = if highlight_offset_in_snippet + highlight_text_length > snippet_length {
+        snippet_length - highlight_offset_in_snippet
     } else {
-        (true, SNIPPET_LENGTH)
+        highlight_text_length
     };
 
-    let length = if offset + original_selection_length > selection_length {
-        selection_length - offset
-    } else {
-        original_selection_length
-    };
-
-    SnippetRange {
-        prefix,
-        suffix,
-        selection_start,
-        selection_length,
-        offset,
-        length,
+    SnippetAndIndication {
+        prefix_ellipsis,
+        suffix_ellipsis,
+        snippet_offset_in_source,
+        snippet_length,
+        highlight_offset_in_snippet,
+        highlight_length,
     }
 }
 
-fn generate_snippet_and_indented_detail(
-    chars: &mut dyn Iterator<Item = char>,
-    snippet_range: &SnippetRange,
-    detail: &str,
-) -> (String, String) {
-    // build snippet
+/// Generates a formatted error message with a snippet and highlight indication
+/// based on the source text and the error message.
+fn generate_error_text_paragraph(
+    source_chars: &mut dyn Iterator<Item = char>,
+    snippet_and_indication: &SnippetAndIndication,
+    error_message: &str,
+) -> (
+    /* snippet line */ String,
+    /* indication line */ String,
+) {
+    // Build the first line: the snippet
     let mut snippet = String::new();
     snippet.push_str("| ");
-    if snippet_range.prefix {
+
+    if snippet_and_indication.prefix_ellipsis {
         snippet.push_str("...");
     }
-    let selection_chars = chars
-        .skip(snippet_range.selection_start)
-        .take(snippet_range.selection_length);
+
+    let selection_chars = source_chars
+        .skip(snippet_and_indication.snippet_offset_in_source)
+        .take(snippet_and_indication.snippet_length);
     let selection_string = selection_chars
         .map(|c| match c {
             '\n' => ' ',
@@ -91,66 +115,75 @@ fn generate_snippet_and_indented_detail(
         })
         .collect::<String>();
     snippet.push_str(&selection_string);
-    if snippet_range.suffix {
+
+    if snippet_and_indication.suffix_ellipsis {
         snippet.push_str("...");
     }
 
-    // build indented detail
-    let mut indented_detail = String::new();
-    indented_detail.push_str("| ");
-    if snippet_range.prefix {
-        indented_detail.push_str("   ");
-    }
-    indented_detail.push_str(&" ".repeat(snippet_range.offset));
-    indented_detail.push('^');
-    if snippet_range.length > 0 {
-        indented_detail.push_str(&"^".repeat(snippet_range.length - 1));
-    } else {
-        indented_detail.push_str("____");
-    }
-    indented_detail.push(' ');
-    indented_detail.push_str(detail);
+    // Build the second line: the highlight indication
+    let mut indication = String::new();
+    indication.push_str("| ");
 
-    (snippet, indented_detail)
+    if snippet_and_indication.prefix_ellipsis {
+        indication.push_str("   ");
+    }
+
+    indication.push_str(&" ".repeat(snippet_and_indication.highlight_offset_in_snippet));
+    indication.push('^');
+    if snippet_and_indication.highlight_length > 0 {
+        indication.push_str(&"^".repeat(snippet_and_indication.highlight_length - 1));
+    }
+
+    indication.push_str("___");
+    indication.push(' ');
+    indication.push_str(error_message);
+
+    (snippet, indication)
 }
 
-impl ParserError {
-    pub fn with_source(&self, source: &str) -> String {
-        // print human readable error message with the source
-
-        let source_total_length = source.chars().count();
-        let mut chars = source.chars();
-
-        // | leading length
-        // v
-        // |------|
-        // xxxxxxxx.xxxxxxxxxxx  <-- snippet text
-        // |------------------|
-        // ^
-        // | snippet length
+impl PreprocessError {
+    pub fn with_source(&self, source_text: &str) -> String {
+        let source_text_length = source_text.chars().count();
+        let mut chars = source_text.chars();
 
         match self {
-            ParserError::Message(msg) => msg.to_owned(),
-            ParserError::UnexpectedEndOfDocument(detail) => {
-                let msg = "Unexpected to reach the end of document.";
-                let snippet_range =
-                    calculate_snippet_range(source_total_length, 0, source_total_length);
-                let (snippet, indented_detail) =
-                    generate_snippet_and_indented_detail(&mut chars, &snippet_range, detail);
-                format!("{}\n{}\n{}", msg, snippet, indented_detail)
+            PreprocessError::Message(msg) => msg.to_owned(),
+            PreprocessError::UnexpectedEndOfDocument(msg) => {
+                let title = "Unexpected to reach the end of document.";
+                let snippet_and_indication =
+                    calculate_snippet_and_indication(source_text_length, 0, source_text_length);
+                let (snippet_line, indication_line) =
+                    generate_error_text_paragraph(&mut chars, &snippet_and_indication, msg);
+                format!("{}\n{}\n{}", title, snippet_line, indication_line)
             }
-            PreprocessError::MessageWithPosition(detail, location) => {
-                let msg = format!(
+            PreprocessError::MessageWithPosition(msg, position) => {
+                let title = format!(
                     "Error at line: {}, column: {}",
-                    location.line + 1,
-                    location.column + 1
+                    position.line + 1,
+                    position.column + 1
                 );
 
                 let snippet_range =
-                    calculate_snippet_range(location.index, location.length, source_total_length);
-                let (snippet, indented_detail) =
-                    generate_snippet_and_indented_detail(&mut chars, &snippet_range, detail);
-                format!("{}\n{}\n{}", msg, snippet, indented_detail)
+                    calculate_snippet_and_indication(position.index, 0, source_text_length);
+                let (snippet_line, indication_line) =
+                    generate_error_text_paragraph(&mut chars, &snippet_range, msg);
+                format!("{}\n{}\n{}", title, snippet_line, indication_line)
+            }
+            PreprocessError::MessageWithRange(msg, range) => {
+                let title = format!(
+                    "Error at line: {}, column: {}",
+                    range.start.line + 1,
+                    range.start.column + 1,
+                );
+
+                let snippet_range = calculate_snippet_and_indication(
+                    range.start.index,
+                    range.end_included.index - range.start.index + 1,
+                    source_text_length,
+                );
+                let (snippet_line, indication_line) =
+                    generate_error_text_paragraph(&mut chars, &snippet_range, msg);
+                format!("{}\n{}\n{}", title, snippet_line, indication_line)
             }
         }
     }
@@ -158,23 +191,21 @@ impl ParserError {
 
 #[cfg(test)]
 mod tests {
-
+    use crate::{Position, PreprocessError, Range};
     use pretty_assertions::assert_eq;
 
-    use crate::{location::Location, ParserError};
-
     #[test]
-    fn test_error_with_source() {
+    fn test_error_with_source_and_message() {
         let source1 = "0123456789"; // 10 chars
         let source2 = "012345678_b12345678_c12345678_d12345678_e123456789"; // 50 chars
         let msg = "abcde";
 
         assert_eq!(
-            ParserError::Message(msg.to_owned()).with_source(source1),
+            PreprocessError::Message(msg.to_owned()).with_source(source1),
             msg
         );
         assert_eq!(
-            ParserError::Message(msg.to_owned()).with_source(source2),
+            PreprocessError::Message(msg.to_owned()).with_source(source2),
             msg
         );
     }
@@ -186,144 +217,114 @@ mod tests {
         let msg = "abcde";
 
         assert_eq!(
-            ParserError::UnexpectedEndOfDocument(msg.to_owned()).with_source(source1),
+            PreprocessError::UnexpectedEndOfDocument(msg.to_owned()).with_source(source1),
             r#"Unexpected to reach the end of document.
 | 0123456789
-|           ^____ abcde"#
+|           ^___ abcde"#
         );
 
         assert_eq!(
-            ParserError::UnexpectedEndOfDocument(msg.to_owned()).with_source(source2),
+            PreprocessError::UnexpectedEndOfDocument(msg.to_owned()).with_source(source2),
             r#"Unexpected to reach the end of document.
 | ...b12345678_c12345678_d12345678_e123456789
-|                                            ^____ abcde"#
+|                                            ^___ abcde"#
         );
     }
 
     #[test]
-    fn test_error_with_source_and_location() {
+    fn test_error_with_source_and_position() {
         let source1 = "0123456789"; // 10 chars
         let source2 = "012345678_b12345678_c12345678_d12345678_e123456789"; // 50 chars
         let msg = "abcde";
 
-        // first
+        // position at the first character
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 0, 11, 13)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(0, 11, 13))
+                .with_source(source1),
             r#"Error at line: 12, column: 14
 | 0123456789
-| ^____ abcde"#
+| ^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 0, 11, 13)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(0, 11, 13))
+                .with_source(source2),
             r#"Error at line: 12, column: 14
 | 012345678_b12345678_c12345678_d12345678_...
-| ^____ abcde"#
+| ^___ abcde"#
         );
 
-        // head
+        // position at the head
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 2, 11, 13)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(2, 11, 13))
+                .with_source(source1),
             r#"Error at line: 12, column: 14
 | 0123456789
-|   ^____ abcde"#
+|   ^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 15, 11, 13)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(15, 11, 13))
+                .with_source(source2),
             r#"Error at line: 12, column: 14
 | ...b12345678_c12345678_d12345678_e123456789
-|         ^____ abcde"#
+|         ^___ abcde"#
         );
 
-        // middle
+        // position at the body
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 5, 11, 13)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(5, 11, 13))
+                .with_source(source1),
             r#"Error at line: 12, column: 14
 | 0123456789
-|      ^____ abcde"#
+|      ^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 25, 11, 13)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(25, 11, 13))
+                .with_source(source2),
             r#"Error at line: 12, column: 14
 | ...b12345678_c12345678_d12345678_e123456789
-|                   ^____ abcde"#
+|                   ^___ abcde"#
         );
 
-        // tail
+        // position at the tail
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 8, 11, 13)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(8, 11, 13))
+                .with_source(source1),
             r#"Error at line: 12, column: 14
 | 0123456789
-|         ^____ abcde"#
+|         ^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 45, 11, 13)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(45, 11, 13))
+                .with_source(source2),
             r#"Error at line: 12, column: 14
 | ...b12345678_c12345678_d12345678_e123456789
-|                                       ^____ abcde"#
+|                                       ^___ abcde"#
         );
 
-        // last
+        // position at the last character
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 10, 11, 13)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(10, 11, 13))
+                .with_source(source1),
             r#"Error at line: 12, column: 14
 | 0123456789
-|           ^____ abcde"#
+|           ^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
-                msg.to_owned(),
-                Location::new_position(/*0,*/ 50, 11, 13)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithPosition(msg.to_owned(), Position::new(50, 11, 13))
+                .with_source(source2),
             r#"Error at line: 12, column: 14
 | ...b12345678_c12345678_d12345678_e123456789
-|                                            ^____ abcde"#
+|                                            ^___ abcde"#
         );
     }
 
@@ -333,124 +334,124 @@ mod tests {
         let source2 = "012345678_b12345678_c12345678_d12345678_e123456789"; // 50 chars
         let msg = "abcde";
 
-        // first
+        // range at the first character
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 0, 17, 19, 4)
+                Range::from_detail_and_length(0, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
-| ^^^^ abcde"#
+| ^^^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 0, 17, 19, 8)
+                Range::from_detail_and_length(0, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
 | 012345678_b12345678_c12345678_d12345678_...
-| ^^^^^^^^ abcde"#
+| ^^^^^^^^___ abcde"#
         );
 
-        // head
+        // range at the head
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 2, 17, 19, 4)
+                Range::from_detail_and_length(2, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
-|   ^^^^ abcde"#
+|   ^^^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 15, 17, 19, 8)
+                Range::from_detail_and_length(15, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
-|         ^^^^^^^^ abcde"#
+|         ^^^^^^^^___ abcde"#
         );
 
-        // middle
+        // range at the body
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 5, 17, 19, 4)
+                Range::from_detail_and_length(5, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
-|      ^^^^ abcde"#
+|      ^^^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 25, 17, 19, 8)
+                Range::from_detail_and_length(25, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
-|                   ^^^^^^^^ abcde"#
+|                   ^^^^^^^^___ abcde"#
         );
 
-        // tail
+        // range at the tail
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 8, 17, 19, 4)
+                Range::from_detail_and_length(8, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
-|         ^^ abcde"#
+|         ^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 45, 17, 19, 8)
+                Range::from_detail_and_length(45, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
-|                                       ^^^^^ abcde"#
+|                                       ^^^^^___ abcde"#
         );
 
-        // last
+        // range at the last character
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 10, 17, 19, 4)
+                Range::from_detail_and_length(10, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
-|           ^____ abcde"#
+|           ^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithPosition(
+            PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Location::new_range(/*0,*/ 50, 17, 19, 8)
+                Range::from_detail_and_length(50, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
-|                                            ^____ abcde"#
+|                                            ^___ abcde"#
         );
     }
 }
