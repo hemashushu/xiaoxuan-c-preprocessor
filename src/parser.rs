@@ -224,9 +224,17 @@ impl<'a> Parser<'a> {
 impl Parser<'_> {
     pub fn parse_program(&mut self) -> Result<Program, PreprocessError> {
         let mut statements: Vec<Statement> = vec![];
-        while self.peek_token(0).is_some() {
-            let statement = self.parse_statement()?;
-            statements.push(statement);
+        while let Some(token) = self.peek_token(0) {
+            match token {
+                Token::Newline => {
+                    self.next_token(); // consume newline
+                    continue; // skip empty lines
+                }
+                _ => {
+                    let statement = self.parse_statement()?;
+                    statements.push(statement);
+                }
+            }
         }
 
         let program = Program { statements };
@@ -283,6 +291,15 @@ impl Parser<'_> {
                                     let if_ = self.parse_if()?;
                                     Statement::If(if_)
                                 }
+                                "elif" | "elifdef" | "elifndef" | "else" | "endif" => {
+                                    return Err(PreprocessError::MessageWithRange(
+                                        format!(
+                                            "Missing `if` (or `ifdef`, `ifndef`) directive before `{}`.",
+                                            name
+                                        ),
+                                        *self.peek_range(0).unwrap(),
+                                    ));
+                                }
                                 "error" => {
                                     // Handle error directive.
                                     self.next_token(); // consumes 'error'
@@ -299,6 +316,7 @@ impl Parser<'_> {
 
                                     Statement::Warning(warning_message)
                                 }
+
                                 "line" | "ident" | "sccs" | "assert" | "unassert"
                                 | "include_next" => {
                                     return Err(PreprocessError::MessageWithRange(
@@ -335,7 +353,7 @@ impl Parser<'_> {
                 // Handle regular C code
                 let mut code = vec![];
 
-                // Collect tokens until we hit a directive or EOF.
+                // Collect tokens until we hit a '#' or EOF.
                 while let Some(token) = self.peek_token(0) {
                     match token {
                         Token::Newline => {
@@ -425,6 +443,10 @@ impl Parser<'_> {
                         parameters.push(id.clone());
                         parser.next_token(); // consume identifier
                     }
+                    Token::Punctuator(Punctuator::Ellipsis) => {
+                        parameters.push("...".to_owned());
+                        parser.next_token(); // consume '...'
+                    }
                     Token::Punctuator(Punctuator::ParenthesisClose) => {
                         break;
                     }
@@ -480,12 +502,16 @@ impl Parser<'_> {
             Some(Token::Identifier(id)) => {
                 // Handle object-like macro definition
                 let name = id.clone();
+                self.next_token(); // consume the identifier token
+
                 let definition = parse_definition(self);
                 Define::ObjectLike { name, definition }
             }
             Some(Token::FunctionLikeMacroIdentifier(id)) => {
                 // Handle function-like macro definition
                 let name = id.clone();
+                self.next_token(); // consume the identifier token
+
                 let parameters = parse_parameters(self)?;
                 let definition = parse_definition(self);
                 Define::FunctionLike {
@@ -834,6 +860,8 @@ impl Parser<'_> {
                 "if" | "elif" => {
                     // Handle `if` or `elif` directive
                     let expression = collect_expression(self)?;
+                    self.expect_and_consume_newline_or_eof()?;
+
                     let condition = Condition::Expression(expression);
                     let consequence = collect_consequence(self)?;
                     branches.push(Branch {
@@ -844,6 +872,8 @@ impl Parser<'_> {
                 "ifdef" | "elifdef" => {
                     // Handle `ifdef` or `elifdef` directive
                     let identifier = self.expect_and_consume_identifier()?;
+                    self.expect_and_consume_newline_or_eof()?;
+
                     let condition = Condition::Defined(identifier, self.last_range);
                     let consequence = collect_consequence(self)?;
                     branches.push(Branch {
@@ -854,6 +884,8 @@ impl Parser<'_> {
                 "ifndef" | "elifndef" => {
                     // Handle `ifndef` or `elifndef` directive
                     let identifier = self.expect_and_consume_identifier()?;
+                    self.expect_and_consume_newline_or_eof()?;
+
                     let condition = Condition::NotDefined(identifier, self.last_range);
                     let consequence = collect_consequence(self)?;
                     branches.push(Branch {
@@ -868,10 +900,14 @@ impl Parser<'_> {
 
             // Continue to the next iteration if we encounter
             // `#elif`, `#elifdef` or `#elifndef` directives.
-            if !matches!(self.peek_token(0),Some(Token::Punctuator(Punctuator::Pound))) || // the char '#'
-               !matches!(self.peek_token(1), Some(Token::Identifier(id)) if
+            if matches!(self.peek_token(0),Some(Token::Punctuator(Punctuator::Pound))) && // the char '#'
+               matches!(self.peek_token(1), Some(Token::Identifier(id)) if
                ["elif", "elifdef", "elifndef"].contains(&id.as_str()))
             {
+                // it is directive `elif`, `elifdef`, or `elifndef`,
+                // continue to the next iteration.
+                self.next_token(); // Consumes '#'
+            } else {
                 break;
             }
         }
@@ -882,12 +918,15 @@ impl Parser<'_> {
         {
             self.next_token(); // consumes '#'
             self.next_token(); // consumes "else"
+            self.next_token(); // consumes newline
             let alternative_statements = collect_consequence(self)?;
             alternative = Some(alternative_statements);
         }
 
         // Finally, we expect an `#endif` to close the `if` block.
+        self.expect_and_consume_token(&Token::Punctuator(Punctuator::Pound), "#")?;
         self.expect_and_consume_specified_identifier("endif")?;
+        self.expect_and_consume_newline_or_eof()?;
 
         let if_ = If {
             branches,
@@ -902,951 +941,335 @@ impl Parser<'_> {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::parser::parse_from_str;
+    use crate::{ast_printer::print_to_string, parser::parse_from_str};
 
     fn format(s: &str) -> String {
-        // match parse_from_str(s) {
-        //     Ok(program) => print_to_string(&program),
-        //     Err(err) => panic!("{}", err.with_source(s)),
-        // }
-        todo!()
+        match parse_from_str(s) {
+            Ok(program) => print_to_string(&program),
+            Err(err) => panic!("{}", err.with_source(s)),
+        }
+    }
+
+    #[test]
+    fn test_parse_pragma() {
+        assert_eq!(format("#pragma once"), "#pragma once\n");
+
+        assert_eq!(
+            format("#pragma STDC FENV_ACCESS ON"),
+            "#pragma STDC FENV_ACCESS ON\n"
+        );
+
+        assert_eq!(
+            format("#pragma STDC FP_CONTRACT OFF"),
+            "#pragma STDC FP_CONTRACT OFF\n"
+        );
+
+        assert_eq!(
+            format("#pragma STDC CX_LIMITED_RANGE DEFAULT"),
+            "#pragma STDC CX_LIMITED_RANGE DEFAULT\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_define() {
+        assert_eq!(format("#define MAX 100"), "#define MAX 100\n");
+
+        assert_eq!(format("#define EMPTY"), "#define EMPTY\n");
+
+        assert_eq!(
+            format("#define SQUARE(x,y) ((x)*(y))"),
+            "#define SQUARE(x, y) ( ( x ) * ( y ) )\n"
+        );
+
+        // Test `#`
+        assert_eq!(
+            format("#define PRINT(var) (printf(\"%s = %d\", #var, var))"),
+            "#define PRINT(var) ( printf ( \"%s = %d\" , # var , var ) )\n"
+        );
+
+        // Test `##`
+        assert_eq!(
+            format("#define ARRAY(prefix, len) int[len] prefix ## len;"),
+            "#define ARRAY(prefix, len) int [ len ] prefix ## len ;\n"
+        );
+
+        // Test variadic macros
+        assert_eq!(
+            format("#define showlist(...) puts(__VA_ARGS__)"),
+            "#define showlist(...) puts ( __VA_ARGS__ )\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_undef() {
+        assert_eq!(format("#undef FOO"), "#undef FOO\n");
+    }
+
+    #[test]
+    fn test_parse_include() {
+        assert_eq!(format("#include HEADER"), "#include HEADER\n");
+
+        assert_eq!(format("#include <stdio.h>"), "#include <stdio.h>\n");
+
+        assert_eq!(
+            format("#include \"my_header.h\""),
+            "#include \"my_header.h\"\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_embed() {
+        assert_eq!(format("#embed RESOURCE"), "#embed RESOURCE\n");
+
+        assert_eq!(format("#embed <data.bin>"), "#embed <data.bin>\n");
+
+        assert_eq!(format("#embed \"hippo.png\""), "#embed \"hippo.png\"\n");
+
+        assert_eq!(
+            format(
+                "#embed </dev/random> limit(100) prefix('a','b') suffix('c','\0') if_empty('x','y', 'z')"
+            ),
+            "#embed </dev/random> limit(100) prefix('a' , 'b') suffix('c' , '\\0') if_empty('x' , 'y' , 'z')\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_if() {
+        assert_eq!(
+            format(
+                "\
+#if EDITION==2025
+    int x;
+#endif"
+            ),
+            "\
+#if EDITION == 2025
+    int x ;
+#endif\n"
+        );
+
+        assert_eq!(
+            format(
+                "\
+#ifdef IDENTIFIER
+    int x;
+#else
+    int y;
+#endif"
+            ),
+            "\
+#ifdef IDENTIFIER
+    int x ;
+#else
+    int y ;
+#endif\n"
+        );
+
+        assert_eq!(
+            format(
+                "\
+#if defined ANCC
+    a;
+#elif EDITION==2025
+    b;
+#elifdef FOO
+    c;
+#else
+    d;
+#endif"
+            ),
+            "\
+#if defined ANCC
+    a ;
+#elif EDITION == 2025
+    b ;
+#elifdef FOO
+    c ;
+#else
+    d ;
+#endif\n"
+        );
+
+        // Test multiline consequence and empty alternative
+        assert_eq!(
+            format(
+                "\
+#ifdef FOO
+    for(int i = 0; i < 10; i++) {
+        printf(\"%d\\n\", i);
+    }
+#elifdef BAR
+#else
+#endif"
+            ),
+            "\
+#ifdef FOO
+    for ( int i = 0 ; i < 10 ; i ++ ) { printf ( \"%d\\n\" , i ) ; }
+#elifdef BAR
+#else
+#endif\n"
+        );
+
+        // Test empty consequence and multiline alternative
+        assert_eq!(
+            format(
+                "\
+#ifdef FOO
+#elifdef BAR
+    for(int i = 0; i < 10; i++) {
+        printf(\"%d\\n\", i);
+    }
+#else
+    int x = 0;
+    int y = 1;
+#endif"
+            ),
+            "\
+#ifdef FOO
+#elifdef BAR
+    for ( int i = 0 ; i < 10 ; i ++ ) { printf ( \"%d\\n\" , i ) ; }
+#else
+    int x = 0 ; int y = 1 ;
+#endif\n"
+        );
+
+        // Test directive within consequence and alternative
+        assert_eq!(
+            format(
+                "\
+#ifdef FOO
+    #include \"foo.h\"
+    int x;
+#elifdef BAR
+    int y;
+    #include \"bar.h\"
+#else
+    #define BAZ 42
+#endif"
+            ),
+            "\
+#ifdef FOO
+    #include \"foo.h\"
+    int x ;
+#elifdef BAR
+    int y ;
+    #include \"bar.h\"
+#else
+    #define BAZ 42
+#endif\n"
+        );
+
+        // Test nested if directives
+        assert_eq!(
+            format(
+                "\
+#ifdef FOO
+    11
+    #ifdef BAR
+        13
+    #elifdef BAZ
+        17
+    #else
+        19
+    #endif
+#elif define BUZZ
+    23
+#else
+    29
+#endif"
+            ),
+            "\
+#ifdef FOO
+    11
+    #ifdef BAR
+        13
+    #elifdef BAZ
+        17
+    #else
+        19
+    #endif
+#elif define BUZZ
+    23
+#else
+    29
+#endif\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_error() {
+        assert_eq!(format("#error \"foo bar\""), "#error \"foo bar\"\n");
+    }
+
+    #[test]
+    fn test_parse_warning() {
+        assert_eq!(format("#warning \"foo bar\""), "#warning \"foo bar\"\n");
     }
 
     #[test]
     fn test_parse_code_statement() {
-        // todo
+        // Test a simple code statement
+        assert_eq!(format("int x = 42;"), "int x = 42 ;\n");
+
+        // Test a code statement with multiple lines
+        assert_eq!(
+            format(
+                "\
+int main() {
+    printf(\"Hello, World!\\n\");
+    return 0;
+}"
+            ),
+            "\
+int main ( ) { printf ( \"Hello, World!\\n\" ) ; return 0 ; }\n"
+        );
     }
 
-    //     //     #[test]
-    //     //     fn test_parse_use_statement() {
-    //     //         assert_eq!(format("use std::memory::copy"), "use std::memory::copy\n\n");
-    //     //
-    //     //         // test 'as'
-    //     //         assert_eq!(
-    //     //             format("use parent::sub_sub_module::some_data as other_data"),
-    //     //             "use parent::sub_sub_module::some_data as other_data\n\n"
-    //     //         );
-    //     //
-    //     //         // test multiple items
-    //     //         assert_eq!(
-    //     //             format(
-    //     //                 "\
-    //     // use module::sub_module::some_func
-    //     // use self::sub_module::some_func"
-    //     //             ),
-    //     //             "\
-    //     // use module::sub_module::some_func
-    //     // use self::sub_module::some_func\n\n"
-    //     //         );
-    //     //
-    //     //         // test line breaks
-    //     //         assert_eq!(
-    //     //             format(
-    //     //                 "\
-    //     // use
-    //     // std::memory::copy
-    //     // as
-    //     // mem_copy"
-    //     //             ),
-    //     //             "use std::memory::copy as mem_copy\n\n"
-    //     //         );
-    //     //     }
+    #[test]
+    fn test_parse_program() {
+        // Test a complete program with various directives
+        let program = "\
+#define FOO 42
+
+#ifdef ANCC
+    #include <std/io.h>
+#else
+    #include <stdio.h>
+#endif
+
+int main() {
+    printf(\"Number is %d\\n\", FOO);
+    return 0;
+}
+";
+        assert_eq!(
+            format(program),
+            "\
+#define FOO 42
+#ifdef ANCC
+    #include <std/io.h>
+#else
+    #include <stdio.h>
+#endif
+int main ( ) { printf ( \"Number is %d\\n\" , FOO ) ; return 0 ; }\n"
+        );
+    }
+
+    // #[test]
+    //     fn test_parse_error() {
+    //         // Test invalid preprocessor directive
+    //         assert!(format("#invalid_directive").contains("Invalid preprocessor directive: `#invalid_directive`."));
     //
-    //     #[test]
-    //     fn test_parse_import_function_statement() {
-    //         assert_eq!(
-    //             format("import fn foo::bar()->()"),
-    //             "import fn foo::bar() -> ()\n\n"
-    //         );
+    //         // Test missing identifier after `#define`
+    //         assert!(format("#define").contains("Expect an identifier after directive `#define`."));
     //
-    //         // test omit return part
-    //         assert_eq!(
-    //             format("import fn foo::bar()"),
-    //             "import fn foo::bar() -> ()\n\n"
-    //         );
+    //         // Test missing file path or macro name after `#include`
+    //         assert!(format("#include").contains("Expect a file path or macro name after directive `#include`."));
     //
-    //         // test with params
-    //         assert_eq!(
-    //             format("import fn foo::add(i32,i32)->i32"),
-    //             "import fn foo::add(i32, i32) -> i32\n\n"
-    //         );
+    //         // Test missing file path or macro name after `#embed`
+    //         assert!(format("#embed").contains("Expect a file path or macro name after directive `#embed`."));
     //
-    //         // test with params and results
-    //         assert_eq!(
-    //             format("import fn foo::div(i64)->(i32,i32)"),
-    //             "import fn foo::div(i64) -> (i32, i32)\n\n"
-    //         );
-    //
-    //         // test 'as'
-    //         assert_eq!(
-    //             format("import fn foo::add(i32,i32)->i32 as add_i32"),
-    //             "import fn foo::add(i32, i32) -> i32 as add_i32\n\n"
-    //         );
-    //
-    //         // test no results but has 'as'
-    //         assert_eq!(
-    //             format("import fn foo::bar() as baz"),
-    //             "import fn foo::bar() -> () as baz\n\n"
-    //         );
-    //
-    //         // test from
-    //         assert_eq!(
-    //             format("import fn foo::bar() from mymod"),
-    //             "import fn foo::bar() -> () from mymod\n\n"
-    //         );
-    //
-    //         // test multiple items
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // import fn foo::bar()
-    // import fn foo::add(i32,i32)->i32"
-    //             ),
-    //             "\
-    // import fn foo::bar() -> ()
-    // import fn foo::add(i32, i32) -> i32\n\n"
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // import
-    // fn
-    // foo::add
-    // (
-    // i32
-    // i32
-    // )
-    // ->
-    // i32
-    // as
-    // add_i32
-    // from
-    // mymod"
-    //             ),
-    //             "import fn foo::add(i32, i32) -> i32 as add_i32 from mymod\n\n"
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_import_data_statement() {
-    //         assert_eq!(
-    //             format("import data foo::count type i32"),
-    //             "import data foo::count type i32\n\n"
-    //         );
-    //
-    //         assert_eq!(
-    //             format("import readonly data foo::PI type f32"),
-    //             "import readonly data foo::PI type f32\n\n"
-    //         );
-    //
-    //         assert_eq!(
-    //             format("import uninit data foo::table type byte[]"),
-    //             "import uninit data foo::table type byte[]\n\n"
-    //         );
-    //
-    //         // test 'as'
-    //         assert_eq!(
-    //             format("import data foo::bar type byte[] as baz"),
-    //             "import data foo::bar type byte[] as baz\n\n"
-    //         );
-    //
-    //         // test from
-    //         assert_eq!(
-    //             format("import data foo::count type i32 from mymod"),
-    //             "import data foo::count type i32 from mymod\n\n"
-    //         );
-    //
-    //         // test multiple items
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // import readonly data foo::PI type f32
-    // import data foo::bar type byte[] as baz"
-    //             ),
-    //             "\
-    // import readonly data foo::PI type f32
-    // import data foo::bar type byte[] as baz\n\n"
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // import
-    // readonly
-    // data
-    // foo::bar
-    // type
-    // byte
-    // [
-    // ]
-    // as
-    // baz
-    // from
-    // mymod"
-    //             ),
-    //             "import readonly data foo::bar type byte[] as baz from mymod\n\n"
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_external_function_statement() {
-    //         assert_eq!(
-    //             format("external fn libfoo::bar()->()"),
-    //             "external fn libfoo::bar() -> ()\n\n"
-    //         );
-    //
-    //         // test omit return part
-    //         assert_eq!(
-    //             format("external fn libfoo::bar()"),
-    //             "external fn libfoo::bar() -> ()\n\n"
-    //         );
-    //
-    //         // test with params
-    //         assert_eq!(
-    //             format("external fn libfoo::add(i32,i32)->i32"),
-    //             "external fn libfoo::add(i32, i32) -> i32\n\n"
-    //         );
-    //
-    //         // test 'as'
-    //         assert_eq!(
-    //             format("external fn libfoo::add(i32,i32)->i32 as add_i32"),
-    //             "external fn libfoo::add(i32, i32) -> i32 as add_i32\n\n"
-    //         );
-    //
-    //         // test 'as' without return
-    //         assert_eq!(
-    //             format("external fn libfoo::bar() as baz"),
-    //             "external fn libfoo::bar() -> () as baz\n\n"
-    //         );
-    //
-    //         // test multiple items
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // external fn libfoo::bar()
-    // external fn libfoo::add(i32,i32)->i32"
-    //             ),
-    //             "\
-    // external fn libfoo::bar() -> ()
-    // external fn libfoo::add(i32, i32) -> i32\n\n"
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // external
-    // fn
-    // libfoo::add
-    // (
-    // i32
-    // i32
-    // )
-    // ->
-    // i32
-    // as
-    // add_i32"
-    //             ),
-    //             "external fn libfoo::add(i32, i32) -> i32 as add_i32\n\n"
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_external_data_statement() {
-    //         assert_eq!(
-    //             format("external data libfoo::PI type f32"),
-    //             "external data libfoo::PI type f32\n\n"
-    //         );
-    //
-    //         // test 'as'
-    //         assert_eq!(
-    //             format("external data libfoo::bar type byte[] as baz"),
-    //             "external data libfoo::bar type byte[] as baz\n\n"
-    //         );
-    //
-    //         // test multiple items
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // external data libfoo::PI type f32
-    // external data libfoo::bar type byte[] as baz"
-    //             ),
-    //             "\
-    // external data libfoo::PI type f32
-    // external data libfoo::bar type byte[] as baz\n\n"
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // external
-    // data
-    // libfoo::bar
-    // type
-    // byte
-    // [
-    // ]
-    // as
-    // baz"
-    //             ),
-    //             "external data libfoo::bar type byte[] as baz\n\n"
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_data_statement() {
-    //         assert_eq!(format("data foo:i32=11"), "data foo:i32 = 11\n\n");
-    //
-    //         // section 'readonly'
-    //         assert_eq!(
-    //             format("pub readonly data bar:i32=13"),
-    //             "pub readonly data bar:i32 = 13\n\n"
-    //         );
-    //
-    //         // section 'uninit'
-    //         assert_eq!(
-    //             format("pub uninit data baz:i32"),
-    //             "pub uninit data baz:i32\n\n"
-    //         );
-    //
-    //         // data type i64
-    //         assert_eq!(format("data bar:i64=17_i64"), "data bar:i64 = 17_i64\n\n");
-    //
-    //         // other data types and values
-    //         assert_eq!(
-    //             format(
-    //                 r#"
-    // pub data foo1:byte[32] = h"11 13 17 19" // length is 32
-    // pub data foo1:byte[32,align=8] = [0x11_i32, 0x13_i32, 0x17_i32, 0x19_i32] // length is 32
-    // pub data foo2:byte[align=4] = [0x11_i32, 0x13_i32, 0x17_i32, 0x19_i32] // length is 4
-    // pub data foo3:byte[] = "Hello, World!" // length is 13
-    // pub data foo4:byte[] = "Hello, World!\0" // length is 13+1
-    // pub data foo5:byte[] = ["Hello, World!", 0_i8] // length is 13+1""#
-    //             ),
-    //             "\
-    // pub data foo1:byte[32] = h\"11 13 17 19\"
-    // pub data foo1:byte[32, align=8] = [
-    //     17
-    //     19
-    //     23
-    //     25
-    // ]
-    // pub data foo2:byte[align=4] = [
-    //     17
-    //     19
-    //     23
-    //     25
-    // ]
-    // pub data foo3:byte[] = \"Hello, World!\"
-    // pub data foo4:byte[] = \"Hello, World!\\0\"
-    // pub data foo5:byte[] = [
-    //     \"Hello, World!\"
-    //     0_i8
-    // ]
-    //
-    // "
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // pub
-    // data
-    // foo
-    // :
-    // byte
-    // [
-    // 32
-    // align
-    // =
-    // 8
-    // ]
-    // =
-    // [
-    // 11
-    // \"abc\"
-    //     [
-    //         13
-    //         17
-    //     ]
-    // ]
-    // "
-    //             ),
-    //             "\
-    // pub data foo:byte[32, align=8] = [
-    //     11
-    //     \"abc\"
-    //     [
-    //         13
-    //         17
-    //     ]
-    // ]\n\n"
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_function_statement() {
-    //         assert_eq!(
-    //             format("fn foo() nop()"),
-    //             "\
-    // fn foo() -> ()
-    //     nop()
-    // "
-    //         );
-    //
-    //         // with params and return
-    //         assert_eq!(
-    //             format("fn foo(hi:i32,lo:i32)->i64 nop()"),
-    //             "\
-    // fn foo(hi:i32, lo:i32) -> i64
-    //     nop()
-    // "
-    //         );
-    //
-    //         // with results
-    //         assert_eq!(
-    //             format("fn foo(n:i64)->(i32,i32) nop()"),
-    //             "\
-    // fn foo(n:i64) -> (i32, i32)
-    //     nop()
-    // "
-    //         );
-    //
-    //         // with empty local variable
-    //         assert_eq!(
-    //             format("fn foo()->() [] nop()"),
-    //             "\
-    // fn foo() -> ()
-    //     nop()
-    // "
-    //         );
-    //
-    //         // with local variable
-    //         assert_eq!(
-    //             format("fn foo() [a:i32] nop()"),
-    //             "\
-    // fn foo() -> ()
-    //     [a:i32]
-    //     nop()
-    // "
-    //         );
-    //
-    //         // with multiple local variables
-    //         assert_eq!(
-    //             format("fn foo() [a:i32,b:byte[16,align=4]] nop()"),
-    //             "\
-    // fn foo() -> ()
-    //     [a:i32, b:byte[16, align=4]]
-    //     nop()
-    // "
-    //         );
-    //
-    //         // with instruction expressions
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo(left:i32,right:i32)-> i32 []
-    //     add_i32(
-    //         local_load_i32s(left),
-    //         local_load_i32s(right),
-    //     )"
-    //             ),
-    //             "\
-    // fn foo(left:i32, right:i32) -> i32
-    //     add_i32(
-    //         local_load_i32s(left),
-    //         local_load_i32s(right))
-    // "
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // pub
-    // fn
-    // foo
-    // (
-    // left
-    // :
-    // i32
-    // right
-    // :
-    // i32
-    // )
-    // ->
-    // i32
-    // [
-    // abc
-    // :
-    // i32
-    // ]
-    // imm_i32
-    // (
-    // 11
-    // )"
-    //             ),
-    //             "\
-    // pub fn foo(left:i32, right:i32) -> i32
-    //     [abc:i32]
-    //     imm_i32(11)
-    // "
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_expression_group() {
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo() {
-    //     imm_i32(11)
-    //     imm_i32(31)
-    // }"
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     {
-    //         imm_i32(11)
-    //         imm_i32(31)
-    //     }
-    // "
-    //         );
-    //
-    //         // nested group
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     {
-    //         imm_i32(11)
-    //         {
-    //             imm_i32(31)
-    //         }
-    //     }"
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     {
-    //         imm_i32(11)
-    //         {
-    //             imm_i32(31)
-    //         }
-    //     }
-    // "
-    //         );
-    //
-    //         // test without line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo() {
-    //     imm_i32(11) imm_i32(13) imm_i32(17)
-    // }"
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     {
-    //         imm_i32(11)
-    //         imm_i32(13)
-    //         imm_i32(17)
-    //     }
-    // "
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_expression_when() {
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     when imm_i32(1)
-    //         local_store_i32(imm_i32(11))"
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     when
-    //         imm_i32(1)
-    //         local_store_i32(
-    //             imm_i32(11))
-    // "
-    //         );
-    //
-    //         // with local variables
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     when [left:i32,right:i32] imm_i32(1) nop()
-    // "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     when
-    //         [left:i32, right:i32]
-    //         imm_i32(1)
-    //         nop()
-    // "
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     when
-    //     [
-    //     left
-    //     :
-    //     i32
-    //     right
-    //     :
-    //     i32
-    //     ]
-    //     imm_i32
-    //     (
-    //     1
-    //     )
-    //     nop
-    //     (
-    //     )
-    // "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     when
-    //         [left:i32, right:i32]
-    //         imm_i32(1)
-    //         nop()
-    // "
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_expression_if() {
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     if
-    //         eqz_i32(local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     if -> ()
-    //         eqz_i32(
-    //             local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    // "
-    //         );
-    //
-    //         // with params and return values
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     if -> (i32,i32)
-    //         eqz_i32(local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     if -> (i32, i32)
-    //         eqz_i32(
-    //             local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    // "
-    //         );
-    //
-    //         // without params
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     if ->i32
-    //         eqz_i32(local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     if -> i32
-    //         eqz_i32(
-    //             local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    // "
-    //         );
-    //
-    //         // without params and return values
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     if eqz_i32(local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     if -> ()
-    //         eqz_i32(
-    //             local_load_i32_s(num))
-    //         imm_i32(11)
-    //         imm_i32(13)
-    // "
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn
-    // foo()
-    // if
-    // ->
-    // (
-    // i32
-    // i32
-    // )
-    // imm_i32(11)
-    // imm_i32(13)
-    // imm_i32(17)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     if -> (i32, i32)
-    //         imm_i32(11)
-    //         imm_i32(13)
-    //         imm_i32(17)
-    // "
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_expression_block() {
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     block (num:i32=
-    //         data_load_extend_i32_s(buffer, local_load_i32_s(offset))
-    //         )
-    //         imm_i32(11)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block (num:i32=data_load_extend_i32_s(buffer,
-    //         local_load_i32_s(offset))) -> ()
-    //         imm_i32(11)
-    // "
-    //         );
-    //
-    //         // with params and return values
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     block (left:i32=imm_i32(11), right:i32=imm_i32(13))->i32
-    //         imm_i32(11)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block (left:i32=imm_i32(11), right:i32=imm_i32(13)) -> i32
-    //         imm_i32(11)
-    // "
-    //         );
-    //
-    //         // without params
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     block ()->i32
-    //         imm_i32(11)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block () -> i32
-    //         imm_i32(11)
-    // "
-    //         );
-    //
-    //         // omits params and return values
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     block imm_i32(11)
-    //         "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block () -> ()
-    //         imm_i32(11)
-    // "
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    // block
-    // (
-    // num
-    // :
-    // i32
-    // =
-    // imm_i32
-    // (
-    // 11
-    // )
-    // )
-    // ->
-    // i32
-    // imm_i32
-    // (
-    // 13
-    // )
-    // "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block (num:i32=imm_i32(11)) -> i32
-    //         imm_i32(13)
-    // "
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_expression_break() {
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     block {
-    //         break(imm_i32(11), imm_i32(13))
-    //         break_fn(imm_i32(29))
-    //     }"
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block () -> ()
-    //         {
-    //             break(
-    //                 imm_i32(11)
-    //                 imm_i32(13)
-    //             )
-    //             break_fn(
-    //                 imm_i32(29)
-    //             )
-    //         }
-    // "
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    // block
-    // break
-    // (
-    // imm_i32
-    // (
-    // 17
-    // )
-    // imm_i32
-    // (
-    // 23
-    // )
-    // )
-    //     "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block () -> ()
-    //         break(
-    //             imm_i32(17)
-    //             imm_i32(23)
-    //         )
-    // "
-    //         );
-    //     }
-    //
-    //     #[test]
-    //     fn test_parse_expression_recur() {
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    //     block {
-    //         recur(imm_i32(11), imm_i32(13))
-    //         recur_fn(imm_i32(29))
-    //     }"
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block () -> ()
-    //         {
-    //             recur(
-    //                 imm_i32(11)
-    //                 imm_i32(13)
-    //             )
-    //             recur_fn(
-    //                 imm_i32(29)
-    //             )
-    //         }
-    // "
-    //         );
-    //
-    //         // test line breaks
-    //         assert_eq!(
-    //             format(
-    //                 "\
-    // fn foo()
-    // block
-    // recur
-    // (
-    // imm_i32
-    // (
-    // 17
-    // )
-    // imm_i32
-    // (
-    // 23
-    // )
-    // )
-    //     "
-    //             ),
-    //             "\
-    // fn foo() -> ()
-    //     block () -> ()
-    //         recur(
-    //             imm_i32(17)
-    //             imm_i32(23)
-    //         )
-    // "
-    //         );
+    //         // Test missing condition after `#if`
+    //         assert!(format("#if").contains("Expect a condition after directive `#if`."));
     //     }
 }

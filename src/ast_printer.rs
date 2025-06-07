@@ -4,11 +4,11 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use std::io::{Error, Write};
+use std::io::Write;
 
 use crate::{
-    ast::{Condition, Define, Embed, If, Include, Pragma, Statement},
-    token::{Token, TokenWithRange},
+    ast::{Condition, Define, Embed, If, Include, Pragma, Program, Statement},
+    token::TokenWithRange,
 };
 
 pub const DEFAULT_INDENT_CHARS: &str = "    ";
@@ -118,7 +118,10 @@ fn print_embed<W: Write>(
             .iter()
             .map(|TokenWithRange { token, .. }| token.to_string())
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(" ")
+
+        // Note that can not join definitions (tokens) use `join(", ")` because
+        // definitions are token sequences, not comma-separated values.
     };
 
     let indent = DEFAULT_INDENT_CHARS.repeat(indent_level);
@@ -265,27 +268,28 @@ fn print_statement<W: Write>(
 /// Print the entire program to the given writer
 ///
 /// This function is used for debugging and testing purposes.
-pub fn print_program<W: Write>(
-    writer: &mut W,
-    program: &crate::ast::Program,
-) -> std::io::Result<()> {
+pub fn print_program<W: Write>(writer: &mut W, program: &Program) -> std::io::Result<()> {
     for statement in &program.statements {
         print_statement(writer, statement, 0)?;
     }
     Ok(())
 }
 
+pub fn print_to_string(program: &Program) -> String {
+    let mut output = Vec::new();
+    print_program(&mut output, program).unwrap();
+    String::from_utf8(output).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::os::linux::raw::stat;
-
     use pretty_assertions::assert_eq;
 
     use crate::{
         ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
         ast_printer::{
             print_define, print_embed, print_if, print_include, print_pragma, print_program,
-            print_statement,
+            print_statement, print_to_string,
         },
         range::Range,
         token::{
@@ -383,13 +387,13 @@ mod tests {
 
     #[test]
     fn test_print_undef() {
-        let name = "MAX";
+        let name = "FOO";
         let range = Range::default();
         let statement = Statement::Undef(name.to_string(), range);
 
         let mut output = Vec::new();
         print_statement(&mut output, &statement, 0).unwrap();
-        assert_eq!(String::from_utf8(output).unwrap(), "#undef MAX\n");
+        assert_eq!(String::from_utf8(output).unwrap(), "#undef FOO\n");
     }
 
     #[test]
@@ -457,7 +461,7 @@ mod tests {
         // Test for embedding with a local file path
 
         let embed_local = Embed::FilePath {
-            file_path: ("data.bin".to_string(), Range::default()),
+            file_path: ("hippo.png".to_string(), Range::default()),
             is_system_header: false,
             limit: None,
             suffix: vec![],
@@ -468,17 +472,21 @@ mod tests {
         print_embed(&mut output_local, &embed_local, 0).unwrap();
         assert_eq!(
             String::from_utf8(output_local).unwrap(),
-            "#embed \"data.bin\"\n"
+            "#embed \"hippo.png\"\n"
         );
 
         // Test for embedding with `limit`, `suffix`, `prefix`, and `if_empty` parameters
         let embed_with_params = Embed::FilePath {
-            file_path: ("data.bin".to_string(), Range::default()),
-            is_system_header: false,
+            file_path: ("/dev/random".to_string(), Range::default()),
+            is_system_header: true,
             limit: Some(100),
             prefix: vec![
                 TokenWithRange {
                     token: Token::Char('a', CharType::Default),
+                    range: Range::default(),
+                },
+                TokenWithRange {
+                    token: Token::Punctuator(Punctuator::Comma),
                     range: Range::default(),
                 },
                 TokenWithRange {
@@ -492,6 +500,10 @@ mod tests {
                     range: Range::default(),
                 },
                 TokenWithRange {
+                    token: Token::Punctuator(Punctuator::Comma),
+                    range: Range::default(),
+                },
+                TokenWithRange {
                     token: Token::Char('\0', CharType::Default),
                     range: Range::default(),
                 },
@@ -502,7 +514,15 @@ mod tests {
                     range: Range::default(),
                 },
                 TokenWithRange {
+                    token: Token::Punctuator(Punctuator::Comma),
+                    range: Range::default(),
+                },
+                TokenWithRange {
                     token: Token::Char('y', CharType::Default),
+                    range: Range::default(),
+                },
+                TokenWithRange {
+                    token: Token::Punctuator(Punctuator::Comma),
                     range: Range::default(),
                 },
                 TokenWithRange {
@@ -515,7 +535,7 @@ mod tests {
         print_embed(&mut output_with_params, &embed_with_params, 0).unwrap();
         assert_eq!(
             String::from_utf8(output_with_params).unwrap(),
-            "#embed \"data.bin\" limit(100) prefix('a', 'b') suffix('c', '\\0') if_empty('x', 'y', 'z')\n"
+            "#embed </dev/random> limit(100) prefix('a' , 'b') suffix('c' , '\\0') if_empty('x' , 'y' , 'z')\n"
         );
     }
 
@@ -536,7 +556,7 @@ mod tests {
                     },
                     TokenWithRange {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
-                            "2023".to_string(),
+                            "2025".to_string(),
                             false,
                             IntegerNumberType::Default,
                         ))),
@@ -565,7 +585,7 @@ mod tests {
         print_if(&mut output_simple, &if_simple, 0).unwrap();
         assert_eq!(
             String::from_utf8(output_simple).unwrap(),
-            "#if EDITION == 2023\n    int x ;\n#endif\n"
+            "#if EDITION == 2025\n    int x ;\n#endif\n"
         );
 
         // Test for `#ifdef` directive with `else`:
@@ -579,7 +599,7 @@ mod tests {
                         range: Range::default(),
                     },
                     TokenWithRange {
-                        token: Token::Identifier("y".to_string()),
+                        token: Token::Identifier("x".to_string()),
                         range: Range::default(),
                     },
                     TokenWithRange {
@@ -594,7 +614,7 @@ mod tests {
                     range: Range::default(),
                 },
                 TokenWithRange {
-                    token: Token::Identifier("z".to_string()),
+                    token: Token::Identifier("y".to_string()),
                     range: Range::default(),
                 },
                 TokenWithRange {
@@ -607,7 +627,7 @@ mod tests {
         print_if(&mut output_ifdef_else, &ifdef_else, 0).unwrap();
         assert_eq!(
             String::from_utf8(output_ifdef_else).unwrap(),
-            "#ifdef IDENTIFIER\n    int y ;\n#else\n    int z ;\n#endif\n"
+            "#ifdef IDENTIFIER\n    int x ;\n#else\n    int y ;\n#endif\n"
         );
 
         // Test for multiple branches with `#elif`, `#elifdef`, and `#else`:
@@ -617,19 +637,11 @@ mod tests {
                 Branch {
                     condition: Condition::Expression(vec![
                         TokenWithRange {
-                            token: Token::Identifier("EDITION".to_string()),
+                            token: Token::Identifier("defined".to_string()),
                             range: Range::default(),
                         },
                         TokenWithRange {
-                            token: Token::Punctuator(Punctuator::Equal),
-                            range: Range::default(),
-                        },
-                        TokenWithRange {
-                            token: Token::Number(Number::Integer(IntegerNumber::new(
-                                "2023".to_string(),
-                                false,
-                                IntegerNumberType::Default,
-                            ))),
+                            token: Token::Identifier("ANCC".to_string()),
                             range: Range::default(),
                         },
                     ]),
@@ -703,7 +715,7 @@ mod tests {
         print_if(&mut output_if_multi, &if_multi, 0).unwrap();
         assert_eq!(
             String::from_utf8(output_if_multi).unwrap(),
-            "#if EDITION == 2023\n    a ;\n#elif EDITION == 2025\n    b ;\n#elifdef FOO\n    c ;\n#else\n    d ;\n#endif\n"
+            "#if defined ANCC\n    a ;\n#elif EDITION == 2025\n    b ;\n#elifdef FOO\n    c ;\n#else\n    d ;\n#endif\n"
         );
     }
 
@@ -822,5 +834,33 @@ mod tests {
             String::from_utf8(output).unwrap(),
             "#pragma STDC FENV_ACCESS ON\n#define MAX 100\n#include <stdio.h>\nprintf ( \"Hello, World!\" ) ;\n"
         );
+    }
+
+    #[test]
+    fn test_print_to_string() {
+        let program = Program {
+            statements: vec![
+                Statement::Pragma(Pragma {
+                    parts: vec![TokenWithRange {
+                        token: Token::Identifier("once".to_string()),
+                        range: Range::default(),
+                    }],
+                }),
+                Statement::Define(Define::ObjectLike {
+                    name: "MAX".to_string(),
+                    definition: vec![TokenWithRange {
+                        token: Token::Number(Number::Integer(IntegerNumber::new(
+                            "100".to_string(),
+                            false,
+                            IntegerNumberType::Default,
+                        ))),
+                        range: Range::default(),
+                    }],
+                }),
+            ],
+        };
+
+        let output = print_to_string(&program);
+        assert_eq!(output, "#pragma once\n#define MAX 100\n");
     }
 }

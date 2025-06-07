@@ -21,18 +21,16 @@ ANCPP implements almost all of the C23 standard preprocessor directives, includi
 - Error and warning (`#error`, `#warning`).
 - Behavior control (`#pragma`).
 
-Some directives are not supported by ANCPP:
-
-- Rarely used or obsolete directives, such as `#line` and `#assert`
-- Directives supported by certain compilers but not part of the standard, such as `#ident` and `#include_next` (the operator `__has_include_next` is not supported either).
-
 ## Differences from Other Preprocessors
 
-ANCPP is designed to be a modern, strictly standards-compliant C preprocessor. As a result, certain permissive syntax and behaviors accepted by other preprocessors are not supported:
+ANCPP is designed to be a modern, portable, strictly standards-compliant C preprocessor. As a result, certain permissive syntax and features provided by other preprocessors are not supported:
 
-- Empty macro arguments are not allowed. For example, `FOO(1,)` is invalid.
-- Null directives are not allowed. For example, a line containing only `#` is considered invalid.
+- Omitting arguments in macro invocations is not allowed. For example, `FOO(1,,3)` is invalid.
 - Macros cannot be redefined (even with identical definitions) unless they are undefined first. For example, `#define FOO 123` followed by `#define FOO ...` is not allowed.
-- Conditional expressions must evaluate to an integer value; using a character, string, floating-point number, function-like macro, or undefined macro will result in an error.
-- Unsupported pragmas will stop processing rather than being ignored, For example, `#pragma GCC dependency` will result in an error.
-- Trigraphs (e.g. `??<`, `??>`) and digraphs (e.g. `<:`, `:>`, and `%:%:`) are not supported.
+- In variadic macros, the parameter name must not precede the ellipsis. For example, `#define FOO(args...)` is invalid. Additionally, using `##` before `__VA_ARGS__` is not supported.
+- Null directives are disallowed. For example, a line containing only `#` is considered invalid.
+- Conditional expressions must evaluate to an integer value. If the expression is a character, string, floating-point number, function-like macro, or undefined macro, the preprocessor will report an error.
+- Unsupported pragmas will halt processing rather than being ignored. For example, `#pragma GCC dependency` will result in an error.
+- Non-standard directives such as `#assert`, `unassert`, `#ident`, `sccs`, and `#include_next`, as well as the operator `__has_include_next()`, are not supported.
+- The rarely used `#line` directive is not supported.
+- Trigraphs (e.g., `??<`, `??>`) and digraphs (e.g., `<:`, `:>`, and `%:%:`) are not supported.
