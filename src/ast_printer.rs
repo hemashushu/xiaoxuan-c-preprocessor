@@ -437,10 +437,13 @@ mod tests {
     fn test_print_embed() {
         // Test for embedding with an identifier
 
-        let embed = Embed::Identifier("RESOURCE".to_string(), Range::default());
+        let embed = Embed::Identifier("HEMASHUSHU_JPEG_FILE".to_string(), Range::default());
         let mut output = Vec::new();
         print_embed(&mut output, &embed, 0).unwrap();
-        assert_eq!(String::from_utf8(output).unwrap(), "#embed RESOURCE\n");
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "#embed HEMASHUSHU_JPEG_FILE\n"
+        );
 
         // Test for embedding with a system file path
         let embed_system = Embed::FilePath {

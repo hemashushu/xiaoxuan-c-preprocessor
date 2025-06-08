@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::{PreprocessError, peekableiter::PeekableIter, range::Range, token::TokenWithRange};
 
 pub const PEEK_BUFFER_LENGTH_PREPROCESS: usize = 4;
+pub const PEEK_BUFFER_LENGTH_MERGE_STRINGS: usize = 2;
 
 /// Preprocesses C source files.
 ///

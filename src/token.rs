@@ -222,7 +222,7 @@ impl IntegerNumber {
         }
     }
 
-    pub fn as_u64(&self) -> Result<u64, std::num::ParseIntError> {
+    pub fn as_usize(&self) -> Result<usize, std::num::ParseIntError> {
         let (src, radix) = if self.value.starts_with("0x") {
             // Hexadecimal number
             (&self.value[2..], 16)
@@ -237,7 +237,7 @@ impl IntegerNumber {
             (&self.value[..], 10)
         };
 
-        u64::from_str_radix(src, radix)
+        usize::from_str_radix(src, radix)
     }
 }
 
