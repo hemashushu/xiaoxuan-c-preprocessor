@@ -7,8 +7,8 @@
 use std::io::Write;
 
 use crate::{
+    TokenWithRange,
     ast::{Condition, Define, Embed, If, Include, Pragma, Program, Statement},
-    token::TokenWithRange,
 };
 
 pub const DEFAULT_INDENT_CHARS: &str = "    ";
@@ -286,6 +286,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
+        TokenWithRange,
         ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
         ast_printer::{
             print_define, print_embed, print_if, print_include, print_pragma, print_program,
@@ -294,7 +295,6 @@ mod tests {
         range::Range,
         token::{
             CharType, IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token,
-            TokenWithRange,
         },
     };
 

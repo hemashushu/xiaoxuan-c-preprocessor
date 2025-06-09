@@ -20,7 +20,7 @@ impl Range {
         }
     }
 
-    pub fn from_position(pos: &Position) -> Self {
+    pub fn from_single_position(pos: &Position) -> Self {
         Self {
             start: *pos,
             end_included: *pos,
@@ -35,7 +35,7 @@ impl Range {
         }
     }
 
-    pub fn from_detail_and_length(index: usize, line: usize, column: usize, length: usize) -> Self {
+    pub fn from_detail(index: usize, line: usize, column: usize, length: usize) -> Self {
         let inc = length - 1;
         let start = Position::new(index, line, column);
         let end_included = Position::new(index + inc, line, column + inc);

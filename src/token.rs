@@ -6,15 +6,13 @@
 
 use std::fmt::Display;
 
-use crate::range::Range;
-
 /// Represents a token type for the C preprocessor.
 ///
 /// After preprocessing, the tokens `Newline`, `FilePath`, `FunctionLikeMacroIdentifier`
 /// `Pound` and `PoundPound` will not be present in the final token stream.
 ///
 /// See: https://gcc.gnu.org/onlinedocs/cpp/Tokenization.html
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     // An identifier, as in C: any sequence of letters (including non-Latin letters such as Chinese ideograms),
     // digits, or underscores, starting with a letter or underscore.
@@ -175,13 +173,13 @@ pub enum StringType {
     UTF8,    // UTF-8 string, e.g., u8"hello", u8"文", data type is `char8_t[]`
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Number {
     Integer(IntegerNumber),
     FloatingPoint(FloatingPointNumber),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct IntegerNumber {
     pub value: String,
     pub unsigned: bool, // true for unsigned integers, false for signed integers
@@ -196,7 +194,7 @@ pub enum IntegerNumberType {
     BitInt,  // suffix "wb", "WB", e.g., 123wb, 123WB
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct FloatingPointNumber {
     pub value: String,
 
@@ -248,18 +246,6 @@ impl FloatingPointNumber {
             decimal,
             number_type,
         }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct TokenWithRange {
-    pub token: Token,
-    pub range: Range,
-}
-
-impl TokenWithRange {
-    pub fn new(token: Token, range: Range) -> Self {
-        Self { token, range }
     }
 }
 

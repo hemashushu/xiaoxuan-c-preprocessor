@@ -9,18 +9,50 @@ use std::fmt::Display;
 use position::Position;
 use range::Range;
 
+use crate::{location::Location, token::Token};
+
 mod ast;
 mod ast_printer;
 mod charwithposition;
+mod context;
+mod definition;
 mod lexer;
+mod location;
 mod parser;
 mod peekableiter;
 mod position;
 mod range;
 mod token;
 
-// pub mod processor;
 pub mod errorprinter;
+pub mod file_cache;
+pub mod file_provider;
+pub mod processor;
+pub mod prompt;
+
+#[derive(Debug, PartialEq)]
+pub struct TokenWithRange {
+    pub token: Token,
+    pub range: Range,
+}
+
+impl TokenWithRange {
+    pub fn new(token: Token, range: Range) -> Self {
+        Self { token, range }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct TokenWithLocation {
+    pub token: Token,
+    pub location: Location,
+}
+
+impl TokenWithLocation {
+    pub fn new(token: Token, location: Location) -> Self {
+        Self { token, location }
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum PreprocessError {

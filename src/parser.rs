@@ -5,12 +5,12 @@
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
 use crate::{
-    PreprocessError,
+    PreprocessError, TokenWithRange,
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     lexer::lex_from_str,
     peekableiter::PeekableIter,
     range::Range,
-    token::{Number, Punctuator, StringType, Token, TokenWithRange},
+    token::{Number, Punctuator, StringType, Token},
 };
 
 pub const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
@@ -39,7 +39,7 @@ impl<'a> Parser<'a> {
             // Initialize last_range with the first token's range.
             first_token.range.clone()
         } else {
-            Range::from_detail_and_length(0, 0, 0, 0)
+            Range::from_detail(0, 0, 0, 0)
         };
 
         Self {

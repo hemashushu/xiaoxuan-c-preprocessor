@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(0, 17, 19, 4)
+                Range::from_detail(0, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(0, 17, 19, 8)
+                Range::from_detail(0, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
@@ -363,7 +363,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(2, 17, 19, 4)
+                Range::from_detail(2, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(15, 17, 19, 8)
+                Range::from_detail(15, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(5, 17, 19, 4)
+                Range::from_detail(5, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(25, 17, 19, 8)
+                Range::from_detail(25, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(8, 17, 19, 4)
+                Range::from_detail(8, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(45, 17, 19, 8)
+                Range::from_detail(45, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(10, 17, 19, 4)
+                Range::from_detail(10, 17, 19, 4)
             )
             .with_source(source1),
             r#"Error at line: 18, column: 20
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(
             PreprocessError::MessageWithRange(
                 msg.to_owned(),
-                Range::from_detail_and_length(50, 17, 19, 8)
+                Range::from_detail(50, 17, 19, 8)
             )
             .with_source(source2),
             r#"Error at line: 18, column: 20

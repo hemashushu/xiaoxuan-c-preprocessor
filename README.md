@@ -21,12 +21,14 @@ ANCPP implements almost all of the C23 standard preprocessor directives, includi
 - Error and warning (`#error`, `#warning`).
 - Behavior control (`#pragma`).
 
-## Differences from Other Preprocessors
+## Limitations Compared to Other Preprocessors
 
-ANCPP is designed to be a modern, portable, strictly standards-compliant C preprocessor. As a result, certain permissive syntax and features provided by other preprocessors are not supported:
+ANCPP is designed to be a modern, portable, strictly standards-compliant C preprocessor. As a result, certain extensions and features provided by other preprocessors are not supported:
 
+- A macro cannot be redefined unless it is first undefined. For example, `#define FOO 123` followed by another `#define FOO ...` is not allowed. Some preprocessors allow redefining a macro if the new definition is identical, but ANCPP does not support this behavior.
+- Undefining a macro that does not exist is not allowed.
+- Each file is included only once, even if it does not have header guards.
 - Omitting arguments in macro invocations is not allowed. For example, `FOO(1,,3)` is invalid.
-- Macros cannot be redefined (even with identical definitions) unless they are undefined first. For example, `#define FOO 123` followed by `#define FOO ...` is not allowed.
 - In variadic macros, the parameter name must not precede the ellipsis. For example, `#define FOO(args...)` is invalid. Additionally, using `##` before `__VA_ARGS__` is not supported.
 - Null directives are disallowed. For example, a line containing only `#` is considered invalid.
 - Conditional expressions must evaluate to an integer value. If the expression is a character, string, floating-point number, function-like macro, or undefined macro, the preprocessor will report an error.
@@ -34,3 +36,5 @@ ANCPP is designed to be a modern, portable, strictly standards-compliant C prepr
 - Non-standard directives such as `#assert`, `unassert`, `#ident`, `sccs`, and `#include_next`, as well as the operator `__has_include_next()`, are not supported.
 - The rarely used `#line` directive is not supported.
 - Trigraphs (e.g., `??<`, `??>`) and digraphs (e.g., `<:`, `:>`, and `%:%:`) are not supported.
+
+These limitations are intended to make the preprocessor (and the C language) more consistent, predictable, clear, and easier to use.
