@@ -9,7 +9,7 @@ use std::fmt::Display;
 use position::Position;
 use range::Range;
 
-use crate::{location::Location, token::Token};
+use crate::{location::Location, prompt::Prompt, token::Token};
 
 mod ast;
 mod ast_printer;
@@ -18,6 +18,7 @@ mod context;
 mod definition;
 mod lexer;
 mod location;
+mod memory_file_provider;
 mod parser;
 mod peekableiter;
 mod position;
@@ -54,7 +55,7 @@ impl TokenWithLocation {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub enum PreprocessError {
     Message(String),
     UnexpectedEndOfDocument(String),
@@ -64,36 +65,7 @@ pub enum PreprocessError {
 
 impl Display for PreprocessError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            PreprocessError::Message(msg) => f.write_str(msg),
-            PreprocessError::UnexpectedEndOfDocument(message) => {
-                writeln!(
-                    f,
-                    "Unexpectedly reached the end of the document: {}.",
-                    message
-                )
-            }
-            PreprocessError::MessageWithPosition(message, position) => {
-                writeln!(
-                    f,
-                    "Error at line {}, column {}: {}.",
-                    position.line + 1,
-                    position.column + 1,
-                    message
-                )
-            }
-            PreprocessError::MessageWithRange(message, range) => {
-                writeln!(
-                    f,
-                    "Error from line {}, column {} to line {}, column {}: {}.",
-                    range.start.line + 1,
-                    range.start.column + 1,
-                    range.end_included.line + 1,
-                    range.end_included.column + 1,
-                    message
-                )
-            }
-        }
+        unimplemented!()
     }
 }
 

@@ -20,4 +20,5 @@ pub enum Prompt {
 pub enum PromptLevel {
     Info,
     Warning,
+    Forbidden,
 }

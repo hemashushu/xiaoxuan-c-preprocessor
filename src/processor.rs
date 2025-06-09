@@ -7,7 +7,8 @@
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    context::Context, file_provider::FileProvider, peekableiter::PeekableIter, prompt::Prompt, range::Range, PreprocessError, TokenWithLocation, TokenWithRange
+    PreprocessError, TokenWithLocation, TokenWithRange, context::Context, file_cache::FileCache,
+    file_provider::FileProvider, peekableiter::PeekableIter, prompt::Prompt, range::Range,
 };
 
 pub const PEEK_BUFFER_LENGTH_PREPROCESS: usize = 4;
@@ -24,19 +25,25 @@ pub const PEEK_BUFFER_LENGTH_MERGE_STRINGS: usize = 2;
 /// - `user_headers_directories`: Directories to search for module-specific headers.
 ///   These are used when resolving `#include` directives with double quotes,
 ///   e.g., `#include "relative/path/to/header.h"`.
-/// - `find_header_in_source_file_directory`: If true, also search for headers in the directory where the source file resides.
+/// - `resolve_header_file_relative_source_file`: If true, also search for headers in the directory where the source file resides.
 ///   For example, if the source file is `src/foo/bar.c` and this flag is set,
 ///   then `#include "header.h"` will look in `src/foo/`,
 ///   and `#include "../hello/world.h"` will look in `src/hello`.
 ///   otherwise, it will only search in the specified `user_headers_directories`.
-pub fn preprocess_source_file(
-    source_files: &Path,
+pub fn preprocess_source_file<T>(
+    src: &str,
+    file_canonical_path: &Path,
     file_number: usize,
-    system_headers_directories: &[&Path],
-    user_headers_directories: &[&Path],
-    find_header_in_source_file_directory: bool,
+    // system_headers_directories: &[&Path],
+    // user_headers_directories: &[&Path],
+    resolve_header_file_relative_source_file: bool,
     predefined: HashMap<String, String>,
-) -> Result<PreprocessResult, PreprocessError> {
+    file_provider: &T,
+    file_cache: &mut FileCache,
+) -> Result<PreprocessResult, PreprocessError>
+where
+    T: FileProvider,
+{
     todo!()
 
     // source_code: &str) -> Result<ModuleNode, ParserError> {
@@ -107,8 +114,8 @@ pub struct PreprocessResult {
 // - https://en.cppreference.com/w/c/language.html
 // - https://en.cppreference.com/w/c/preprocessor.html
 pub struct Preprocessor<'a, T>
-    where
-        T: 'a + FileProvider,
+where
+    T: 'a + FileProvider,
 {
     upstream: &'a mut PeekableIter<'a, TokenWithRange>,
     last_range: Range,

@@ -1021,26 +1021,26 @@ mod tests {
         assert_eq!(format("#define EMPTY"), "#define EMPTY\n");
 
         assert_eq!(
-            format("#define SQUARE(x,y) ((x)*(y))"),
-            "#define SQUARE(x, y) ( ( x ) * ( y ) )\n"
+            format("#define SQUARE(X,Y) ((X)*(Y))"),
+            "#define SQUARE(X, Y) ( ( X ) * ( Y ) )\n"
         );
 
         // Test `#`
         assert_eq!(
-            format("#define PRINT(var) (printf(\"%s = %d\", #var, var))"),
-            "#define PRINT(var) ( printf ( \"%s = %d\" , # var , var ) )\n"
+            format("#define PRINT(VAR) (printf(\"%s = %d\", #VAR, VAR))"),
+            "#define PRINT(VAR) ( printf ( \"%s = %d\" , # VAR , VAR ) )\n"
         );
 
         // Test `##`
         assert_eq!(
-            format("#define ARRAY(prefix, len) int[len] prefix ## len;"),
-            "#define ARRAY(prefix, len) int [ len ] prefix ## len ;\n"
+            format("#define ARRAY(PREFIX, LEN) int[LEN] PREFIX ## LEN;"),
+            "#define ARRAY(PREFIX, LEN) int [ LEN ] PREFIX ## LEN ;\n"
         );
 
         // Test variadic macros
         assert_eq!(
-            format("#define showlist(...) puts(__VA_ARGS__)"),
-            "#define showlist(...) puts ( __VA_ARGS__ )\n"
+            format("#define SHOW_LIST(...) puts(__VA_ARGS__)"),
+            "#define SHOW_LIST(...) puts ( __VA_ARGS__ )\n"
         );
 
         // err: missing identifier after `#define`
@@ -1656,22 +1656,4 @@ int main() {
 int main ( ) { printf ( \"Number is %d\\n\" , FOO ) ; return 0 ; }\n"
         );
     }
-
-    // #[test]
-    //     fn test_parse_error() {
-    //         // Test invalid preprocessor directive
-    //         assert!(format("#invalid_directive").contains("Invalid preprocessor directive: `#invalid_directive`."));
-    //
-    //         // Test missing identifier after `#define`
-    //         assert!(format("#define").contains("Expect an identifier after directive `#define`."));
-    //
-    //         // Test missing file path or macro name after `#include`
-    //         assert!(format("#include").contains("Expect a file path or macro name after directive `#include`."));
-    //
-    //         // Test missing file path or macro name after `#embed`
-    //         assert!(format("#embed").contains("Expect a file path or macro name after directive `#embed`."));
-    //
-    //         // Test missing condition after `#if`
-    //         assert!(format("#if").contains("Expect a condition after directive `#if`."));
-    //     }
 }

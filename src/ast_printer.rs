@@ -360,10 +360,11 @@ mod tests {
 
         let define_function_like = Define::FunctionLike {
             name: "SQUARE".to_string(),
-            parameters: vec!["x".to_string(), "y".to_string()],
+            parameters: vec!["X".to_string(), "Y".to_string()],
             definition: vec![
+                // omit lots of parentheses for simplicity
                 TokenWithRange {
-                    token: Token::Identifier("x".to_string()),
+                    token: Token::Identifier("X".to_string()),
                     range: Range::default(),
                 },
                 TokenWithRange {
@@ -371,7 +372,7 @@ mod tests {
                     range: Range::default(),
                 },
                 TokenWithRange {
-                    token: Token::Identifier("y".to_string()),
+                    token: Token::Identifier("Y".to_string()),
                     range: Range::default(),
                 },
             ],
@@ -381,7 +382,7 @@ mod tests {
         print_define(&mut output_function_like, &define_function_like, 0).unwrap();
         assert_eq!(
             String::from_utf8(output_function_like).unwrap(),
-            "#define SQUARE(x, y) x * y\n"
+            "#define SQUARE(X, Y) X * Y\n"
         );
     }
 
