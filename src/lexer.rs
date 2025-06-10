@@ -8,8 +8,8 @@ use std::char;
 
 use crate::{
     PreprocessError, TokenWithRange,
-    charwithposition::{CharWithPosition, CharsWithPositionIter},
-    peekableiter::PeekableIter,
+    char_with_position::{CharWithPosition, CharsWithPositionIter},
+    peekable_iter::PeekableIter,
     position::Position,
     range::Range,
     token::{
@@ -2527,12 +2527,12 @@ mod tests {
 
     use crate::{
         PreprocessError, TokenWithRange,
-        charwithposition::{CharWithPosition, CharsWithPositionIter},
+        char_with_position::{CharWithPosition, CharsWithPositionIter},
         lexer::{
             PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS,
             PEEK_BUFFER_LENGTH_REMOVE_SHEBANG, pre_lex,
         },
-        peekableiter::PeekableIter,
+        peekable_iter::PeekableIter,
         position::Position,
         range::Range,
         token::{

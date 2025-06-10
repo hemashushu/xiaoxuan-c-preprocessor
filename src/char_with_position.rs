@@ -72,7 +72,7 @@ impl Iterator for CharsWithPositionIter<'_> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        charwithposition::{CharWithPosition, CharsWithPositionIter},
+        char_with_position::{CharWithPosition, CharsWithPositionIter},
         position::Position,
     };
 

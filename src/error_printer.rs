@@ -337,22 +337,16 @@ mod tests {
         // range at the first character
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(0, 17, 19, 4)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(0, 17, 19, 4))
+                .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
 | ^^^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(0, 17, 19, 8)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(0, 17, 19, 8))
+                .with_source(source2),
             r#"Error at line: 18, column: 20
 | 012345678_b12345678_c12345678_d12345678_...
 | ^^^^^^^^___ abcde"#
@@ -361,22 +355,16 @@ mod tests {
         // range at the head
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(2, 17, 19, 4)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(2, 17, 19, 4))
+                .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
 |   ^^^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(15, 17, 19, 8)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(15, 17, 19, 8))
+                .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
 |         ^^^^^^^^___ abcde"#
@@ -385,22 +373,16 @@ mod tests {
         // range at the body
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(5, 17, 19, 4)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(5, 17, 19, 4))
+                .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
 |      ^^^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(25, 17, 19, 8)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(25, 17, 19, 8))
+                .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
 |                   ^^^^^^^^___ abcde"#
@@ -409,22 +391,16 @@ mod tests {
         // range at the tail
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(8, 17, 19, 4)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(8, 17, 19, 4))
+                .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
 |         ^^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(45, 17, 19, 8)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(45, 17, 19, 8))
+                .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
 |                                       ^^^^^___ abcde"#
@@ -433,22 +409,16 @@ mod tests {
         // range at the last character
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(10, 17, 19, 4)
-            )
-            .with_source(source1),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(10, 17, 19, 4))
+                .with_source(source1),
             r#"Error at line: 18, column: 20
 | 0123456789
 |           ^___ abcde"#
         );
 
         assert_eq!(
-            PreprocessError::MessageWithRange(
-                msg.to_owned(),
-                Range::from_detail(50, 17, 19, 8)
-            )
-            .with_source(source2),
+            PreprocessError::MessageWithRange(msg.to_owned(), Range::from_detail(50, 17, 19, 8))
+                .with_source(source2),
             r#"Error at line: 18, column: 20
 | ...b12345678_c12345678_d12345678_e123456789
 |                                            ^___ abcde"#

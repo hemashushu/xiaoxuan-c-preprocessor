@@ -23,9 +23,11 @@ impl Definition {
         }
     }
 
-    pub fn from_keyvalues(kvps: HashMap<String, String>) -> Result<Self, PreprocessError> {
+    pub fn from_keyvalues(
+        predefinitions: &HashMap<String, String>,
+    ) -> Result<Self, PreprocessError> {
         let mut items = HashMap::new();
-        for (key, value) in &kvps {
+        for (key, value) in predefinitions {
             // Tokenize the value and create TokenWithLocation instances.
             let tokens = lex_from_str(value)?;
             let token_with_locations: Vec<TokenWithLocation> = tokens

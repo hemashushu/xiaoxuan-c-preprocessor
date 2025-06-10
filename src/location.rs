@@ -19,6 +19,17 @@ impl Location {
             range: *range,
         }
     }
+
+    pub fn from_detail(
+        file_number: usize,
+        index: usize,
+        line: usize,
+        column: usize,
+        length: usize,
+    ) -> Self {
+        let range = Range::from_detail(index, line, column, length);
+        Self { file_number, range }
+    }
 }
 
 impl Default for Location {

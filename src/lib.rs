@@ -4,7 +4,7 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use std::fmt::Display;
+use std::{fmt::Display, path::PathBuf};
 
 use position::Position;
 use range::Range;
@@ -13,22 +13,23 @@ use crate::{location::Location, prompt::Prompt, token::Token};
 
 mod ast;
 mod ast_printer;
-mod charwithposition;
+mod char_with_position;
 mod context;
 mod definition;
 mod lexer;
 mod location;
 mod memory_file_provider;
 mod parser;
-mod peekableiter;
+mod peekable_iter;
 mod position;
 mod range;
 mod token;
 
-pub mod errorprinter;
+pub mod error_printer;
 pub mod file_cache;
 pub mod file_provider;
-pub mod processor;
+pub mod native_file_provider;
+pub mod preprocessor;
 pub mod prompt;
 
 #[derive(Debug, PartialEq)]

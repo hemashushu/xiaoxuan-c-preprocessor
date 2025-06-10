@@ -137,7 +137,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::peekableiter::PeekableIter;
+    use crate::peekable_iter::PeekableIter;
 
     #[test]
     fn test_peekable_iter() {

@@ -118,19 +118,15 @@ impl FileProvider for MemoryFileProvider {
 /// Canonicalizes a given path without checking the real file system.
 ///
 /// This function normalizes the path by resolving components like `.` and `..`,
-/// and returns a new `PathBuf` with the normalized path.
+/// but does not resolve symbolic links or check if the path exists on the file system.
+/// Returns a new `PathBuf` with the normalized path.
 pub fn normalize_path(path: &Path) -> PathBuf {
-    let mut components = path.components().peekable();
-    let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
-        components.next();
-        PathBuf::from(c.as_os_str())
-    } else {
-        PathBuf::new()
-    };
+    let mut ret = PathBuf::new();
 
+    let components = path.components();
     for component in components {
         match component {
-            Component::Prefix(..) => unreachable!(),
+            Component::Prefix(..) => unimplemented!(),
             Component::RootDir => {
                 ret.push(component.as_os_str());
             }
@@ -163,6 +159,7 @@ mod tests {
         provider.add_user_file(Path::new("header/bar.h"), "HEADER_BAR_H");
         provider.add_user_file(Path::new("header/folder/buz.h"), "HEADER_FOLDER_BUZ_H");
         provider.add_system_file(Path::new("stdio.h"), "STDIO_H");
+        provider.add_system_file(Path::new("elf.h"), "ELF_H");
 
         // Test loading files
         assert_eq!(
@@ -242,6 +239,44 @@ mod tests {
                 Path::new("/projects/test/header/folder/buz.h")
             ),
             Some(PathBuf::from("/projects/test/header/foo.h"))
+        );
+
+        // Test user file resolution with fallback
+        assert_eq!(
+            provider.resolve_user_file_with_fallback(
+                Path::new("elf.h"),
+                Path::new("/projects/test/src/main.c"),
+                true
+            ),
+            Some(PathBuf::from("/usr/include/elf.h"))
+        );
+
+        // Test non-existent file resolution
+        assert_eq!(
+            provider.resolve_user_file(Path::new("non_existent.h")),
+            None
+        );
+
+        assert_eq!(
+            provider.resolve_system_file(Path::new("non_existent.h")),
+            None
+        );
+
+        assert_eq!(
+            provider.resolve_relative_file(
+                Path::new("non_existent.h"),
+                Path::new("/projects/test/src/main.c")
+            ),
+            None
+        );
+
+        assert_eq!(
+            provider.resolve_user_file_with_fallback(
+                Path::new("non_existent.h"),
+                Path::new("/projects/test/src/main.c"),
+                true
+            ),
+            None
         );
     }
 }

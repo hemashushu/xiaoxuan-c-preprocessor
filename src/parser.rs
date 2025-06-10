@@ -8,7 +8,7 @@ use crate::{
     PreprocessError, TokenWithRange,
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     lexer::lex_from_str,
-    peekableiter::PeekableIter,
+    peekable_iter::PeekableIter,
     range::Range,
     token::{Number, Punctuator, StringType, Token},
 };
@@ -477,24 +477,98 @@ impl Parser<'_> {
             Ok(parameters)
         };
 
-        let parse_definition = |parser: &mut Parser| -> Vec<TokenWithRange> {
-            // Move all tokens to `definition` until we hit a newline or EOF.
-            // Note that empty definitions are allowed, e.g., `#define FOO`.
-            let mut definition = vec![];
-            while let Some(token) = parser.peek_token(0) {
-                match token {
-                    Token::Newline => {
-                        break;
-                    }
-                    _ => {
-                        let token_with_range = parser.upstream.next().unwrap();
-                        definition.push(token_with_range);
+        let parse_balanced_definition =
+            |parser: &mut Parser| -> Result<Vec<TokenWithRange>, PreprocessError> {
+                // for collecting balanced brackets
+                // e.g., `(...)`, `[...]`, `{...}`, etc.
+                // when this stack is empty, it means we are in a balanced state.
+                let mut bracket_stack: Vec<Punctuator> = vec![];
+
+                // Move all tokens to `tokens` until we hit a newline or EOF.
+                // Note that empty definitions are allowed, e.g., `#define FOO`.
+                let mut tokens = vec![];
+                loop {
+                    if let Some(token) = parser.peek_token(0) {
+                        match token {
+                            Token::Newline => {
+                                if bracket_stack.is_empty() {
+                                    break; // stop collecting tokens
+                                } else {
+                                    return Err(PreprocessError::MessageWithPosition(
+                                        "Unbalanced brackets in macro definition.".to_owned(),
+                                        parser.peek_range(0).unwrap().start,
+                                    ));
+                                }
+                            }
+                            Token::Punctuator(
+                                opening @ (Punctuator::ParenthesisOpen
+                                | Punctuator::BraceOpen
+                                | Punctuator::BracketOpen),
+                            ) => {
+                                // If we encounter an opening bracket, we push it onto the stack.
+                                bracket_stack.push(*opening);
+
+                                let token_with_range = parser.upstream.next().unwrap();
+                                tokens.push(token_with_range);
+                            }
+                            Token::Punctuator(Punctuator::ParenthesisClose) => {
+                                if matches!(bracket_stack.last(), Some(Punctuator::ParenthesisOpen))
+                                {
+                                    bracket_stack.pop();
+                                } else {
+                                    return Err(PreprocessError::MessageWithPosition(
+                                        "Unbalanced parentheses in token sequence.".to_owned(),
+                                        parser.peek_range(0).unwrap().start,
+                                    ));
+                                }
+
+                                let token_with_range = parser.upstream.next().unwrap();
+                                tokens.push(token_with_range);
+                            }
+                            Token::Punctuator(Punctuator::BraceClose) => {
+                                if matches!(bracket_stack.last(), Some(Punctuator::BraceOpen)) {
+                                    bracket_stack.pop();
+                                } else {
+                                    return Err(PreprocessError::MessageWithPosition(
+                                        "Unbalanced braces in token sequence.".to_owned(),
+                                        parser.peek_range(0).unwrap().start,
+                                    ));
+                                }
+
+                                let token_with_range = parser.upstream.next().unwrap();
+                                tokens.push(token_with_range);
+                            }
+                            Token::Punctuator(Punctuator::BracketClose) => {
+                                if matches!(bracket_stack.last(), Some(Punctuator::BracketOpen)) {
+                                    bracket_stack.pop();
+                                } else {
+                                    return Err(PreprocessError::MessageWithPosition(
+                                        "Unbalanced brackets in token sequence.".to_owned(),
+                                        parser.peek_range(0).unwrap().start,
+                                    ));
+                                }
+
+                                let token_with_range = parser.upstream.next().unwrap();
+                                tokens.push(token_with_range);
+                            }
+                            _ => {
+                                let token_with_range = parser.upstream.next().unwrap();
+                                tokens.push(token_with_range);
+                            }
+                        }
+                    } else {
+                        if bracket_stack.is_empty() {
+                            break; // stop collecting tokens
+                        } else {
+                            return Err(PreprocessError::UnexpectedEndOfDocument(
+                                "Unbalanced brackets in macro definition.".to_owned(),
+                            ));
+                        }
                     }
                 }
-            }
 
-            definition
-        };
+                Ok(tokens)
+            };
 
         let define = match self.peek_token(0) {
             Some(Token::Identifier(id)) => {
@@ -502,7 +576,7 @@ impl Parser<'_> {
                 let name = id.clone();
                 self.next_token(); // consume the identifier token
 
-                let definition = parse_definition(self);
+                let definition = parse_balanced_definition(self)?;
                 Define::ObjectLike { name, definition }
             }
             Some(Token::FunctionLikeMacroIdentifier(id)) => {
@@ -511,7 +585,7 @@ impl Parser<'_> {
                 self.next_token(); // consume the identifier token
 
                 let parameters = parse_parameters(self)?;
-                let definition = parse_definition(self);
+                let definition = parse_balanced_definition(self)?;
                 Define::FunctionLike {
                     name,
                     parameters,
@@ -609,6 +683,7 @@ impl Parser<'_> {
                 // when this stack is empty, it means we are in a balanced state.
                 let mut bracket_stack: Vec<Punctuator> = vec![];
 
+                // Move all tokens to `tokens` until we hit a closing parenthesis.
                 let mut tokens = vec![];
                 while let Some(token) = parser.peek_token(0) {
                     match token {
@@ -633,7 +708,7 @@ impl Parser<'_> {
                                 bracket_stack.pop();
                             } else {
                                 return Err(PreprocessError::MessageWithPosition(
-                                    "Unbalanced brackets in token sequence.".to_owned(),
+                                    "Unbalanced parentheses in token sequence.".to_owned(),
                                     parser.peek_range(0).unwrap().start,
                                 ));
                             }
@@ -646,7 +721,7 @@ impl Parser<'_> {
                                 bracket_stack.pop();
                             } else {
                                 return Err(PreprocessError::MessageWithPosition(
-                                    "Unbalanced brackets in token sequence.".to_owned(),
+                                    "Unbalanced braces in token sequence.".to_owned(),
                                     parser.peek_range(0).unwrap().start,
                                 ));
                             }
@@ -1065,6 +1140,64 @@ mod tests {
                     index: 8,
                     line: 0,
                     column: 8
+                }
+            ))
+        ));
+
+        // err: unbalanced parentheses in definition
+        assert!(matches!(
+            parse_from_str("#define FOO for ("),
+            Err(PreprocessError::UnexpectedEndOfDocument(_))
+        ));
+
+        // err: unbalanced parentheses in definition
+        assert!(matches!(
+            parse_from_str("#define FOO for (\n"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 17,
+                    line: 0,
+                    column: 17
+                }
+            ))
+        ));
+
+        // err: unbalanced parentheses in definition
+        assert!(matches!(
+            parse_from_str("#define FOO for (;;){\n"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 21,
+                    line: 0,
+                    column: 21
+                }
+            ))
+        ));
+
+        // err: unbalanced brace in definition
+        assert!(matches!(
+            parse_from_str("#define FOO {a)\n"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 14,
+                    line: 0,
+                    column: 14
+                }
+            ))
+        ));
+
+        // err: unbalanced bracket in definition
+        assert!(matches!(
+            parse_from_str("#define FOO [a)\n"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 14,
+                    line: 0,
+                    column: 14
                 }
             ))
         ));

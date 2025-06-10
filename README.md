@@ -27,8 +27,9 @@ ANCPP is designed to be a modern, portable, strictly standards-compliant C prepr
 
 - A macro cannot be redefined unless it is first undefined. For example, `#define FOO 123` followed by another `#define FOO ...` is not allowed. Some preprocessors allow redefining a macro if the new definition is identical, but ANCPP does not support this behavior.
 - Undefining a macro that does not exist is not allowed.
-- Each file is included only once, even if it does not have header guards.
 - Omitting arguments in macro invocations is not allowed. For example, `FOO(1,,3)` is invalid.
+- Macro definitions must have balanced brackets. For example, `#define FOO [` is invalid.
+- Macro invocation arguments are limited to identifiers, string literals, character constants, and integer constants. For example, `FOO(1+2)` is invalid.
 - In variadic macros, the parameter name must not precede the ellipsis. For example, `#define FOO(args...)` is invalid. Additionally, using `##` before `__VA_ARGS__` is not supported.
 - Null directives are disallowed. For example, a line containing only `#` is considered invalid.
 - Conditional expressions must evaluate to an integer value. If the expression is a character, string, floating-point number, function-like macro, or undefined macro, the preprocessor will report an error.
@@ -36,5 +37,6 @@ ANCPP is designed to be a modern, portable, strictly standards-compliant C prepr
 - Non-standard directives such as `#assert`, `unassert`, `#ident`, `sccs`, and `#include_next`, as well as the operator `__has_include_next()`, are not supported.
 - The rarely used `#line` directive is not supported.
 - Trigraphs (e.g., `??<`, `??>`) and digraphs (e.g., `<:`, `:>`, and `%:%:`) are not supported.
+- Each file is included only once, even if it does not have header guards.
 
-These limitations are intended to make the preprocessor (and the C language) more consistent, predictable, clear, and easier to use.
+These limitations are intended to make the preprocessor more consistent, predictable, and clear, while reducing the likelihood of errors in C code.
