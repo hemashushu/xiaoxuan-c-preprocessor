@@ -9,14 +9,14 @@ use crate::{
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     lexer::lex_from_str,
     peekable_iter::PeekableIter,
-    range::Range,
+    range::{self, Range},
     token::{Number, Punctuator, StringType, Token},
 };
 
-pub const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
+const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
 
-pub fn parse_from_str(source_code: &str) -> Result<Program, PreprocessError> {
-    let tokens = lex_from_str(source_code)?;
+pub fn parse_from_str(source_text: &str) -> Result<Program, PreprocessError> {
+    let tokens = lex_from_str(source_text)?;
     let mut token_iter = tokens.into_iter();
     let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_PARSER);
     let mut parser = Parser::new(&mut peekable_token_iter);
@@ -302,17 +302,21 @@ impl Parser<'_> {
                                     // Handle error directive.
                                     self.next_token(); // consumes 'error'
                                     let (error_message, _) = self.expect_and_consume_string()?;
+                                    let range = self.last_range;
+
                                     self.expect_and_consume_newline_or_eof()?;
 
-                                    Statement::Error(error_message)
+                                    Statement::Error(error_message, range)
                                 }
                                 "warning" => {
                                     // Handle warning directive.
                                     self.next_token(); // consumes 'warning'
                                     let (warning_message, _) = self.expect_and_consume_string()?;
+                                    let range = self.last_range;
+
                                     self.expect_and_consume_newline_or_eof()?;
 
-                                    Statement::Warning(warning_message)
+                                    Statement::Warning(warning_message, range)
                                 }
 
                                 "line" | "ident" | "sccs" | "assert" | "unassert"
@@ -574,20 +578,25 @@ impl Parser<'_> {
             Some(Token::Identifier(id)) => {
                 // Handle object-like macro definition
                 let name = id.clone();
+                let range = *self.peek_range(0).unwrap();
                 self.next_token(); // consume the identifier token
 
                 let definition = parse_balanced_definition(self)?;
-                Define::ObjectLike { name, definition }
+                Define::ObjectLike {
+                    identifier: (name, range),
+                    definition,
+                }
             }
             Some(Token::FunctionLikeMacroIdentifier(id)) => {
                 // Handle function-like macro definition
                 let name = id.clone();
+                let range = *self.peek_range(0).unwrap();
                 self.next_token(); // consume the identifier token
 
                 let parameters = parse_parameters(self)?;
                 let definition = parse_balanced_definition(self)?;
                 Define::FunctionLike {
-                    name,
+                    identifier: (name, range),
                     parameters,
                     definition,
                 }
@@ -1039,7 +1048,11 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        PreprocessError, ast_printer::print_to_string, parser::parse_from_str, position::Position,
+        PreprocessError,
+        ast::{Program, Statement},
+        ast_printer::print_to_string,
+        parser::parse_from_str,
+        position::Position,
         range::Range,
     };
 
@@ -1681,7 +1694,15 @@ mod tests {
 
     #[test]
     fn test_parse_error() {
-        assert_eq!(format("#error \"foo bar\""), "#error \"foo bar\"\n");
+        assert_eq!(
+            parse_from_str("#error \"foobar\"").unwrap(),
+            Program {
+                statements: vec![Statement::Error(
+                    "foobar".to_owned(),
+                    Range::from_detail(7, 0, 7, 8)
+                )],
+            }
+        );
 
         // err: missing error message after `#error`
         assert!(matches!(
@@ -1712,7 +1733,15 @@ mod tests {
 
     #[test]
     fn test_parse_warning() {
-        assert_eq!(format("#warning \"foo bar\""), "#warning \"foo bar\"\n");
+        assert_eq!(
+            parse_from_str("#warning \"foobar\"").unwrap(),
+            Program {
+                statements: vec![Statement::Warning(
+                    "foobar".to_owned(),
+                    Range::from_detail(9, 0, 9, 8)
+                )],
+            }
+        );
 
         // err: missing warning message after `#warning`
         assert!(matches!(

@@ -32,7 +32,7 @@ pub mod native_file_provider;
 pub mod preprocessor;
 pub mod prompt;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct TokenWithRange {
     pub token: Token,
     pub range: Range,
@@ -44,7 +44,7 @@ impl TokenWithRange {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct TokenWithLocation {
     pub token: Token,
     pub location: Location,
@@ -71,3 +71,23 @@ impl Display for PreprocessError {
 }
 
 impl std::error::Error for PreprocessError {}
+
+#[derive(Debug, PartialEq)]
+pub struct PreprocessFileError {
+    pub file_number: usize,
+    pub error: PreprocessError,
+}
+
+impl PreprocessFileError {
+    pub fn new(file_number: usize, error: PreprocessError) -> Self {
+        Self { file_number, error }
+    }
+}
+
+impl Display for PreprocessFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        unimplemented!()
+    }
+}
+
+impl std::error::Error for PreprocessFileError {}

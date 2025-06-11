@@ -53,7 +53,10 @@ fn print_define<W: Write>(
     let indent = DEFAULT_INDENT_CHARS.repeat(indent_level);
 
     match define {
-        Define::ObjectLike { name, definition } => {
+        Define::ObjectLike {
+            identifier: (name, _),
+            definition,
+        } => {
             if definition.is_empty() {
                 writeln!(writer, "{}#define {}", indent, name)
             } else {
@@ -67,7 +70,7 @@ fn print_define<W: Write>(
             }
         }
         Define::FunctionLike {
-            name,
+            identifier: (name, _),
             parameters,
             definition,
         } => {
@@ -255,10 +258,10 @@ fn print_statement<W: Write>(
         Statement::Include(include) => print_include(writer, include, indent_level),
         Statement::Embed(embed) => print_embed(writer, embed, indent_level),
         Statement::If(if_) => print_if(writer, if_, indent_level),
-        Statement::Error(msg) => {
+        Statement::Error(msg, _) => {
             writeln!(writer, "{}#error \"{}\"", indent, msg)
         }
-        Statement::Warning(msg) => {
+        Statement::Warning(msg, _) => {
             writeln!(writer, "{}#warning \"{}\"", indent, msg)
         }
         Statement::Code(code) => print_code(writer, code, indent_level),
@@ -330,7 +333,7 @@ mod tests {
         // Test for an object-like macro
 
         let define = Define::ObjectLike {
-            name: "MAX".to_string(),
+            identifier: ("MAX".to_string(), Range::default()),
             definition: vec![TokenWithRange {
                 token: Token::Number(Number::Integer(IntegerNumber::new(
                     "100".to_string(),
@@ -348,7 +351,7 @@ mod tests {
         // Test for an empty object-like macro
 
         let define_empty = Define::ObjectLike {
-            name: "EMPTY".to_string(),
+            identifier: ("EMPTY".to_string(), Range::default()),
             definition: vec![],
         };
 
@@ -359,7 +362,7 @@ mod tests {
         // Test for a function-like macro
 
         let define_function_like = Define::FunctionLike {
-            name: "SQUARE".to_string(),
+            identifier: ("SQUARE".to_string(), Range::default()),
             parameters: vec!["X".to_string(), "Y".to_string()],
             definition: vec![
                 // omit lots of parentheses for simplicity
@@ -726,7 +729,7 @@ mod tests {
     #[test]
     fn test_print_error() {
         let msg = "This is an error message";
-        let statement = Statement::Error(msg.to_string());
+        let statement = Statement::Error(msg.to_string(), Range::default());
 
         let mut output = Vec::new();
         print_statement(&mut output, &statement, 0).unwrap();
@@ -739,7 +742,7 @@ mod tests {
     #[test]
     fn test_print_warning() {
         let msg = "This is a warning message";
-        let statement = Statement::Warning(msg.to_string());
+        let statement = Statement::Warning(msg.to_string(), Range::default());
 
         let mut output = Vec::new();
         print_statement(&mut output, &statement, 0).unwrap();
@@ -793,7 +796,7 @@ mod tests {
                     ],
                 }),
                 Statement::Define(Define::ObjectLike {
-                    name: "MAX".to_string(),
+                    identifier: ("MAX".to_string(), Range::default()),
                     definition: vec![TokenWithRange {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "100".to_string(),
@@ -851,7 +854,7 @@ mod tests {
                     }],
                 }),
                 Statement::Define(Define::ObjectLike {
-                    name: "MAX".to_string(),
+                    identifier: ("MAX".to_string(), Range::default()),
                     definition: vec![TokenWithRange {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "100".to_string(),

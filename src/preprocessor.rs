@@ -4,25 +4,20 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    thread::LocalKey,
-};
+use std::{collections::HashMap, path::Path};
 
 use crate::{
-    PreprocessError, TokenWithLocation, TokenWithRange,
-    ast::{Program, Statement},
-    context::{self, Context},
+    PreprocessError, PreprocessFileError, TokenWithLocation, TokenWithRange,
+    ast::{Define, Pragma, Program, Statement},
+    context::Context,
+    definition,
     file_cache::FileCache,
     file_provider::FileProvider,
-    lexer::lex_from_str,
     location::Location,
     parser::parse_from_str,
-    peekable_iter::PeekableIter,
     prompt::Prompt,
     range::Range,
-    token::{self, Token},
+    token::{StandardPragma, StandardPragmaValue, Token},
 };
 
 pub const PEEK_BUFFER_LENGTH_PREPROCESS: usize = 4;
@@ -60,21 +55,34 @@ pub fn preprocess_source_file<T>(
     predefinitions: &HashMap<String, String>,
     file_provider: &T,
     file_cache: &mut FileCache,
-) -> Result<PreprocessResult, PreprocessError>
+) -> Result<PreprocessResult, PreprocessFileError>
 where
     T: FileProvider,
 {
-    let src = file_provider.load_file(file_canonical_path).map_err(|e| {
-        PreprocessError::Message(format!(
-            "Failed to load file '{}': {}",
-            file_canonical_path.to_string_lossy(),
-            e
-        ))
-    })?;
+    let src = file_provider
+        .load_file(file_canonical_path)
+        .map_err(|error| {
+            PreprocessFileError::new(
+                file_number,
+                PreprocessError::Message(format!(
+                    "Failed to load file '{}': {}",
+                    file_canonical_path.to_string_lossy(),
+                    error
+                )),
+            )
+        })?;
 
-    let program = parse_from_str(&src)?;
-    let mut context =
-        Context::from_keyvalues(file_number, file_provider, file_cache, predefinitions)?;
+    let program =
+        parse_from_str(&src).map_err(|error| PreprocessFileError::new(file_number, error))?;
+
+    let mut context = Context::from_keyvalues(
+        file_number,
+        file_canonical_path,
+        file_provider,
+        file_cache,
+        predefinitions,
+    )
+    .map_err(|error| PreprocessFileError { file_number, error })?;
 
     preprocess_program(&mut context, &program)?;
 
@@ -92,20 +100,23 @@ pub struct PreprocessResult {
     pub prompts: Vec<Prompt>,
 }
 
-fn preprocess_program<T>(context: &mut Context<T>, program: &Program) -> Result<(), PreprocessError>
+fn preprocess_program<T>(
+    context: &mut Context<T>,
+    program: &Program,
+) -> Result<(), PreprocessFileError>
 where
     T: FileProvider,
 {
     for statement in &program.statements {
         match statement {
-            Statement::Pragma(pragma) => todo!(),
-            Statement::Define(define) => todo!(),
-            Statement::Undef(_, range) => todo!(),
+            Statement::Pragma(pragma) => preprocess_pragma(context, pragma)?,
+            Statement::Define(define) => preprocess_define(context, define)?,
+            Statement::Undef(identifier, range) => preprocess_undefine(context, identifier, range)?,
             Statement::Include(include) => todo!(),
             Statement::Embed(embed) => todo!(),
             Statement::If(_) => todo!(),
-            Statement::Error(_) => todo!(),
-            Statement::Warning(_) => todo!(),
+            Statement::Error(msg, range) => todo!(),
+            Statement::Warning(msg, range) => todo!(),
             Statement::Code(token_with_ranges) => preprocess_code(context, token_with_ranges)?,
         }
     }
@@ -113,27 +124,229 @@ where
     Ok(())
 }
 
-fn preprocess_code<T>(
+fn preprocess_pragma<T>(
     context: &mut Context<T>,
-    token_with_ranges: &[TokenWithRange],
-) -> Result<(), PreprocessError>
+    pragma: &Pragma,
+) -> Result<(), PreprocessFileError>
 where
     T: FileProvider,
 {
-    for token_with_range in token_with_ranges {
-        match &token_with_range.token {
-            Token::Identifier(_) => {
-                // Handle identifiers, possibly as macros.
-                context.tokens.push(TokenWithLocation::new(
-                    token_with_range.token.clone(),
-                    Location::new(context.current_file_number, &token_with_range.range),
-                ));
+    // Supported pragmas are:
+    // - `#pragma once`: Include guard to prevent multiple inclusions of the same file.
+    // - `#pragma STDC FENV_ACCESS arg`: Where arg is either ON or OFF or DEFAULT
+    // - `#pragma STDC FP_CONTRACT arg`
+    // - `#pragma STDC CX_LIMITED_RANGE arg`
+
+    let parse_pragma_argument_value = |s: &str| -> StandardPragmaValue {
+        match s.to_uppercase().as_str() {
+            "DEFAULT" => StandardPragmaValue::Default,
+            "ON" => StandardPragmaValue::On,
+            "OFF" => StandardPragmaValue::Off,
+            _ => unreachable!(),
+        }
+    };
+
+    let mut iter = pragma.parts.iter();
+
+    match iter.next().unwrap() {
+        TokenWithRange {
+            token: Token::Identifier(name),
+            range: name_range,
+        } => {
+            // Handle pragmas based on their identifier.
+            match name.as_str() {
+                "once" => {
+                    // Handle `#pragma once` directive.
+                    // do nothing since ANCC always includes files only once.
+                    Ok(())
+                }
+                "STDC" => {
+                    // Handle standard pragmas.
+                    // Only `FENV_ACCESS`, `FP_CONTRACT`, and `CX_LIMITED_RANGE` are supported.
+                    match iter.next() {
+                        Some(TokenWithRange {
+                            token: Token::Identifier(arg),
+                            range: arg_range,
+                        }) if arg == "FENV_ACCESS"
+                            || arg == "FP_CONTRACT"
+                            || arg == "CX_LIMITED_RANGE" =>
+                        {
+                            // Handle arguments for the pragma.
+                            // The arg can be ON, OFF, or DEFAULT.
+                            match iter.next() {
+                                Some(TokenWithRange {
+                                    token: Token::Identifier(value),
+                                    range: _,
+                                }) if value == "ON" || value == "OFF" || value == "DEFAULT" => {
+                                    match iter.next() {
+                                        Some(TokenWithRange {
+                                            token: _,
+                                            range: extraneous_range,
+                                        }) => Err(PreprocessFileError {
+                                            file_number: context.current_file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "Extraneous parameter.".to_owned(),
+                                                *extraneous_range,
+                                            ),
+                                        }),
+                                        None => {
+                                            let value = parse_pragma_argument_value(value);
+                                            let standard_pragma = match arg.to_uppercase().as_str()
+                                            {
+                                                "FENV_ACCESS" => StandardPragma::FenvAccess(value),
+                                                "FP_CONTRACT" => StandardPragma::FPContract(value),
+                                                "CX_LIMITED_RANGE" => {
+                                                    StandardPragma::CxLimitedRange(value)
+                                                }
+                                                _ => unreachable!(),
+                                            };
+
+                                            context.tokens.push(TokenWithLocation::new(
+                                                Token::Pragma(standard_pragma),
+                                                Location::new(
+                                                    context.current_file_number,
+                                                    name_range,
+                                                ),
+                                            ));
+                                            Ok(())
+                                        }
+                                    }
+                                }
+                                _ => Err(PreprocessFileError {
+                                    file_number: context.current_file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        format!("Expected ON, OFF, or DEFAULT after {}", arg),
+                                        *arg_range,
+                                    ),
+                                }),
+                            }
+                        }
+                        _ => Err(PreprocessFileError {
+                            file_number: context.current_file_number,
+                            error: PreprocessError::MessageWithRange(
+                                format!(
+                                    "Expected FENV_ACCESS, FP_CONTRACT, or CX_LIMITED_RANGE after STDC"
+                                ),
+                                *name_range,
+                            ),
+                        }),
+                    }
+                }
+                _ => Err(PreprocessFileError {
+                    file_number: context.current_file_number,
+                    error: PreprocessError::MessageWithRange(
+                        format!("Unsupported pragma: {}", name),
+                        *name_range,
+                    ),
+                }),
             }
-            _ => {
-                context.tokens.push(TokenWithLocation::new(
-                    token_with_range.token.clone(),
-                    Location::new(context.current_file_number, &token_with_range.range),
-                ));
+        }
+        TokenWithRange {
+            token: _,
+            range: invalid_range,
+        } => Err(PreprocessFileError {
+            file_number: context.current_file_number,
+            error: PreprocessError::MessageWithRange(
+                "Directive `#pragma` should be followed by an identifier".to_string(),
+                *invalid_range,
+            ),
+        }),
+    }
+}
+
+fn preprocess_code<T>(
+    context: &mut Context<T>,
+    token_with_ranges: &[TokenWithRange],
+) -> Result<(), PreprocessFileError>
+where
+    T: FileProvider,
+{
+    let tokens = token_with_ranges
+        .iter()
+        .map(|token_with_range| {
+            TokenWithLocation::new(
+                token_with_range.token.clone(),
+                Location::new(context.current_file_number, &token_with_range.range),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let expanded_tokens = expand_marco(context, tokens)?;
+    context.tokens.extend(expanded_tokens);
+    Ok(())
+}
+
+fn preprocess_define<T>(
+    context: &mut Context<T>,
+    define: &Define,
+) -> Result<(), PreprocessFileError>
+where
+    T: FileProvider,
+{
+    match define {
+        Define::ObjectLike {
+            identifier: (name, range),
+            definition,
+        } => {
+            if name == "defined" {
+                return Err(PreprocessFileError {
+                    file_number: context.current_file_number,
+                    error: PreprocessError::MessageWithRange(
+                        "The identifier 'defined' cannot be used as a macro name.".to_string(),
+                        *range,
+                    ),
+                });
+            }
+
+            let result = context
+                .definition
+                .add_object_like(context.current_file_number, name, definition)
+                .map_err(|error| PreprocessFileError {
+                    file_number: context.current_file_number,
+                    error,
+                })?;
+
+            if !result {
+                return Err(PreprocessFileError {
+                    file_number: context.current_file_number,
+                    error: PreprocessError::MessageWithRange(
+                        format!("Macro '{}' is already defined.", name),
+                        *range,
+                    ),
+                });
+            }
+        }
+        Define::FunctionLike {
+            identifier: (name, range),
+            parameters,
+            definition,
+        } => {
+            if name == "defined" {
+                return Err(PreprocessFileError {
+                    file_number: context.current_file_number,
+                    error: PreprocessError::MessageWithRange(
+                        "The identifier 'defined' cannot be used as a macro name.".to_string(),
+                        *range,
+                    ),
+                });
+            }
+
+            let result = context
+                .definition
+                .add_function_like(context.current_file_number, name, parameters, definition)
+                .map_err(|error| PreprocessFileError {
+                    file_number: context.current_file_number,
+                    error,
+                })?;
+
+            if !result {
+                return Err(PreprocessFileError {
+                    file_number: context.current_file_number,
+                    error: PreprocessError::MessageWithRange(
+                        format!("Macro '{}' is already defined.", name),
+                        *range,
+                    ),
+                });
             }
         }
     }
@@ -141,59 +354,87 @@ where
     Ok(())
 }
 
-// concatenate adjacent string literals
-// Note that only two string literals have identical encoding prefixes can be concatenated.
-// see:
-// - https://en.cppreference.com/w/c/language/string_literal.html
-//
-// fn concatenate_adjacent_strings(source_code: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
-//     // merges continuous strings.
-//     let mut merged_tokens = Vec::new();
-//
-//     let tokens = lex_from_str(source_code)?;
-//     let mut token_iter = tokens.into_iter();
-//     let mut peekable_token_iter =
-//         PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_MERGE_STRINGS);
-//
-//     while let Some(token_with_range) = peekable_token_iter.next() {
-//         if let TokenWithRange {
-//             token: Token::String(first_string, first_type),
-//             range: first_range,
-//         } = &token_with_range
-//         {
-//             let mut merged_string = vec![first_string.to_owned()];
-//             let mut merged_range = Range::new(&first_range.start, &first_range.end_included);
-//
-//             // check if the next token is also a string literal.
-//             while let Some(next_token_with_range) = peekable_token_iter.peek(0) {
-//                 if let TokenWithRange {
-//                     token: Token::String(next_string, _next_type),
-//                     range: next_range,
-//                 } = next_token_with_range
-//                 {
-//                     // merge the two string literals.
-//                     merged_string.push(next_string.to_owned());
-//                     merged_range.end_included = next_range.end_included;
-//
-//                     peekable_token_iter.next(); // consumes the string literal token
-//                 } else {
-//                     break;
-//                 }
-//             }
-//
-//             let merged_token_with_range = TokenWithRange {
-//                 token: Token::String(merged_string.join(""), *first_type),
-//                 range: merged_range,
-//             };
-//
-//             merged_tokens.push(merged_token_with_range);
-//         } else {
-//             merged_tokens.push(token_with_range);
-//         }
-//     }
-//
-//     Ok(merged_tokens)
-// }
+fn preprocess_undefine<T>(
+    context: &mut Context<T>,
+    identifier: &str,
+    range: &Range,
+) -> Result<(), PreprocessFileError>
+where
+    T: FileProvider,
+{
+    if identifier == "defined" {
+        return Err(PreprocessFileError {
+            file_number: context.current_file_number,
+            error: PreprocessError::MessageWithRange(
+                "The identifier 'defined' cannot be used as a macro name.".to_string(),
+                *range,
+            ),
+        });
+    }
+
+    let result = context.definition.remove(identifier);
+    if !result {
+        return Err(PreprocessFileError {
+            file_number: context.current_file_number,
+            error: PreprocessError::MessageWithRange(
+                format!("Macro '{}' is not defined.", identifier),
+                *range,
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn expand_marco<T>(
+    context: &mut Context<T>,
+    token_with_locations: Vec<TokenWithLocation>,
+) -> Result<Vec<TokenWithLocation>, PreprocessFileError>
+where
+    T: FileProvider,
+{
+    let mut tokens = Vec::new();
+
+    for token_with_location in token_with_locations {
+        match &token_with_location.token {
+            Token::Identifier(name) => {
+                // Handle identifiers, possibly as macros.
+                let definition = context.definition.get(name);
+                if let Some(definition) = definition {
+                    match definition {
+                        definition::DefinitionItem::ObjectLike(source_tokens) => {
+                            // Replace object-like macro with its definition.
+                            let expanded_tokens = expand_marco(context, source_tokens.to_vec())?;
+                            tokens.extend(expanded_tokens);
+                        }
+                        definition::DefinitionItem::FunctionLike(parameters, tokens) => {
+                            // Handle function-like macro.
+                            // For now, we just push the tokens as is.
+                            // In a complete implementation, we would handle parameters substitution.
+
+                            todo!()
+
+                            // for token in tokens {
+                            //     context.tokens.push(TokenWithLocation::new(
+                            //         token.token.clone(),
+                            //         Location::new(context.current_file_number, &token.range),
+                            //     ));
+                            // }
+                        }
+                    }
+                } else {
+                    // If no macro definition found, just push the identifier as is.
+                    tokens.push(token_with_location);
+                }
+            }
+            _ => {
+                tokens.push(token_with_location);
+            }
+        }
+    }
+
+    Ok(tokens)
+}
 
 #[cfg(test)]
 mod tests {
@@ -209,7 +450,7 @@ mod tests {
         token::{IntegerNumber, IntegerNumberType, Number, Punctuator, Token},
     };
 
-    fn generate_single_source(
+    fn process_single_source(
         src: &str,
         predefinitions: &HashMap<String, String>,
     ) -> PreprocessResult {
@@ -228,34 +469,33 @@ mod tests {
         .unwrap()
     }
 
-    fn generate_single_source_tokens(
+    fn process_single_source_tokens(
         src: &str,
         predefinitions: &HashMap<String, String>,
     ) -> Vec<TokenWithLocation> {
-        generate_single_source(src, predefinitions).tokens
+        process_single_source(src, predefinitions).tokens
     }
 
-    fn generate_single_source_tokens_with_range_strip(
-        src: &str,
-        predefinitions: &HashMap<String, String>,
-    ) -> Vec<Token> {
-        generate_single_source_tokens(src, predefinitions)
-            .into_iter()
-            .map(|token_with_location| token_with_location.token)
-            .collect()
+    fn print_tokens(token_with_location: &[TokenWithLocation]) -> String {
+        token_with_location
+            .iter()
+            .map(|TokenWithLocation { token, .. }| token.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     #[test]
-    fn test_preprocess_no_directive() {
+    fn test_preprocess_code() {
         let filenum = FILE_NUMBER_SOURCE_FILE_BEGIN;
         let predefinitions = HashMap::new();
-        let tokens = generate_single_source_tokens(
+        let tokens = process_single_source_tokens(
             "\
 int main() {
     return 0;
 }",
             &predefinitions,
         );
+
         assert_eq!(
             tokens,
             vec![
@@ -300,6 +540,62 @@ int main() {
                     Location::from_detail(filenum, 27, 2, 0, 1),
                 ),
             ]
+        );
+
+        assert_eq!(print_tokens(&tokens), "int main ( ) { return 0 ; }");
+    }
+
+    #[test]
+    fn test_preprocess_pragma() {
+        let predefinitions = HashMap::new();
+        let tokens = process_single_source_tokens(
+            "\
+#pragma STDC FENV_ACCESS ON
+#pragma STDC FP_CONTRACT OFF
+#pragma STDC CX_LIMITED_RANGE DEFAULT",
+            &predefinitions,
+        );
+
+        assert_eq!(
+            print_tokens(&tokens),
+            "[[pragma::stdc_fenv_access(on)]] [[pragma::stdc_fp_contract(off)]] [[pragma::stdc_cx_limited_range(default)]]"
+        );
+    }
+
+    #[test]
+    fn test_preprocess_predefinitions() {
+        let mut predefinitions = HashMap::new();
+        predefinitions.insert("FOO".to_string(), "'🦛'".to_string());
+        predefinitions.insert("BAR".to_string(), "\"✨ abc\"".to_string());
+        predefinitions.insert("A".to_string(), "123".to_string());
+        predefinitions.insert("B".to_string(), "".to_string());
+        predefinitions.insert("C".to_string(), "FOO".to_string()); // Reference to FOO
+
+        let tokens = process_single_source_tokens("hello FOO BAR A B C world.", &predefinitions);
+        assert_eq!(
+            print_tokens(&tokens),
+            "hello '🦛' \"✨ abc\" 123 '🦛' world ."
+        );
+    }
+
+    #[test]
+    fn test_preprocess_define() {
+        let mut predefinitions = HashMap::new();
+        predefinitions.insert("FOO".to_string(), "'🦛'".to_string());
+        predefinitions.insert("BAR".to_string(), "\"✨ abc\"".to_string());
+
+        let tokens = process_single_source_tokens(
+            r#"
+        #define A 123
+        #define B
+        #define C FOO
+        hello FOO BAR A B C world.
+        "#,
+            &predefinitions,
+        );
+        assert_eq!(
+            print_tokens(&tokens),
+            "hello '🦛' \"✨ abc\" 123 '🦛' world ."
         );
     }
 }

@@ -19,8 +19,8 @@ pub enum Statement {
     Include(Include),
     Embed(Embed),
     If(If),
-    Error(String),
-    Warning(String),
+    Error(String, /* message range */ Range),
+    Warning(String, /* message range */ Range),
     Code(Vec<TokenWithRange>),
 }
 
@@ -69,11 +69,11 @@ pub struct Pragma {
 #[derive(Debug, PartialEq)]
 pub enum Define {
     ObjectLike {
-        name: String, // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
+        identifier: (String, Range), // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
         definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO`
     },
     FunctionLike {
-        name: String,
+        identifier: (String,Range), // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
         parameters: Vec<String>,
         definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO(x, y)`
     },
@@ -191,6 +191,6 @@ pub struct Branch {
 #[derive(Debug, PartialEq)]
 pub enum Condition {
     Expression(Vec<TokenWithRange>),
-    Defined(String, Range),
-    NotDefined(String, Range),
+    Defined(/* id */ String, Range),
+    NotDefined( /* id */ String, Range),
 }

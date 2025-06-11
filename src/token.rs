@@ -82,6 +82,11 @@ pub enum Token {
     // This is an exception because whitespaces are typically ignored in the C language, thus
     // a special type of token is needed to make this distinction.
     FunctionLikeMacroIdentifier(String),
+
+    // A pragma directive, e.g., `#pragma STDC FENV_ACCESS ON`.
+    // These pragmas are used to control compiler behavior
+    // and should be passed to the compiler for processing.
+    Pragma(StandardPragma),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -249,6 +254,20 @@ impl FloatingPointNumber {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum StandardPragma {
+    FenvAccess(StandardPragmaValue), // Floating-point environment access
+    FPContract(StandardPragmaValue), // Floating-point contractions
+    CxLimitedRange(StandardPragmaValue), // Complex limited range
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum StandardPragmaValue {
+    Default,
+    On,
+    Off,
+}
+
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -310,6 +329,7 @@ impl Display for Token {
             }
             Token::Punctuator(p) => write!(f, "{}", p),
             Token::Newline => write!(f, "\n"),
+            Token::Pragma(p) => write!(f, "[[pragma::{}]]", p),
             _ => {
                 unimplemented!()
             }
@@ -438,5 +458,25 @@ impl Display for Punctuator {
             Punctuator::PoundPound => "##",
         };
         write!(f, "{}", symbol)
+    }
+}
+
+impl Display for StandardPragma {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StandardPragma::FenvAccess(value) => write!(f, "stdc_fenv_access({})", value),
+            StandardPragma::FPContract(value) => write!(f, "stdc_fp_contract({})", value),
+            StandardPragma::CxLimitedRange(value) => write!(f, "stdc_cx_limited_range({})", value),
+        }
+    }
+}
+
+impl Display for StandardPragmaValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StandardPragmaValue::Default => write!(f, "default"),
+            StandardPragmaValue::On => write!(f, "on"),
+            StandardPragmaValue::Off => write!(f, "off"),
+        }
     }
 }

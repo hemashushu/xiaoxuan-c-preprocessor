@@ -4,10 +4,14 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
-    definition::Definition, file_cache::FileCache, file_provider::FileProvider, prompt::Prompt, PreprocessError, TokenWithLocation
+    PreprocessError, TokenWithLocation, definition::Definition, file_cache::FileCache,
+    file_provider::FileProvider, prompt::Prompt,
 };
 
 /// The `Context` struct holds all state required during preprocessing.
@@ -26,6 +30,9 @@ where
     /// The file number currently being processed.
     pub current_file_number: usize,
 
+    /// The path of the file currently being processed.
+    pub current_file_path: PathBuf,
+
     /// Reference to the file provider used for file access.
     pub file_provider: &'a T,
 
@@ -36,7 +43,7 @@ where
     pub definition: Definition,
 
     /// List of included files to prevent redundant inclusions.
-    pub included_files: Vec<String>,
+    pub included_files: Vec<usize>,
 
     /// User-facing messages, warnings, or notifications.
     pub prompts: Vec<Prompt>,
@@ -59,9 +66,11 @@ where
         file_provider: &'a T,
         file_cache: &'a mut FileCache,
         current_file_number: usize,
+        current_file_path: &Path,
     ) -> Self {
         Self {
             current_file_number,
+            current_file_path: current_file_path.to_path_buf(),
             file_provider,
             file_cache,
             definition: Definition::new(),
@@ -83,15 +92,17 @@ where
     /// Returns a `Context` initialized with the provided macro definitions.
     pub fn from_keyvalues(
         current_file_number: usize,
+        current_file_path: &Path,
         file_provider: &'a T,
         file_cache: &'a mut FileCache,
         predefinitions: &HashMap<String, String>,
     ) -> Result<Self, PreprocessError> {
         Ok(Self {
             current_file_number,
+            current_file_path: current_file_path.to_path_buf(),
             file_provider,
             file_cache,
-            definition: Definition::from_keyvalues(predefinitions)?,
+            definition: Definition::from_key_values(predefinitions)?,
             included_files: Vec::new(),
             prompts: Vec::new(),
             tokens: Vec::new(),

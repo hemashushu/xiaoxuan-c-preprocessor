@@ -25,13 +25,20 @@ const PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES: usize = 2;
 const PEEK_BUFFER_LENGTH_REMOVE_COMMENTS: usize = 2;
 const PEEK_BUFFER_LENGTH_REMOVE_SHEBANG: usize = 3;
 const PEEK_BUFFER_LENGTH_LEX: usize = 4;
+// const PEEK_BUFFER_LENGTH_CONCATENATE_STRING: usize = 2;
 
-pub fn lex_from_str(s: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
-    let chars = pre_lex(s)?;
+pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
+    let chars = pre_lex(source_text)?;
     let mut chars_iter = chars.into_iter();
     let mut peekable_char_iter = PeekableIter::new(&mut chars_iter, PEEK_BUFFER_LENGTH_LEX);
     let mut tokenizer = Lexer::new(&mut peekable_char_iter);
     tokenizer.lex()
+
+    // let tokens = tokenizer.lex()?;
+    // let mut token_iter = tokens.into_iter();
+    // let mut peekable_token_iter =
+    //     PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_CONCATENATE_STRING);
+    // concatenate_adjacent_strings(&mut peekable_token_iter)
 }
 
 // Preprocessing steps before tokenization.
@@ -70,7 +77,7 @@ fn pre_lex(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessError> 
 fn merge_continued_lines(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
-    let mut merged = vec![];
+    let mut output = vec![];
     while let Some(char_with_position) = chars.next() {
         match char_with_position.character {
             '\\' => {
@@ -112,27 +119,27 @@ fn merge_continued_lines(
                 } else {
                     // No line continuation found.
                     // Restore the '\' character and the first space (if any) to the output.
-                    merged.push(char_with_position);
+                    output.push(char_with_position);
                     if let Some(space) = first_space {
-                        merged.push(space);
+                        output.push(space);
                     }
                 }
             }
             _ => {
                 // Leave all other characters unchanged
-                merged.push(char_with_position);
+                output.push(char_with_position);
             }
         }
     }
 
-    Ok(merged)
+    Ok(output)
 }
 
 /// Replaces both line comments (including the ending newline) and block comments with a single space character.
 fn remove_comments(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
-    let mut clean = vec![];
+    let mut output = vec![];
     while let Some(char_with_position) = chars.next() {
         match char_with_position.character {
             '/' if matches!(chars.peek(0), Some(CharWithPosition { character: '/', .. })) => {
@@ -147,7 +154,7 @@ fn remove_comments(
                 }
 
                 // Insert a space in place of the comment.
-                clean.push(CharWithPosition {
+                output.push(CharWithPosition {
                     character: ' ',
                     position: char_with_position.position,
                 });
@@ -175,15 +182,15 @@ fn remove_comments(
                 }
 
                 // Insert a space in place of the comment.
-                clean.push(CharWithPosition {
+                output.push(CharWithPosition {
                     character: ' ',
                     position: char_with_position.position,
                 });
             }
-            _ => clean.push(char_with_position), // Leave all other characters unchanged
+            _ => output.push(char_with_position), // Leave all other characters unchanged
         }
     }
-    Ok(clean)
+    Ok(output)
 }
 
 /// Removes the shebang line (if present) from the start of the input.
@@ -225,9 +232,68 @@ fn remove_shebang(
         }
     }
 
-    let pure = chars.collect::<Vec<_>>();
-    Ok(pure)
+    let output = chars.collect::<Vec<_>>();
+    Ok(output)
 }
+
+// // concatenate adjacent string literals
+// // Note that only two string literals have identical encoding prefixes can be concatenated.
+// // see:
+// // - https://en.cppreference.com/w/c/language/string_literal.html
+// //
+// fn concatenate_adjacent_strings(
+//     tokens: &mut PeekableIter<TokenWithRange>,
+// ) -> Result<Vec<TokenWithRange>, PreprocessError> {
+//     let mut output = Vec::new();
+//
+//     while let Some(token_with_range) = tokens.next() {
+//         if let TokenWithRange {
+//             token: Token::String(first_string, first_type),
+//             range: first_range,
+//         } = &token_with_range
+//         {
+//             let mut merged_string = vec![first_string.to_owned()];
+//             let mut merged_range = Range::new(&first_range.start, &first_range.end_included);
+//
+//             // check if the next token is also a string literal.
+//             while let Some(next_token_with_range) = tokens.peek(0) {
+//                 if let TokenWithRange {
+//                     token: Token::String(next_string, next_type),
+//                     range: next_range,
+//                 } = next_token_with_range
+//                 {
+//                     if first_type != next_type {
+//                         // If the string types are different, we cannot concatenate them.
+//                         return Err(PreprocessError::MessageWithRange(
+//                             "Cannot concatenate string literals with different encoding types."
+//                                 .to_owned(),
+//                             *next_range,
+//                         ));
+//                     }
+//
+//                     // merge the two string literals.
+//                     merged_string.push(next_string.to_owned());
+//                     merged_range.end_included = next_range.end_included;
+//
+//                     tokens.next(); // consumes the string literal token
+//                 } else {
+//                     break;
+//                 }
+//             }
+//
+//             let merged_token_with_range = TokenWithRange {
+//                 token: Token::String(merged_string.join(""), *first_type),
+//                 range: merged_range,
+//             };
+//
+//             output.push(merged_token_with_range);
+//         } else {
+//             output.push(token_with_range);
+//         }
+//     }
+//
+//     Ok(output)
+// }
 
 struct Lexer<'a> {
     upstream: &'a mut PeekableIter<'a, CharWithPosition>,
@@ -342,7 +408,7 @@ impl Lexer<'_> {
                 }
                 '\'' => {
                     // char
-                    token_with_ranges.push(self.lex_char(CharType::Default)?);
+                    token_with_ranges.push(self.lex_char(CharType::Default, 0)?);
                 }
                 '"' => {
                     if is_last_token_directive_macro_include(&token_with_ranges)
@@ -353,7 +419,7 @@ impl Lexer<'_> {
                         token_with_ranges.push(self.lex_filepath()?);
                     } else {
                         // normal string
-                        token_with_ranges.push(self.lex_string(StringType::Default)?);
+                        token_with_ranges.push(self.lex_string(StringType::Default, 0)?);
                     }
                 }
                 '+' => {
@@ -928,8 +994,6 @@ impl Lexer<'_> {
                         _ => unreachable!(),
                     };
 
-                    self.next_char(); // consume 'L', 'u', or 'U'
-
                     let token_with_range = if literal_char {
                         let char_type = match prefix {
                             'L' => CharType::Wide,
@@ -937,7 +1001,7 @@ impl Lexer<'_> {
                             'U' => CharType::UTF32,
                             _ => unreachable!(),
                         };
-                        self.lex_char(char_type)?
+                        self.lex_char(char_type, 1)?
                     } else {
                         let string_type = match prefix {
                             'L' => StringType::Wide,
@@ -945,7 +1009,7 @@ impl Lexer<'_> {
                             'U' => StringType::UTF32,
                             _ => unreachable!(),
                         };
-                        self.lex_string(string_type)?
+                        self.lex_string(string_type, 1)?
                     };
 
                     token_with_ranges.push(token_with_range);
@@ -959,13 +1023,10 @@ impl Lexer<'_> {
                         _ => unreachable!(),
                     };
 
-                    self.next_char(); // consume 'u'
-                    self.next_char(); // consume '8'
-
                     let token_with_range = if literal_char {
-                        self.lex_char(CharType::UTF8)?
+                        self.lex_char(CharType::UTF8, 2)?
                     } else {
-                        self.lex_string(StringType::UTF8)?
+                        self.lex_string(StringType::UTF8, 2)?
                     };
 
                     token_with_ranges.push(token_with_range);
@@ -1766,7 +1827,11 @@ impl Lexer<'_> {
         Ok((is_decimal, floating_point_number_type))
     }
 
-    fn lex_char(&mut self, char_type: CharType) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_char(
+        &mut self,
+        char_type: CharType,
+        prefix_length: usize,
+    ) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // 'a'?  //
         // ^  ^__// to here
@@ -1775,6 +1840,11 @@ impl Lexer<'_> {
 
         // save the start position of the char literal (i.e. the first "'")
         self.push_peek_position_into_store();
+
+        // consume the prefix characters, e.g. 'L', 'u', 'U', "u8"
+        for _ in 0..prefix_length {
+            self.next_char();
+        }
 
         self.next_char(); // Consumes "'"
 
@@ -2056,7 +2126,11 @@ impl Lexer<'_> {
         ))
     }
 
-    fn lex_string(&mut self, string_type: StringType) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_string(
+        &mut self,
+        string_type: StringType,
+        prefix_length: usize,
+    ) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // "abc"?  //
         // ^    ^__// to here
@@ -2065,6 +2139,11 @@ impl Lexer<'_> {
 
         // save the start position of the string literal (i.e. the first '"')
         self.push_peek_position_into_store();
+
+        // consume the prefix characters, e.g. 'L', 'u', 'U', "u8"
+        for _ in 0..prefix_length {
+            self.next_char();
+        }
 
         self.next_char(); // Consumes '"'
 
@@ -4600,15 +4679,19 @@ mod tests {
         // location
         //
         // ```diagram
-        // "abc" "文字😊"
-        // 01234567 8 9 0
+        // "abc" 'n' "文字😊"
+        // 012345678901 2 34
         // ```
 
         assert_eq!(
-            lex_from_str(r#""abc" "文字😊""#).unwrap(),
+            lex_from_str(r#""abc" 'n' "文字😊""#).unwrap(),
             vec![
                 TokenWithRange::new(Token::new_string("abc"), Range::from_detail(0, 0, 0, 5)),
-                TokenWithRange::new(Token::new_string("文字😊"), Range::from_detail(6, 0, 6, 5)),
+                TokenWithRange::new(Token::new_char('n'), Range::from_detail(6, 0, 6, 3)),
+                TokenWithRange::new(
+                    Token::new_string("文字😊"),
+                    Range::from_detail(10, 0, 10, 5)
+                ),
             ]
         );
 
@@ -5110,7 +5193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_advance_block_comment() {
+    fn test_lex_block_comment() {
         assert_eq!(
             lex_from_str_with_range_strip(
                 r#"
@@ -5197,7 +5280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_advance_shebang() {
+    fn test_lex_shebang() {
         assert_eq!(
             lex_from_str_with_range_strip(
                 r#"#!/usr/bin/env ancc
@@ -5223,4 +5306,45 @@ mod tests {
             vec![Token::new_integer_number(11), Token::Newline,]
         );
     }
+
+    //     #[test]
+    //     fn test_lex_concatenate_strings() {
+    //         let tokens1 = lex_from_str(r#""abc" "&" "xyz""#).unwrap();
+    //         assert_eq!(
+    //             tokens1,
+    //             vec![TokenWithRange {
+    //                 token: Token::String("abc&xyz".to_owned(), StringType::Default),
+    //                 range: Range::from_detail(0, 0, 0, 15)
+    //             },]
+    //         );
+    //
+    //         let tokens2 = lex_from_str(r#"u8"abc" u8"xyz""#).unwrap();
+    //         assert_eq!(
+    //             tokens2,
+    //             vec![TokenWithRange {
+    //                 token: Token::String("abcxyz".to_owned(), StringType::UTF8),
+    //                 range: Range::from_detail(0, 0, 0, 15)
+    //             },]
+    //         );
+    //
+    //         // err: Different string types cannot be concatenated
+    //         assert!(matches!(
+    //             lex_from_str(r#""abc" u8"xyz""#),
+    //             Err(PreprocessError::MessageWithRange(
+    //                 _,
+    //                 Range {
+    //                     start: Position {
+    //                         index: 6,
+    //                         line: 0,
+    //                         column: 6
+    //                     },
+    //                     end_included: Position {
+    //                         index: 12,
+    //                         line: 0,
+    //                         column: 12
+    //                     }
+    //                 }
+    //             ))
+    //         ));
+    //     }
 }
