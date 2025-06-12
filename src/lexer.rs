@@ -82,12 +82,16 @@ fn merge_continued_lines(
         match char_with_position.character {
             '\\' => {
                 // Consume any whitespace characters between '\' and the newline ('\n' or "\r\n").
-                let mut first_space = None;
+                let mut found_space = None;
                 while let Some(next_char_with_position) = chars.peek(0) {
-                    if next_char_with_position.character == ' ' {
-                        first_space = chars.next(); // Consume the space
-                    } else {
-                        break;
+                    // Skip whitespace (space, tab, vertical tab, form feed).
+                    match next_char_with_position.character {
+                        ' ' | '\t' | '\u{0b}' | '\u{0c}' => {
+                            found_space = chars.next(); // Consume and store the space
+                        }
+                        _ => {
+                            break;
+                        }
                     }
                 }
 
@@ -118,9 +122,10 @@ fn merge_continued_lines(
                     chars.next(); // Consume '\n'
                 } else {
                     // No line continuation found.
-                    // Restore the '\' character and the first space (if any) to the output.
+                    // Restore the '\' character and the space (if any) to the output.
                     output.push(char_with_position);
-                    if let Some(space) = first_space {
+
+                    if let Some(space) = found_space {
                         output.push(space);
                     }
                 }

@@ -11,14 +11,13 @@ use crate::{position::Position, range::Range};
 /// messages, warnings, or other notifications relevant to the user.
 #[derive(Debug, PartialEq)]
 pub enum Prompt {
-    Message(PromptLevel, String),
-    MessageWithPosition(PromptLevel, String, Position),
-    MessageWithRange(PromptLevel, String, Range),
+    Message(PromptLevel, /* file number */ usize, String),
+    MessageWithPosition(PromptLevel, /* file number */ usize, String, Position),
+    MessageWithRange(PromptLevel, /* file number */ usize, String, Range),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum PromptLevel {
     Info,
     Warning,
-    Forbidden,
 }

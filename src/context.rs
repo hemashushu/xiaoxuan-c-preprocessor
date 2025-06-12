@@ -49,7 +49,7 @@ where
     pub prompts: Vec<Prompt>,
 
     /// Output tokens generated during preprocessing.
-    pub tokens: Vec<TokenWithLocation>,
+    pub output: Vec<TokenWithLocation>,
 }
 
 impl<'a, T> Context<'a, T>
@@ -76,7 +76,7 @@ where
             definition: Definition::new(),
             included_files: Vec::new(),
             prompts: Vec::new(),
-            tokens: Vec::new(),
+            output: Vec::new(),
         }
     }
 
@@ -105,7 +105,7 @@ where
             definition: Definition::from_key_values(predefinitions)?,
             included_files: Vec::new(),
             prompts: Vec::new(),
-            tokens: Vec::new(),
+            output: Vec::new(),
         })
     }
 }

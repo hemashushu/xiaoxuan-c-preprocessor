@@ -9,7 +9,7 @@ use crate::{
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     lexer::lex_from_str,
     peekable_iter::PeekableIter,
-    range::{self, Range},
+    range::Range,
     token::{Number, Punctuator, StringType, Token},
 };
 
@@ -37,7 +37,7 @@ impl<'a> Parser<'a> {
     fn new(upstream: &'a mut PeekableIter<'a, TokenWithRange>) -> Self {
         let last_range = if let Some(first_token) = upstream.peek(0) {
             // Initialize last_range with the first token's range.
-            first_token.range.clone()
+            first_token.range
         } else {
             Range::from_detail(0, 0, 0, 0)
         };
@@ -932,8 +932,8 @@ impl Parser<'_> {
             // Collect statements until we hit an `#else`, `#elif`, `#elifdef`, `#elifndef` or `#endif`.
             loop {
                 if parser.peek_token(0).is_some() {
-                    if matches!(parser.peek_token(0), Some(Token::DirectiveStart)) &&
-                       matches!(parser.peek_token(1), Some(Token::Identifier(id)) if
+                    if matches!(parser.peek_token(0), Some(Token::DirectiveStart))
+                        && matches!(parser.peek_token(1), Some(Token::Identifier(id)) if
                        ["else", "elif", "elifdef", "elifndef", "endif"].contains(&id.as_str()))
                     {
                         break;
@@ -1005,8 +1005,8 @@ impl Parser<'_> {
 
             // Continue to the next iteration if we encounter
             // `#elif`, `#elifdef` or `#elifndef` directives.
-            if matches!(self.peek_token(0),Some(Token::DirectiveStart)) &&
-               matches!(self.peek_token(1), Some(Token::Identifier(id)) if
+            if matches!(self.peek_token(0), Some(Token::DirectiveStart))
+                && matches!(self.peek_token(1), Some(Token::Identifier(id)) if
                ["elif", "elifdef", "elifndef"].contains(&id.as_str()))
             {
                 // it is directive `elif`, `elifdef`, or `elifndef`,
@@ -1018,8 +1018,8 @@ impl Parser<'_> {
         }
 
         // If we hit an `#else`, we collect the alternative statements.
-        if matches!(self.peek_token(0),Some(Token::DirectiveStart)) &&
-           matches!(self.peek_token(1), Some(Token::Identifier(id)) if id.as_str() == "else")
+        if matches!(self.peek_token(0), Some(Token::DirectiveStart))
+            && matches!(self.peek_token(1), Some(Token::Identifier(id)) if id.as_str() == "else")
         {
             self.next_token(); // consumes '#'
             self.next_token(); // consumes "else"
