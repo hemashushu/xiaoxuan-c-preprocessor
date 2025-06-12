@@ -49,8 +49,18 @@ pub enum Token {
     // except for '@', '$', and '`', which are not considered C punctuators.
     Punctuator(Punctuator),
 
+    /*
+     * The following tokens are used in the C preprocessor.
+     * They are not present in the final token stream after preprocessing.
+     */
+
+    // Pound sign (`#`) at the beginning of a line indicates a preprocessing directive.
+    DirectiveStart,
+
     // A newline token, representing either '\n' or '\r\n'.
-    // Newlines are preserved in the token stream for macro expansion.
+    // Newlines are special tokens in the C preprocessor,
+    // and they are used to separate preprocessing directives and other tokens
+    // in the token stream.
     //
     // Each directive occupies one line and has the following format:
     //
@@ -62,6 +72,10 @@ pub enum Token {
     // The null directive (# followed by a line break) is allowed and has no effect.
     // See: https://en.cppreference.com/w/c/preprocessor.html
     Newline,
+
+    // Pound (`#`) and PoundPound (`##`) are operators used in C preprocessor.
+    Pound,
+    PoundPound,
 
     // The file path of the directive `#include` or `#embed`.
     //
@@ -82,11 +96,6 @@ pub enum Token {
     // This is an exception because whitespaces are typically ignored in the C language, thus
     // a special type of token is needed to make this distinction.
     FunctionLikeMacroIdentifier(String),
-
-    // A pragma directive, e.g., `#pragma STDC FENV_ACCESS ON`.
-    // These pragmas are used to control compiler behavior
-    // and should be passed to the compiler for processing.
-    Pragma(StandardPragma),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -154,10 +163,6 @@ pub enum Punctuator {
     Ellipsis,         // '...', Variadic arguments in function definitions
     AttributeOpen,    // '[[' for attributes in C23, e.g., [[nodiscard]]
     AttributeClose,   // ']]' for attributes in C23, e.g., [[nodiscard]]
-
-    // Punctuators used in C preprocessor directives
-    Pound,      // '#'
-    PoundPound, // '##'
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -254,6 +259,9 @@ impl FloatingPointNumber {
     }
 }
 
+// Represents a pragma directive, e.g., `#pragma STDC FENV_ACCESS ON`.
+// Pragmas are used to control compiler behavior and
+// should be passed to the compiler for further processing.
 #[derive(Debug, PartialEq, Clone)]
 pub enum StandardPragma {
     FenvAccess(StandardPragmaValue), // Floating-point environment access
@@ -329,10 +337,17 @@ impl Display for Token {
             }
             Token::Punctuator(p) => write!(f, "{}", p),
             Token::Newline => write!(f, "\n"),
-            Token::Pragma(p) => write!(f, "[[pragma::{}]]", p),
-            _ => {
-                unimplemented!()
+            Token::DirectiveStart => write!(f, "#"),
+            Token::Pound => write!(f, "#"),
+            Token::PoundPound => write!(f, "##"),
+            Token::FilePath(path, is_system_header) => {
+                if *is_system_header {
+                    write!(f, "<{}>", path)
+                } else {
+                    write!(f, "\"{}\"", path)
+                }
             }
+            Token::FunctionLikeMacroIdentifier(id) => write!(f, "{}", id),
         }
     }
 }
@@ -452,15 +467,12 @@ impl Display for Punctuator {
             Punctuator::Ellipsis => "...",
             Punctuator::AttributeOpen => "[[",
             Punctuator::AttributeClose => "]]",
-
-            // Punctuators used in C preprocessor directives
-            Punctuator::Pound => "#",
-            Punctuator::PoundPound => "##",
         };
         write!(f, "{}", symbol)
     }
 }
 
+// For unit testing purposes.
 impl Display for StandardPragma {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -471,6 +483,7 @@ impl Display for StandardPragma {
     }
 }
 
+// For unit testing purposes.
 impl Display for StandardPragmaValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

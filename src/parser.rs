@@ -248,7 +248,7 @@ impl Parser<'_> {
         // ```
 
         let statement = match self.peek_token(0).unwrap() {
-            Token::Punctuator(Punctuator::Pound) => {
+            Token::DirectiveStart => {
                 self.next_token(); // consume '#'
 
                 if let Some(token) = self.peek_token(0) {
@@ -355,14 +355,14 @@ impl Parser<'_> {
                 // Handle regular C code
                 let mut code = vec![];
 
-                // Collect tokens until we hit a '#' or EOF.
+                // Collect tokens until we hit a directive start ('#' sign) or EOF.
                 while let Some(token) = self.peek_token(0) {
                     match token {
                         Token::Newline => {
                             self.next_token(); // Consumes newline
                         }
-                        Token::Punctuator(Punctuator::Pound) => {
-                            // If we hit a `#`, we stop collecting code tokens.
+                        Token::DirectiveStart => {
+                            // If we hit a directive start ('#' sign), we stop collecting code tokens.
                             break;
                         }
                         _ => {
@@ -932,7 +932,7 @@ impl Parser<'_> {
             // Collect statements until we hit an `#else`, `#elif`, `#elifdef`, `#elifndef` or `#endif`.
             loop {
                 if parser.peek_token(0).is_some() {
-                    if matches!(parser.peek_token(0), Some(Token::Punctuator(Punctuator::Pound))) && // the char '#'
+                    if matches!(parser.peek_token(0), Some(Token::DirectiveStart)) &&
                        matches!(parser.peek_token(1), Some(Token::Identifier(id)) if
                        ["else", "elif", "elifdef", "elifndef", "endif"].contains(&id.as_str()))
                     {
@@ -1005,7 +1005,7 @@ impl Parser<'_> {
 
             // Continue to the next iteration if we encounter
             // `#elif`, `#elifdef` or `#elifndef` directives.
-            if matches!(self.peek_token(0),Some(Token::Punctuator(Punctuator::Pound))) && // the char '#'
+            if matches!(self.peek_token(0),Some(Token::DirectiveStart)) &&
                matches!(self.peek_token(1), Some(Token::Identifier(id)) if
                ["elif", "elifdef", "elifndef"].contains(&id.as_str()))
             {
@@ -1018,7 +1018,7 @@ impl Parser<'_> {
         }
 
         // If we hit an `#else`, we collect the alternative statements.
-        if matches!(self.peek_token(0),Some(Token::Punctuator(Punctuator::Pound))) && // the char '#'
+        if matches!(self.peek_token(0),Some(Token::DirectiveStart)) &&
            matches!(self.peek_token(1), Some(Token::Identifier(id)) if id.as_str() == "else")
         {
             self.next_token(); // consumes '#'
@@ -1030,7 +1030,7 @@ impl Parser<'_> {
         }
 
         // Finally, we expect an `#endif` to close the `if` block.
-        self.expect_and_consume_token(&Token::Punctuator(Punctuator::Pound), "#")?;
+        self.expect_and_consume_token(&Token::DirectiveStart, "directive start sign `#`")?;
         self.expect_and_consume_specified_identifier("endif")?;
         self.expect_and_consume_newline_or_eof()?;
 

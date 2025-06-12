@@ -944,27 +944,35 @@ impl Lexer<'_> {
                         Range::from_single_position(&self.last_position),
                     ));
                 }
+                '#' if self.peek_char_and_equals(1, '#') => {
+                    // `##`
+                    self.push_peek_position_into_store();
+
+                    self.next_char(); // consume '#'
+                    self.next_char(); // consume '#'
+
+                    token_with_ranges.push(TokenWithRange::new(
+                        Token::PoundPound,
+                        Range::new(&self.pop_position_from_store(), &self.last_position),
+                    ));
+                }
+                '#' if is_line_start(&token_with_ranges) => {
+                    // `#` at the beginning of a line or after a newline
+                    self.next_char(); // consume '#'
+
+                    token_with_ranges.push(TokenWithRange::new(
+                        Token::DirectiveStart,
+                        Range::from_single_position(&self.last_position),
+                    ));
+                }
                 '#' => {
-                    if self.peek_char_and_equals(1, '#') {
-                        // `##`
-                        self.push_peek_position_into_store();
+                    // `#`, normal pound sign
+                    self.next_char(); // consume '#'
 
-                        self.next_char(); // consume '#'
-                        self.next_char(); // consume '#'
-
-                        token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::PoundPound),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
-                        ));
-                    } else {
-                        // `#`
-                        self.next_char(); // consume '#'
-
-                        token_with_ranges.push(TokenWithRange::new(
-                            Token::Punctuator(Punctuator::Pound),
-                            Range::from_single_position(&self.last_position),
-                        ));
-                    }
+                    token_with_ranges.push(TokenWithRange::new(
+                        Token::Pound,
+                        Range::from_single_position(&self.last_position),
+                    ));
                 }
                 '0' if matches!(self.peek_char(1), Some('x' | 'X')) => {
                     // hexadecimal number
@@ -2600,6 +2608,22 @@ fn is_last_token_directive_macro_define(token_with_ranges: &[TokenWithRange]) ->
     }
 }
 
+fn is_line_start(token_with_ranges: &[TokenWithRange]) -> bool {
+    if token_with_ranges.is_empty()
+        || matches!(
+            token_with_ranges.last(),
+            Some(TokenWithRange {
+                token: Token::Newline,
+                ..
+            })
+        )
+    {
+        true
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -2832,7 +2856,7 @@ mod tests {
         );
 
         assert_eq!(
-            lex_from_str_with_range_strip("?,.->{}[]();:...###[[]]").unwrap(),
+            lex_from_str_with_range_strip("?,.->{}[]();:...[[]]").unwrap(),
             vec![
                 Token::Punctuator(Punctuator::QuestionMark),
                 Token::Punctuator(Punctuator::Comma),
@@ -2847,12 +2871,21 @@ mod tests {
                 Token::Punctuator(Punctuator::Semicolon),
                 Token::Punctuator(Punctuator::Colon),
                 Token::Punctuator(Punctuator::Ellipsis),
-                Token::Punctuator(Punctuator::PoundPound),
-                Token::Punctuator(Punctuator::Pound),
                 Token::Punctuator(Punctuator::AttributeOpen),
                 Token::Punctuator(Punctuator::AttributeClose),
-                // Token::Punctuator(Punctuator::Namespace),
             ]
+        );
+
+        // test special punctuators
+
+        assert_eq!(
+            lex_from_str_with_range_strip("###\n").unwrap(),
+            vec![Token::PoundPound, Token::Pound, Token::Newline,]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip("#\n").unwrap(),
+            vec![Token::DirectiveStart, Token::Newline,]
         );
 
         // location
@@ -5012,10 +5045,7 @@ mod tests {
         assert_eq!(
             lex_from_str("#include <path/to/header.h>").unwrap(),
             vec![
-                TokenWithRange::new(
-                    Token::Punctuator(Punctuator::Pound),
-                    Range::from_detail(0, 0, 0, 1)
-                ),
+                TokenWithRange::new(Token::DirectiveStart, Range::from_detail(0, 0, 0, 1)),
                 TokenWithRange::new(
                     Token::new_identifier("include"),
                     Range::from_detail(1, 0, 1, 7)
@@ -5078,7 +5108,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip(r#"#define foo (a)"#).unwrap(),
             vec![
-                Token::Punctuator(Punctuator::Pound),
+                Token::DirectiveStart,
                 Token::new_identifier("define"),
                 Token::new_identifier("foo"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
@@ -5090,7 +5120,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip(r#"#define foo(a)"#).unwrap(),
             vec![
-                Token::Punctuator(Punctuator::Pound),
+                Token::DirectiveStart,
                 Token::new_identifier("define"),
                 Token::FunctionLikeMacroIdentifier("foo".to_owned()),
                 Token::Punctuator(Punctuator::ParenthesisOpen),

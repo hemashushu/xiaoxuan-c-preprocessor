@@ -95,6 +95,7 @@ where
     Ok(result)
 }
 
+#[derive(Debug, PartialEq)]
 pub struct PreprocessResult {
     pub tokens: Vec<TokenWithLocation>,
     pub prompts: Vec<Prompt>,
@@ -191,7 +192,7 @@ where
                                         }),
                                         None => {
                                             let value = parse_pragma_argument_value(value);
-                                            let standard_pragma = match arg.to_uppercase().as_str()
+                                            let _standard_pragma = match arg.to_uppercase().as_str()
                                             {
                                                 "FENV_ACCESS" => StandardPragma::FenvAccess(value),
                                                 "FP_CONTRACT" => StandardPragma::FPContract(value),
@@ -201,13 +202,11 @@ where
                                                 _ => unreachable!(),
                                             };
 
-                                            context.tokens.push(TokenWithLocation::new(
-                                                Token::Pragma(standard_pragma),
-                                                Location::new(
-                                                    context.current_file_number,
-                                                    name_range,
-                                                ),
-                                            ));
+                                            // todo::
+                                            // Standard pragmas should be passed to the compiler for processing.
+                                            // For example, standard pragmas could be inserted into the output token stream
+                                            // as a new token type or as C attributes.
+                                            // Currently, they are simply ignored.
                                             Ok(())
                                         }
                                     }
@@ -442,18 +441,20 @@ mod tests {
     use std::{collections::HashMap, path::Path};
 
     use crate::{
-        TokenWithLocation,
+        PreprocessError, PreprocessFileError, TokenWithLocation,
         file_cache::FileCache,
         location::Location,
         memory_file_provider::MemoryFileProvider,
+        position::Position,
         preprocessor::{FILE_NUMBER_SOURCE_FILE_BEGIN, PreprocessResult, preprocess_source_file},
+        range::Range,
         token::{IntegerNumber, IntegerNumberType, Number, Punctuator, Token},
     };
 
     fn process_single_source(
         src: &str,
         predefinitions: &HashMap<String, String>,
-    ) -> PreprocessResult {
+    ) -> Result<PreprocessResult, PreprocessFileError> {
         let mut file_cache = FileCache::new();
         let mut file_provider = MemoryFileProvider::new();
         file_provider.add_user_file(Path::new("src/main.c"), src);
@@ -466,14 +467,20 @@ mod tests {
             &file_provider,
             &mut file_cache,
         )
-        .unwrap()
+    }
+
+    fn process_single_source_result(
+        src: &str,
+        predefinitions: &HashMap<String, String>,
+    ) -> PreprocessResult {
+        process_single_source(src, predefinitions).unwrap()
     }
 
     fn process_single_source_tokens(
         src: &str,
         predefinitions: &HashMap<String, String>,
     ) -> Vec<TokenWithLocation> {
-        process_single_source(src, predefinitions).tokens
+        process_single_source_result(src, predefinitions).tokens
     }
 
     fn print_tokens(token_with_location: &[TokenWithLocation]) -> String {
@@ -556,10 +563,8 @@ int main() {
             &predefinitions,
         );
 
-        assert_eq!(
-            print_tokens(&tokens),
-            "[[pragma::stdc_fenv_access(on)]] [[pragma::stdc_fp_contract(off)]] [[pragma::stdc_cx_limited_range(default)]]"
-        );
+        // pragmas are ignored currently, so the output should be empty.
+        assert!(tokens.is_empty());
     }
 
     #[test]
@@ -579,7 +584,7 @@ int main() {
     }
 
     #[test]
-    fn test_preprocess_define() {
+    fn test_preprocess_define_object() {
         let mut predefinitions = HashMap::new();
         predefinitions.insert("FOO".to_string(), "'🦛'".to_string());
         predefinitions.insert("BAR".to_string(), "\"✨ abc\"".to_string());
@@ -597,5 +602,49 @@ int main() {
             print_tokens(&tokens),
             "hello '🦛' \"✨ abc\" 123 '🦛' world ."
         );
+
+        // err: redefine FOO
+        assert!(matches!(
+            process_single_source(
+                r#"
+        #define FOO 'a'
+        #define FOO 'b'
+        hello FOO world.
+        "#,
+                &HashMap::new(),
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    Range {
+                        start: Position {
+                            index: 41,
+                            line: 2,
+                            column: 16
+                        },
+                        end_included: Position {
+                            index: 43,
+                            line: 2,
+                            column: 18
+                        }
+                    }
+                )
+            })
+        ));
+    }
+
+    #[test]
+    fn test_preprocess_undefine() {
+        let tokens = process_single_source_tokens(
+            r#"
+        #define A 123
+        #undef A
+        #define A 456
+        hello A world.
+        "#,
+            &HashMap::new(),
+        );
+        assert_eq!(print_tokens(&tokens), "hello 456 world .");
     }
 }
