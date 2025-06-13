@@ -434,6 +434,8 @@ impl Parser<'_> {
 
         self.next_token(); // consumes "define"
 
+        // Collect parameter names.
+        // The parameter name for the variadic macro is "...".
         let parse_parameters = |parser: &mut Parser| -> Result<Vec<String>, PreprocessError> {
             let mut parameters = vec![];
 

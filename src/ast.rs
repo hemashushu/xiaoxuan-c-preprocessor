@@ -73,8 +73,8 @@ pub enum Define {
         definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO`
     },
     FunctionLike {
-        identifier: (String,Range), // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
-        parameters: Vec<String>,
+        identifier: (String, Range), // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
+        parameters: Vec<String>, // The parameter names. If the macro is variadic, the last parameter is `...`.
         definition: Vec<TokenWithRange>, // Can be empty, e.g., `#define FOO(x, y)`
     },
 }
@@ -192,5 +192,5 @@ pub struct Branch {
 pub enum Condition {
     Expression(Vec<TokenWithRange>),
     Defined(/* id */ String, Range),
-    NotDefined( /* id */ String, Range),
+    NotDefined(/* id */ String, Range),
 }

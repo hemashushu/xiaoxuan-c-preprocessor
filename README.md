@@ -13,16 +13,35 @@ Unlike standalone tools such as GNU `cpp` or `gcc -E`, ANCPP is designed to be u
 
 ## Supporting
 
+**Directives**
+
 ANCPP implements almost all of the C23 standard preprocessor directives, including:
 
-- Macro definition and expansion (`#define`, `#undef`)
+- Macro definition and expansion (`#define`, `#undef`).
+- Function-like macros and variadic macros.
 - Conditional compilation (`#if`, `#ifdef`, `#ifndef`, `#else`, `#elif`, `#elifdef`, `#elifndef`, `#endif`).
 - Source file inclusion (`#include`).
 - Binary resource inclusion (`#embed`).
 - Error and warning (`#error`, `#warning`).
 - Behavior control (`#pragma`).
 
-Additionally, _Stringizing_ (the `#` operator) and _token concatenation_ (the `##` operator) are supported, as well as _variadic macros_ (using `...`).
+**Operators**
+
+- _Stringizing_ (the `#` operator).
+- _Token concatenation_ (the `##` operator).
+- `__VA_OPT__( content )`
+
+TODO
+
+**Built-in Macros**
+
+- `__FILE__`
+- `__LINE__`
+- `__DATE__`
+- `__TIME__`
+- `__VA_ARGS__`
+
+TODO
 
 ## Limitations
 
