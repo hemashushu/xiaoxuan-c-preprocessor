@@ -921,5 +921,16 @@ BAR(A,B)"#,
             print_tokens(&tokens),
             r#""foo" "Hello, World!" foo 123 '✨' 'a' 'a'"#
         );
+
+        let tokens_nested = process_single_source_tokens(
+            r#"#define FOO(a) 1 a
+#define BAR(x, y) 2 FOO(x) y
+#define BUZ(z) 3 BAR(z, spark)
+
+BUZ(hippo)"#,
+            &predefinitions,
+        );
+
+        assert_eq!(print_tokens(&tokens_nested), "3 2 1 hippo spark");
     }
 }
