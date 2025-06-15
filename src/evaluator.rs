@@ -28,10 +28,10 @@ pub enum BinaryOperator {
     // Relational operators
     Equal,              // '=='
     NotEqual,           // '!='
-    GreaterThan,        // '>'
     LessThan,           // '<'
-    GreaterThanOrEqual, // '>='
     LessThanOrEqual,    // '<='
+    GreaterThan,        // '>'
+    GreaterThanOrEqual, // '>='
 
     // Logical operators
     And, // '&&'

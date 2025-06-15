@@ -25,7 +25,7 @@ pub fn parse_from_str(source_text: &str) -> Result<Program, PreprocessError> {
 
 pub struct Parser<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithRange>,
-    last_range: Range,
+    pub last_range: Range,
 }
 
 // Implementation of the Parser
@@ -48,8 +48,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn next_token(&mut self) -> Option<Token> {
+    fn next_token_with_range(&mut self) -> Option<TokenWithRange> {
         match self.upstream.next() {
+            Some(token_with_range) => {
+                self.last_range = token_with_range.range;
+                Some(token_with_range)
+            }
+            None => None,
+        }
+    }
+
+    fn next_token(&mut self) -> Option<Token> {
+        match self.next_token_with_range() {
             Some(TokenWithRange { token, range }) => {
                 self.last_range = range;
                 Some(token)
@@ -134,9 +144,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_and_consume_newline_or_eof(&mut self) -> Result<(), PreprocessError> {
+    fn expect_and_consume_directive_end_or_eof(&mut self) -> Result<(), PreprocessError> {
         match self.next_token() {
-            Some(Token::Newline) => Ok(()),
+            Some(Token::DirectiveEnd) => Ok(()),
             Some(_) => Err(PreprocessError::MessageWithPosition(
                 "Expect a newline.".to_owned(),
                 self.last_range.start,
@@ -145,9 +155,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_and_consume_newline(&mut self) -> Result<(), PreprocessError> {
+    fn expect_and_consume_directive_end(&mut self) -> Result<(), PreprocessError> {
         match self.next_token() {
-            Some(Token::Newline) => Ok(()),
+            Some(Token::DirectiveEnd) => Ok(()),
             _ => Err(PreprocessError::MessageWithPosition(
                 "Expect a newline.".to_owned(),
                 self.last_range.start,
@@ -222,17 +232,9 @@ impl<'a> Parser<'a> {
 impl Parser<'_> {
     pub fn parse_program(&mut self) -> Result<Program, PreprocessError> {
         let mut statements: Vec<Statement> = vec![];
-        while let Some(token) = self.peek_token(0) {
-            match token {
-                Token::Newline => {
-                    self.next_token(); // consume newline
-                    continue; // skip empty lines
-                }
-                _ => {
-                    let statement = self.parse_statement()?;
-                    statements.push(statement);
-                }
-            }
+        while self.peek_token(0).is_some() {
+            let statement = self.parse_statement()?;
+            statements.push(statement);
         }
 
         let program = Program { statements };
@@ -270,7 +272,7 @@ impl Parser<'_> {
                                     self.next_token(); // consume 'undef'
                                     let identifier = self.expect_and_consume_identifier()?;
                                     let range = self.last_range;
-                                    self.expect_and_consume_newline_or_eof()?;
+                                    self.expect_and_consume_directive_end_or_eof()?;
 
                                     Statement::Undef(identifier, range)
                                 }
@@ -304,7 +306,7 @@ impl Parser<'_> {
                                     let (error_message, _) = self.expect_and_consume_string()?;
                                     let range = self.last_range;
 
-                                    self.expect_and_consume_newline_or_eof()?;
+                                    self.expect_and_consume_directive_end_or_eof()?;
 
                                     Statement::Error(error_message, range)
                                 }
@@ -314,7 +316,7 @@ impl Parser<'_> {
                                     let (warning_message, _) = self.expect_and_consume_string()?;
                                     let range = self.last_range;
 
-                                    self.expect_and_consume_newline_or_eof()?;
+                                    self.expect_and_consume_directive_end_or_eof()?;
 
                                     Statement::Warning(warning_message, range)
                                 }
@@ -358,15 +360,12 @@ impl Parser<'_> {
                 // Collect tokens until we hit a directive start ('#' sign) or EOF.
                 while let Some(token) = self.peek_token(0) {
                     match token {
-                        Token::Newline => {
-                            self.next_token(); // Consumes newline
-                        }
                         Token::DirectiveStart => {
                             // If we hit a directive start ('#' sign), we stop collecting code tokens.
                             break;
                         }
                         _ => {
-                            code.push(self.upstream.next().unwrap());
+                            code.push(self.next_token_with_range().unwrap());
                         }
                     }
                 }
@@ -392,11 +391,11 @@ impl Parser<'_> {
         // Move all tokens to `parts` until we hit a newline or EOF.
         while let Some(token) = self.peek_token(0) {
             match token {
-                Token::Newline => {
+                Token::DirectiveEnd => {
                     break;
                 }
                 _ => {
-                    let token_with_range = self.upstream.next().unwrap();
+                    let token_with_range = self.next_token_with_range().unwrap();
                     parts.push(token_with_range);
                 }
             }
@@ -416,7 +415,7 @@ impl Parser<'_> {
             }
         }
 
-        self.expect_and_consume_newline_or_eof()?;
+        self.expect_and_consume_directive_end_or_eof()?;
 
         Ok(Pragma { parts })
     }
@@ -496,7 +495,7 @@ impl Parser<'_> {
                 loop {
                     if let Some(token) = parser.peek_token(0) {
                         match token {
-                            Token::Newline => {
+                            Token::DirectiveEnd => {
                                 if bracket_stack.is_empty() {
                                     break; // stop collecting tokens
                                 } else {
@@ -514,7 +513,7 @@ impl Parser<'_> {
                                 // If we encounter an opening bracket, we push it onto the stack.
                                 bracket_stack.push(*opening);
 
-                                let token_with_range = parser.upstream.next().unwrap();
+                                let token_with_range = parser.next_token_with_range().unwrap();
                                 tokens.push(token_with_range);
                             }
                             Token::Punctuator(Punctuator::ParenthesisClose) => {
@@ -528,7 +527,7 @@ impl Parser<'_> {
                                     ));
                                 }
 
-                                let token_with_range = parser.upstream.next().unwrap();
+                                let token_with_range = parser.next_token_with_range().unwrap();
                                 tokens.push(token_with_range);
                             }
                             Token::Punctuator(Punctuator::BraceClose) => {
@@ -541,7 +540,7 @@ impl Parser<'_> {
                                     ));
                                 }
 
-                                let token_with_range = parser.upstream.next().unwrap();
+                                let token_with_range = parser.next_token_with_range().unwrap();
                                 tokens.push(token_with_range);
                             }
                             Token::Punctuator(Punctuator::BracketClose) => {
@@ -554,11 +553,11 @@ impl Parser<'_> {
                                     ));
                                 }
 
-                                let token_with_range = parser.upstream.next().unwrap();
+                                let token_with_range = parser.next_token_with_range().unwrap();
                                 tokens.push(token_with_range);
                             }
                             _ => {
-                                let token_with_range = parser.upstream.next().unwrap();
+                                let token_with_range = parser.next_token_with_range().unwrap();
                                 tokens.push(token_with_range);
                             }
                         }
@@ -584,6 +583,8 @@ impl Parser<'_> {
                 self.next_token(); // consume the identifier token
 
                 let definition = parse_balanced_definition(self)?;
+                self.expect_and_consume_directive_end_or_eof()?;
+
                 Define::ObjectLike {
                     identifier: (name, range),
                     definition,
@@ -597,6 +598,8 @@ impl Parser<'_> {
 
                 let parameters = parse_parameters(self)?;
                 let definition = parse_balanced_definition(self)?;
+                self.expect_and_consume_directive_end_or_eof()?;
+
                 Define::FunctionLike {
                     identifier: (name, range),
                     parameters,
@@ -615,8 +618,6 @@ impl Parser<'_> {
                 ));
             }
         };
-
-        self.expect_and_consume_newline_or_eof()?;
 
         Ok(define)
     }
@@ -668,7 +669,7 @@ impl Parser<'_> {
             }
         };
 
-        self.expect_and_consume_newline_or_eof()?;
+        self.expect_and_consume_directive_end_or_eof()?;
 
         Ok(include)
     }
@@ -711,7 +712,7 @@ impl Parser<'_> {
                             // If we encounter an opening bracket, we push it onto the stack.
                             bracket_stack.push(*opening);
 
-                            let token_with_range = parser.upstream.next().unwrap();
+                            let token_with_range = parser.next_token_with_range().unwrap();
                             tokens.push(token_with_range);
                         }
                         Token::Punctuator(Punctuator::ParenthesisClose) => {
@@ -724,7 +725,7 @@ impl Parser<'_> {
                                 ));
                             }
 
-                            let token_with_range = parser.upstream.next().unwrap();
+                            let token_with_range = parser.next_token_with_range().unwrap();
                             tokens.push(token_with_range);
                         }
                         Token::Punctuator(Punctuator::BraceClose) => {
@@ -737,7 +738,7 @@ impl Parser<'_> {
                                 ));
                             }
 
-                            let token_with_range = parser.upstream.next().unwrap();
+                            let token_with_range = parser.next_token_with_range().unwrap();
                             tokens.push(token_with_range);
                         }
                         Token::Punctuator(Punctuator::BracketClose) => {
@@ -750,11 +751,11 @@ impl Parser<'_> {
                                 ));
                             }
 
-                            let token_with_range = parser.upstream.next().unwrap();
+                            let token_with_range = parser.next_token_with_range().unwrap();
                             tokens.push(token_with_range);
                         }
                         _ => {
-                            let token_with_range = parser.upstream.next().unwrap();
+                            let token_with_range = parser.next_token_with_range().unwrap();
                             tokens.push(token_with_range);
                         }
                     }
@@ -846,7 +847,8 @@ impl Parser<'_> {
                     }
                 }
 
-                self.expect_and_consume_newline_or_eof()?;
+                self.expect_and_consume_directive_end_or_eof()?;
+
                 let embed = Embed::FilePath {
                     file_path: (file_path_owned, range),
                     is_system_header: is_system_header_owned,
@@ -864,6 +866,7 @@ impl Parser<'_> {
                 let embed = Embed::Identifier(identifier.to_owned(), range);
 
                 self.next_token(); // consumes the identifier token
+                self.expect_and_consume_directive_end_or_eof()?;
 
                 embed
             }
@@ -879,8 +882,6 @@ impl Parser<'_> {
                 ));
             }
         };
-
-        self.expect_and_consume_newline_or_eof()?;
 
         Ok(embed)
     }
@@ -910,11 +911,11 @@ impl Parser<'_> {
                 // Collect tokens until we hit a newline or EOF.
                 loop {
                     match parser.peek_token(0) {
-                        Some(token) if token == &Token::Newline => {
+                        Some(token) if token == &Token::DirectiveEnd => {
                             break;
                         }
                         Some(_) => {
-                            let token_with_range = parser.upstream.next().unwrap();
+                            let token_with_range = parser.next_token_with_range().unwrap();
                             expression_tokens.push(token_with_range);
                         }
                         None => {
@@ -960,7 +961,7 @@ impl Parser<'_> {
                 "if" | "elif" => {
                     // Handle `if` or `elif` directive
                     let expression = collect_expression(self)?;
-                    self.expect_and_consume_newline_or_eof()?;
+                    self.expect_and_consume_directive_end_or_eof()?;
 
                     if expression.is_empty() {
                         return Err(PreprocessError::MessageWithPosition(
@@ -979,7 +980,7 @@ impl Parser<'_> {
                 "ifdef" | "elifdef" => {
                     // Handle `ifdef` or `elifdef` directive
                     let identifier = self.expect_and_consume_identifier()?;
-                    self.expect_and_consume_newline_or_eof()?;
+                    self.expect_and_consume_directive_end_or_eof()?;
 
                     let condition = Condition::Defined(identifier, self.last_range);
                     let consequence = collect_consequence(self)?;
@@ -991,7 +992,7 @@ impl Parser<'_> {
                 "ifndef" | "elifndef" => {
                     // Handle `ifndef` or `elifndef` directive
                     let identifier = self.expect_and_consume_identifier()?;
-                    self.expect_and_consume_newline_or_eof()?;
+                    self.expect_and_consume_directive_end_or_eof()?;
 
                     let condition = Condition::NotDefined(identifier, self.last_range);
                     let consequence = collect_consequence(self)?;
@@ -1025,16 +1026,16 @@ impl Parser<'_> {
         {
             self.next_token(); // consumes '#'
             self.next_token(); // consumes "else"
-            self.expect_and_consume_newline()?;
+            self.expect_and_consume_directive_end()?;
 
             let alternative_statements = collect_consequence(self)?;
             alternative = Some(alternative_statements);
         }
 
         // Finally, we expect an `#endif` to close the `if` block.
-        self.expect_and_consume_token(&Token::DirectiveStart, "directive start sign `#`")?;
+        self.expect_and_consume_token(&Token::DirectiveStart, "directive start punctuator `#`")?;
         self.expect_and_consume_specified_identifier("endif")?;
-        self.expect_and_consume_newline_or_eof()?;
+        self.expect_and_consume_directive_end_or_eof()?;
 
         let if_ = If {
             branches,

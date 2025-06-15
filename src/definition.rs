@@ -7,10 +7,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    PreprocessError, TokenWithLocation, TokenWithRange, lexer::lex_from_str, location::Location,
+    FILE_NUMBER_PREDEFINED, PreprocessError, TokenWithLocation, TokenWithRange,
+    lexer::lex_from_str, location::Location,
 };
-
-pub const PREDEFINED_DEFINITION_FILE_NUMBER: usize = 0;
 
 pub struct Definition {
     items: HashMap<String, DefinitionItem>,
@@ -57,8 +56,7 @@ impl Definition {
         let token_with_locations: Vec<TokenWithLocation> = tokens
             .into_iter()
             .map(|token_with_range| {
-                let location =
-                    Location::new(PREDEFINED_DEFINITION_FILE_NUMBER, &token_with_range.range);
+                let location = Location::new(FILE_NUMBER_PREDEFINED, &token_with_range.range);
                 TokenWithLocation::new(token_with_range.token, location)
             }) // Assuming line and column are 0 for simplicity
             .collect();

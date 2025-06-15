@@ -9,6 +9,7 @@ use std::io::Write;
 use crate::{
     TokenWithRange,
     ast::{Condition, Define, Embed, If, Include, Pragma, Program, Statement},
+    token::Token,
 };
 
 pub const DEFAULT_INDENT_CHARS: &str = "    ";
@@ -37,7 +38,12 @@ fn print_define<W: Write>(
     let generate_definition_text = |definition: &[TokenWithRange]| {
         definition
             .iter()
-            .map(|TokenWithRange { token, .. }| token.to_string())
+            .map(|TokenWithRange { token, .. }| match token {
+                // Handle special cases for tokens that need to be escaped
+                Token::Pound => "#".to_owned(),
+                Token::PoundPound => "##".to_owned(),
+                _ => token.to_string(),
+            })
             .collect::<Vec<_>>()
             .join(" ")
     };

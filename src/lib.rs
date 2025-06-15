@@ -11,6 +11,9 @@ use range::Range;
 
 use crate::{location::Location, token::Token};
 
+pub const FILE_NUMBER_PREDEFINED: usize = 0;
+pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2_usize.pow(16);
+
 mod ast;
 mod ast_printer;
 mod char_with_position;

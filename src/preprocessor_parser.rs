@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub struct PreprocessorParser<'a> {
-    pub upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
+    upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
     pub last_location: Location,
     pub current_file_number: usize,
 }
@@ -34,6 +34,18 @@ impl<'a> PreprocessorParser<'a> {
             upstream,
             last_location,
             current_file_number,
+        }
+    }
+
+    pub fn next_token_with_location(
+        &mut self,
+    ) -> Option<TokenWithLocation> {
+        match self.upstream.next() {
+            Some(token_with_location) => {
+                self.last_location = token_with_location.location;
+                Some(token_with_location)
+            }
+            None => None,
         }
     }
 

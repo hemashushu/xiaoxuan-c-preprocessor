@@ -53,7 +53,6 @@ pub enum Token {
      * The following tokens are used in the C preprocessor.
      * They are not present in the final token stream after preprocessing.
      */
-
     // Pound sign (`#`) at the beginning of a line indicates a preprocessing directive.
     DirectiveStart,
 
@@ -71,7 +70,7 @@ pub enum Token {
     //
     // The null directive (# followed by a line break) is allowed and has no effect.
     // See: https://en.cppreference.com/w/c/preprocessor.html
-    Newline,
+    DirectiveEnd,
 
     // Pound (`#`) and PoundPound (`##`) are operators used in C preprocessor.
     Pound,
@@ -259,23 +258,6 @@ impl FloatingPointNumber {
     }
 }
 
-// Represents a pragma directive, e.g., `#pragma STDC FENV_ACCESS ON`.
-// Pragmas are used to control compiler behavior and
-// should be passed to the compiler for further processing.
-#[derive(Debug, PartialEq, Clone)]
-pub enum StandardPragma {
-    FenvAccess(StandardPragmaValue), // Floating-point environment access
-    FPContract(StandardPragmaValue), // Floating-point contractions
-    CxLimitedRange(StandardPragmaValue), // Complex limited range
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum StandardPragmaValue {
-    Default,
-    On,
-    Off,
-}
-
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -291,20 +273,28 @@ impl Display for Token {
                 };
 
                 // Escape special characters in the string
-                // ignore all other octal and hexadecimal escape sequences
-                let s = s
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('\'', "\\'")
-                    .replace(27u8 as char, "\\e")
-                    .replace('\r', "\\r")
-                    .replace(12u8 as char, "\\f")
-                    .replace(11u8 as char, "\\v")
-                    .replace('\n', "\\n")
-                    .replace('\t', "\\t")
-                    .replace('\0', "\\0");
+                let escaped = s
+                    .chars()
+                    .map(|c| {
+                        match c {
+                            '\\' => "\\\\".to_string(),
+                            '"' => "\\\"".to_string(),
+                            '\'' => "\\'".to_string(),
+                            '\0' => "\\0".to_string(), // Null character
+                            '\t' => "\\t".to_string(), // \x09, Tab
+                            '\n' => "\\n".to_string(), // \x0a, Newline
+                            '\r' => "\\r".to_string(), // \x0d, Carriage return
+                            '\x00'..='\x1f' | '\u{80}'..='\u{ff}' => {
+                                // For control characters (non-printable) characters, and extended ASCII codes,
+                                // use hexadecimal escape
+                                format!("\\x{:02x}", c as u8)
+                            }
+                            _ => c.to_string(),
+                        }
+                    })
+                    .collect::<String>();
 
-                write!(f, "{}{}\"", quote, s)
+                write!(f, "{}{}\"", quote, escaped)
             }
             Token::Char(c, t) => {
                 let prefix = match t {
@@ -317,37 +307,26 @@ impl Display for Token {
 
                 // Escape special character
                 // ignore all other octal and hexadecimal escape sequences
-                let c = match c {
-                    '\\' => "\\\\",
-                    '\"' => "\\\"",
-                    '\'' => "\\'",
-                    '\u{1b}' => "\\e",
-                    '\r' => "\\r",
-                    '\x0c' => "\\f",
-                    '\x0b' => "\\v",
-                    '\n' => "\\n",
-                    '\t' => "\\t",
-                    '\0' => "\\0",
-                    _ => {
-                        return write!(f, "{}{}'", prefix, c);
+                let escaped = match c {
+                    '\\' => "\\\\".to_string(),
+                    '"' => "\\\"".to_string(),
+                    '\'' => "\\'".to_string(),
+                    '\0' => "\\0".to_string(), // Null character
+                    '\t' => "\\t".to_string(), // \x09, Tab
+                    '\n' => "\\n".to_string(), // \x0a, Newline
+                    '\r' => "\\r".to_string(), // \x0d, Carriage return
+                    '\x00'..='\x1f' | '\u{80}'..='\u{ff}' => {
+                        // For control characters (non-printable) characters, and extended ASCII codes,
+                        // use hexadecimal escape
+                        format!("\\x{:02x}", *c as u8)
                     }
+                    _ => c.to_string(),
                 };
 
-                write!(f, "{}{}'", prefix, c)
+                write!(f, "{}{}'", prefix, escaped)
             }
             Token::Punctuator(p) => write!(f, "{}", p),
-            Token::Newline => write!(f, "\n"),
-            Token::DirectiveStart => write!(f, "#"),
-            Token::Pound => write!(f, "#"),
-            Token::PoundPound => write!(f, "##"),
-            Token::FilePath(path, is_system_header) => {
-                if *is_system_header {
-                    write!(f, "<{}>", path)
-                } else {
-                    write!(f, "\"{}\"", path)
-                }
-            }
-            Token::FunctionLikeMacroIdentifier(id) => write!(f, "{}", id),
+            _ => unreachable!("Preprocessor tokens should not be displayed: {}", self),
         }
     }
 }
@@ -472,24 +451,79 @@ impl Display for Punctuator {
     }
 }
 
-// For unit testing purposes.
-impl Display for StandardPragma {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StandardPragma::FenvAccess(value) => write!(f, "stdc_fenv_access({})", value),
-            StandardPragma::FPContract(value) => write!(f, "stdc_fp_contract({})", value),
-            StandardPragma::CxLimitedRange(value) => write!(f, "stdc_cx_limited_range({})", value),
-        }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use crate::token::{CharType, StringType, Token};
 
-// For unit testing purposes.
-impl Display for StandardPragmaValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StandardPragmaValue::Default => write!(f, "default"),
-            StandardPragmaValue::On => write!(f, "on"),
-            StandardPragmaValue::Off => write!(f, "off"),
-        }
+    #[test]
+    fn test_char_display() {
+        assert_eq!(Token::Char('a', CharType::Default).to_string(), "'a'");
+        assert_eq!(Token::Char('文', CharType::Wide).to_string(), "L'文'");
+        assert_eq!(Token::Char('文', CharType::UTF16).to_string(), "u'文'");
+        assert_eq!(Token::Char('文', CharType::UTF32).to_string(), "U'文'");
+        assert_eq!(Token::Char('文', CharType::UTF8).to_string(), "u8'文'");
+
+        // Test with escape sequences
+        assert_eq!(Token::Char('\t', CharType::Default).to_string(), "'\\t'");
+        assert_eq!(Token::Char('\n', CharType::Default).to_string(), "'\\n'");
+        assert_eq!(Token::Char('\r', CharType::Default).to_string(), "'\\r'");
+        assert_eq!(Token::Char('\\', CharType::Default).to_string(), "'\\\\'");
+        assert_eq!(Token::Char('"', CharType::Default).to_string(), "'\\\"'");
+        assert_eq!(Token::Char('\'', CharType::Default).to_string(), "'\\''");
+        assert_eq!(Token::Char('\0', CharType::Default).to_string(), "'\\0'");
+        assert_eq!(
+            Token::Char('\x01', CharType::Default).to_string(),
+            "'\\x01'"
+        );
+        assert_eq!(
+            Token::Char('\x1f', CharType::Default).to_string(),
+            "'\\x1f'"
+        );
+        assert_eq!(
+            Token::Char('\u{80}', CharType::Default).to_string(),
+            "'\\x80'"
+        );
+        assert_eq!(
+            Token::Char('\u{FF}', CharType::Default).to_string(),
+            "'\\xff'"
+        );
+    }
+
+    #[test]
+    fn test_string_display() {
+        assert_eq!(
+            Token::String("hello".to_string(), StringType::Default).to_string(),
+            "\"hello\""
+        );
+        assert_eq!(
+            Token::String("文✨".to_string(), StringType::Wide).to_string(),
+            "L\"文✨\""
+        );
+        assert_eq!(
+            Token::String("文✨".to_string(), StringType::UTF16).to_string(),
+            "u\"文✨\""
+        );
+        assert_eq!(
+            Token::String("文✨".to_string(), StringType::UTF32).to_string(),
+            "U\"文✨\""
+        );
+        assert_eq!(
+            Token::String("文✨".to_string(), StringType::UTF8).to_string(),
+            "u8\"文✨\""
+        );
+
+        // Test with escape sequences
+        assert_eq!(
+            Token::String("hello\t\n\r\\\'\"\0world".to_string(), StringType::Default).to_string(),
+            "\"hello\\t\\n\\r\\\\\\\'\\\"\\0world\""
+        );
+        assert_eq!(
+            Token::String(
+                "文✨\x01\x1f\u{80}\u{ff}world".to_string(),
+                StringType::Default
+            )
+            .to_string(),
+            "\"文✨\\x01\\x1f\\x80\\xffworld\""
+        );
     }
 }

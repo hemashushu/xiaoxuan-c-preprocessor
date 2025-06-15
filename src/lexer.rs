@@ -304,7 +304,15 @@ struct Lexer<'a> {
     upstream: &'a mut PeekableIter<'a, CharWithPosition>,
 
     // The last position of the character consumed by `next_char()`.
-    last_position: Position,
+    pub last_position: Position,
+
+    // The index of the next token that is expected to be a directive start token (`#`).
+    // It is used to determine if the next token is a directive start token.
+    pub expect_next_directive_start_token_index: usize,
+
+    // The index of last directive line.
+    // It is used to determine if the next newline character is the end of a directive.
+    pub last_directive_line_index: usize,
 
     // Stack of positions.
     // Used to store the positions of characters when consuming them in sequence.
@@ -317,7 +325,19 @@ impl<'a> Lexer<'a> {
         Self {
             upstream,
             last_position: Position::new(0, 0, 0),
+            expect_next_directive_start_token_index: 0,
+            last_directive_line_index: usize::MAX, // no directive line at initialization
             stored_positions: vec![],
+        }
+    }
+
+    fn next_char_with_position(&mut self) -> Option<CharWithPosition> {
+        match self.upstream.next() {
+            Some(char_with_position) => {
+                self.last_position = char_with_position.position;
+                Some(char_with_position)
+            }
+            None => None,
         }
     }
 
@@ -392,32 +412,41 @@ impl Lexer<'_> {
                     self.next_char();
                 }
                 '\r' if self.peek_char_and_equals(1, '\n') => {
-                    self.push_peek_position_into_store();
+                    // self.push_peek_position_into_store();
 
                     // Convert Windows-style line ending "\r\n" to a single '\n'.
                     self.next_char(); // consume '\r'
                     self.next_char(); // consume '\n'
 
-                    token_with_ranges.push(TokenWithRange::new(
-                        Token::Newline,
-                        Range::new(&self.pop_position_from_store(), &self.last_position),
-                    ));
+                    if self.last_position.line == self.last_directive_line_index {
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::DirectiveEnd,
+                            Range::from_single_position(&self.last_position),
+                        ));
+                    }
+
+                    self.expect_next_directive_start_token_index = token_with_ranges.len();
                 }
                 '\n' => {
                     self.next_char(); // consume '\n'
 
-                    token_with_ranges.push(TokenWithRange::new(
-                        Token::Newline,
-                        Range::from_single_position(&self.last_position),
-                    ));
+                    if self.last_position.line == self.last_directive_line_index {
+                        token_with_ranges.push(TokenWithRange::new(
+                            Token::DirectiveEnd,
+                            Range::from_single_position(&self.last_position),
+                        ));
+                    }
+
+                    self.expect_next_directive_start_token_index = token_with_ranges.len();
                 }
                 '\'' => {
                     // char
                     token_with_ranges.push(self.lex_char(CharType::Default, 0)?);
                 }
                 '"' => {
-                    if is_last_token_directive_macro_include(&token_with_ranges)
-                        || is_function_has_include(&token_with_ranges)
+                    if is_directive_include(&token_with_ranges)
+                        || (self.last_position.line == self.last_directive_line_index
+                            && is_function_has_include(&token_with_ranges))
                     {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
@@ -659,8 +688,9 @@ impl Lexer<'_> {
                     }
                 }
                 '<' => {
-                    if is_last_token_directive_macro_include(&token_with_ranges)
-                        || is_function_has_include(&token_with_ranges)
+                    if is_directive_include(&token_with_ranges)
+                        || (self.last_position.line == self.last_directive_line_index
+                            && is_function_has_include(&token_with_ranges))
                     {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
@@ -961,9 +991,11 @@ impl Lexer<'_> {
                         Range::new(&self.pop_position_from_store(), &self.last_position),
                     ));
                 }
-                '#' if is_line_start(&token_with_ranges) => {
+                '#' if token_with_ranges.len() == self.expect_next_directive_start_token_index => {
                     // `#` at the beginning of a line or after a newline
                     self.next_char(); // consume '#'
+
+                    self.last_directive_line_index = self.last_position.line;
 
                     token_with_ranges.push(TokenWithRange::new(
                         Token::DirectiveStart,
@@ -1048,8 +1080,7 @@ impl Lexer<'_> {
                     // identifier
                     let token_with_range = self.lex_identifier()?;
 
-                    if is_last_token_directive_macro_define(&token_with_ranges)
-                        && self.peek_char_and_equals(0, '(')
+                    if is_directive_define(&token_with_ranges) && self.peek_char_and_equals(0, '(')
                     {
                         // If the last token is a `#define` directive, and the current identifier
                         // is followed by '(' immediately, it indicates that the identifier is a function-like macro.
@@ -1088,7 +1119,6 @@ impl Lexer<'_> {
         // ^       ^__// to here
         // |__________// current char, validated
         //
-        // current char = the character of `iter.upstream.peek(0)``
         // T = terminator chars || EOF
         // ```
 
@@ -1873,17 +1903,17 @@ impl Lexer<'_> {
                         let escaped_char = match self.next_char() {
                             Some(current_char2) => {
                                 match current_char2 {
-                                    'a' => 7u8 as char,  // bell (BEL, ascii 7)
-                                    'b' => 8u8 as char,  // backspace (BS, ascii 8)
-                                    't' => '\t',         // horizontal tabulation (HT, ascii 9)
-                                    'n' => '\n', // new line character (line feed, LF, ascii 10)
-                                    'v' => 11u8 as char, // vertical tabulation (VT, ascii 11)
-                                    'f' => 12u8 as char, // form feed (FF, ascii 12)
-                                    'r' => '\r', // carriage return (CR, ascii 13)
-                                    'e' => 27u8 as char, // escape character (ESC, ascii 27)
-                                    '\\' => '\\', // backslash
-                                    '\'' => '\'', // single quote
-                                    '"' => '"',  // double quote
+                                    'a' => '\x07', // bell (BEL, ascii 7)
+                                    'b' => '\x08', // backspace (BS, ascii 8)
+                                    't' => '\t',   // horizontal tabulation (HT, ascii 9)
+                                    'n' => '\n',   // new line character (line feed, LF, ascii 10)
+                                    'v' => '\x0b', // vertical tabulation (VT, ascii 11)
+                                    'f' => '\x0c', // form feed (FF, ascii 12)
+                                    'r' => '\r',   // carriage return (CR, ascii 13)
+                                    'e' => '\x1b', // escape character (ESC, ascii 27)
+                                    '\\' => '\\',  // backslash
+                                    '\'' => '\'',  // single quote
+                                    '"' => '"',    // double quote
                                     '?' => {
                                         // question mark (?)
                                         return Err(PreprocessError::MessageWithRange(
@@ -2175,14 +2205,14 @@ impl Lexer<'_> {
                             let escaped_char = match self.next_char() {
                                 Some(current_char2) => {
                                     match current_char2 {
-                                        'a' => 7u8 as char,  // bell (BEL, ascii 7)
-                                        'b' => 8u8 as char,  // backspace (BS, ascii 8)
-                                        't' => '\t',         // horizontal tabulation (HT, ascii 9)
+                                        'a' => '\x07', // bell (BEL, ascii 7)
+                                        'b' => '\x08', // backspace (BS, ascii 8)
+                                        't' => '\t',   // horizontal tabulation (HT, ascii 9)
                                         'n' => '\n', // new line character (line feed, LF, ascii 10)
-                                        'v' => 11u8 as char, // vertical tabulation (VT, ascii 11)
-                                        'f' => 12u8 as char, // form feed (FF, ascii 12)
+                                        'v' => '\x0b', // vertical tabulation (VT, ascii 11)
+                                        'f' => '\x0c', // form feed (FF, ascii 12)
                                         'r' => '\r', // carriage return (CR, ascii 13)
-                                        'e' => 27u8 as char, // escape character (ESC, ascii 27)
+                                        'e' => '\x1b', // escape character (ESC, ascii 27)
                                         '\\' => '\\', // backslash
                                         '\'' => '\'', // single quote
                                         '"' => '"',  // double quote
@@ -2559,19 +2589,26 @@ impl Lexer<'_> {
     }
 }
 
-/// Checks whether the last token in the provided token list is a directive macro, specifically `include` or `embed`.
-///
-/// The C preprocessor is not a strictly defined language, and there are some inconsistencies in its syntax:
-/// - In the `#include` and `#embed` directives, the file path is not a string literal.
-/// - In the `has_include` and `has_embed` functions, the file path is not a string literal.
-/// - In function-like macro definitions, there cannot be whitespace between the macro identifier and the opening parenthesis.
-///
-/// The tokenizer handles these "exceptions" using the functions:
-/// - `is_last_token_directive_macro_include`
-/// - `is_function_has_include`
-/// - `is_last_token_directive_macro_define`
-fn is_last_token_directive_macro_include(token_with_ranges: &[TokenWithRange]) -> bool {
-    if matches!(token_with_ranges.last(),
+/*
+ * Checks whether the last token in the provided token list is a directive macro, specifically `include` or `embed`.
+ *
+ * The C preprocessor is not a strictly defined language, and there are some inconsistencies in its syntax:
+ * - In the `#include` and `#embed` directives, the file path is not a string literal.
+ * - In the `has_include` and `has_embed` functions, the file path is not a string literal.
+ * - In function-like macro definitions, there cannot be whitespace between the macro identifier and the opening parenthesis.
+ */
+
+fn is_directive_include(token_with_ranges: &[TokenWithRange]) -> bool {
+    let length = token_with_ranges.len();
+    if length >= 2
+        && matches!(
+            token_with_ranges.get(length - 2),
+            Some(TokenWithRange {
+                token: Token::DirectiveStart,
+                ..
+            })
+        )
+        && matches!(token_with_ranges.last(),
         Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "include" || id == "embed")
     {
         true
@@ -2585,13 +2622,15 @@ fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
     if length >= 2
         && matches!(
             token_with_ranges.get(length - 2),
+            Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "__has_include" || id == "__has_embed"
+        )
+        && matches!(
+            token_with_ranges.last(),
             Some(TokenWithRange {
                 token: Token::Punctuator(Punctuator::ParenthesisOpen),
                 ..
             })
         )
-        && matches!(token_with_ranges.last(),
-        Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "__has_include" || id == "__has_embed")
     {
         true
     } else {
@@ -2603,7 +2642,7 @@ fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
 ///
 /// This is used to identify function-like macro definitions, which require the macro name to be
 /// immediately followed by an opening parenthesis with no intervening whitespace.
-fn is_last_token_directive_macro_define(token_with_ranges: &[TokenWithRange]) -> bool {
+fn is_directive_define(token_with_ranges: &[TokenWithRange]) -> bool {
     if matches!(token_with_ranges.last(),
     Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "define")
     {
@@ -2613,21 +2652,21 @@ fn is_last_token_directive_macro_define(token_with_ranges: &[TokenWithRange]) ->
     }
 }
 
-fn is_line_start(token_with_ranges: &[TokenWithRange]) -> bool {
-    if token_with_ranges.is_empty()
-        || matches!(
-            token_with_ranges.last(),
-            Some(TokenWithRange {
-                token: Token::Newline,
-                ..
-            })
-        )
-    {
-        true
-    } else {
-        false
-    }
-}
+// fn is_line_start(token_with_ranges: &[TokenWithRange]) -> bool {
+//     if token_with_ranges.is_empty()
+//         || matches!(
+//             token_with_ranges.last(),
+//             Some(TokenWithRange {
+//                 token: Token::Newline,
+//                 ..
+//             })
+//         )
+//     {
+//         true
+//     } else {
+//         false
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -2881,18 +2920,6 @@ mod tests {
             ]
         );
 
-        // test special punctuators
-
-        assert_eq!(
-            lex_from_str_with_range_strip("###\n").unwrap(),
-            vec![Token::PoundPound, Token::Pound, Token::Newline,]
-        );
-
-        assert_eq!(
-            lex_from_str_with_range_strip("#\n").unwrap(),
-            vec![Token::DirectiveStart, Token::Newline,]
-        );
-
         // location
 
         // test punctuations `>>>=`,
@@ -2996,9 +3023,6 @@ mod tests {
             lex_from_str_with_range_strip("(\t\r\n\n\n)").unwrap(),
             vec![
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::Newline,
-                Token::Newline,
-                Token::Newline,
                 Token::Punctuator(Punctuator::ParenthesisClose)
             ]
         );
@@ -4678,12 +4702,7 @@ mod tests {
 
         assert_eq!(
             lex_from_str_with_range_strip("\"abc\"\n\n\"xyz\"").unwrap(),
-            vec![
-                Token::new_string("abc"),
-                Token::Newline,
-                Token::Newline,
-                Token::new_string("xyz"),
-            ]
+            vec![Token::new_string("abc"), Token::new_string("xyz"),]
         );
 
         // unicode
@@ -4694,7 +4713,7 @@ mod tests {
                 "#
             )
             .unwrap(),
-            vec![Token::new_string("abc文字😊"), Token::Newline,]
+            vec![Token::new_string("abc文字😊")]
         );
 
         // empty string
@@ -4711,7 +4730,7 @@ mod tests {
                 "#
             )
             .unwrap(),
-            vec![Token::new_string("\\\'\"\t\r\n\0-文"), Token::Newline,]
+            vec![Token::new_string("\\\'\"\t\r\n\0-文")]
         );
 
         // location
@@ -4997,6 +5016,88 @@ mod tests {
     }
 
     #[test]
+    fn test_lex_directive_start_and_end() {
+        assert_eq!(
+            lex_from_str_with_range_strip(
+                "\
+abc
+#define FOO
+xyz
+#define BAR"
+            )
+            .unwrap(),
+            vec![
+                Token::new_identifier("abc"),
+                Token::DirectiveStart,
+                Token::new_identifier("define"),
+                Token::new_identifier("FOO"),
+                Token::DirectiveEnd,
+                Token::new_identifier("xyz"),
+                Token::DirectiveStart,
+                Token::new_identifier("define"),
+                Token::new_identifier("BAR"),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(
+                "\
+#define FOO(x) #x
+abc
+#define BAR(y) y##2
+xyz
+"
+            )
+            .unwrap(),
+            vec![
+                Token::DirectiveStart,
+                Token::new_identifier("define"),
+                Token::FunctionLikeMacroIdentifier("FOO".to_owned()),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::new_identifier("x"),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+                Token::Pound,
+                Token::new_identifier("x"),
+                Token::DirectiveEnd,
+                //
+                Token::new_identifier("abc"),
+                //
+                Token::DirectiveStart,
+                Token::new_identifier("define"),
+                Token::FunctionLikeMacroIdentifier("BAR".to_owned()),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::new_identifier("y"),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+                Token::new_identifier("y"),
+                Token::PoundPound,
+                Token::new_integer_number(2),
+                Token::DirectiveEnd,
+                //
+                Token::new_identifier("xyz"),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip("abc # xyz").unwrap(),
+            vec![
+                Token::new_identifier("abc"),
+                Token::Pound,
+                Token::new_identifier("xyz")
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip("###\n").unwrap(),
+            vec![Token::PoundPound, Token::Pound]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip("#\n").unwrap(),
+            vec![Token::DirectiveStart, Token::DirectiveEnd,]
+        );
+    }
+
+    #[test]
     fn test_lex_filepath() {
         assert_eq!(
             lex_from_str_with_range_strip(r#"<foo.h>"#).unwrap(),
@@ -5013,15 +5114,81 @@ mod tests {
             lex_from_str_with_range_strip(r#"include <foo.h>"#).unwrap(),
             vec![
                 Token::new_identifier("include"),
+                Token::Punctuator(Punctuator::LessThan),
+                Token::new_identifier("foo"),
+                Token::Punctuator(Punctuator::Dot),
+                Token::new_identifier("h"),
+                Token::Punctuator(Punctuator::GreaterThan),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"#include <foo.h>"#).unwrap(),
+            vec![
+                Token::DirectiveStart,
+                Token::new_identifier("include"),
                 Token::FilePath("foo.h".to_owned(), true),
             ]
         );
 
         assert_eq!(
-            lex_from_str_with_range_strip(r#"embed <foo.h>"#).unwrap(),
+            lex_from_str_with_range_strip(r#"#embed <hippo.png>"#).unwrap(),
             vec![
+                Token::DirectiveStart,
                 Token::new_identifier("embed"),
+                Token::FilePath("hippo.png".to_owned(), true),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"__has_include(<foo.h>)"#).unwrap(),
+            vec![
+                Token::new_identifier("__has_include"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::Punctuator(Punctuator::LessThan),
+                Token::new_identifier("foo"),
+                Token::Punctuator(Punctuator::Dot),
+                Token::new_identifier("h"),
+                Token::Punctuator(Punctuator::GreaterThan),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"#if __has_include(<foo.h>)"#).unwrap(),
+            vec![
+                Token::DirectiveStart,
+                Token::new_identifier("if"),
+                Token::new_identifier("__has_include"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::FilePath("foo.h".to_owned(), true),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"__has_embed(<hippo.png>)"#).unwrap(),
+            vec![
+                Token::new_identifier("__has_embed"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::Punctuator(Punctuator::LessThan),
+                Token::new_identifier("hippo"),
+                Token::Punctuator(Punctuator::Dot),
+                Token::new_identifier("png"),
+                Token::Punctuator(Punctuator::GreaterThan),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"#if __has_embed(<hippo.png>)"#).unwrap(),
+            vec![
+                Token::DirectiveStart,
+                Token::new_identifier("if"),
+                Token::new_identifier("__has_embed"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::FilePath("hippo.png".to_owned(), true),
+                Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
 
@@ -5032,17 +5199,68 @@ mod tests {
 
         assert_eq!(
             lex_from_str_with_range_strip(r#"include "bar.h""#).unwrap(),
+            vec![Token::new_identifier("include"), Token::new_string("bar.h"),]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"#include "bar.h""#).unwrap(),
             vec![
+                Token::DirectiveStart,
                 Token::new_identifier("include"),
                 Token::FilePath("bar.h".to_owned(), false),
             ]
         );
 
         assert_eq!(
-            lex_from_str_with_range_strip(r#"embed "bar.h""#).unwrap(),
+            lex_from_str_with_range_strip(r#"#embed "spark.png""#).unwrap(),
             vec![
+                Token::DirectiveStart,
                 Token::new_identifier("embed"),
-                Token::FilePath("bar.h".to_owned(), false),
+                Token::FilePath("spark.png".to_owned(), false),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"__has_include("spark.png")"#).unwrap(),
+            vec![
+                Token::new_identifier("__has_include"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::new_string("spark.png"),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"#if __has_include("spark.png")"#).unwrap(),
+            vec![
+                Token::DirectiveStart,
+                Token::new_identifier("if"),
+                Token::new_identifier("__has_include"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::FilePath("spark.png".to_owned(), false),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"__has_embed("spark.png")"#).unwrap(),
+            vec![
+                Token::new_identifier("__has_embed"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::new_string("spark.png"),
+                Token::Punctuator(Punctuator::ParenthesisClose),
+            ]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(r#"#if __has_embed("spark.png")"#).unwrap(),
+            vec![
+                Token::DirectiveStart,
+                Token::new_identifier("if"),
+                Token::new_identifier("__has_embed"),
+                Token::Punctuator(Punctuator::ParenthesisOpen),
+                Token::FilePath("spark.png".to_owned(), false),
+                Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
 
@@ -5136,7 +5354,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_location() {
+    fn test_lex_newlines() {
         // ```diagram
         // "(\t\r\n\n\n)"
         //  0  2   4 5 6    // index
@@ -5152,9 +5370,6 @@ mod tests {
                     Token::Punctuator(Punctuator::ParenthesisOpen),
                     Range::from_detail(0, 0, 0, 1)
                 ),
-                TokenWithRange::new(Token::Newline, Range::from_detail(2, 0, 2, 2,)),
-                TokenWithRange::new(Token::Newline, Range::from_detail(4, 1, 0, 1,)),
-                TokenWithRange::new(Token::Newline, Range::from_detail(5, 2, 0, 1,)),
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::ParenthesisClose),
                     Range::from_detail(6, 3, 0, 1)
@@ -5177,14 +5392,11 @@ mod tests {
                     Token::Punctuator(Punctuator::BracketOpen),
                     Range::from_detail(0, 0, 0, 1)
                 ),
-                TokenWithRange::new(Token::Newline, Range::from_detail(1, 0, 1, 1)),
                 TokenWithRange::new(Token::new_identifier("pub"), Range::from_detail(4, 1, 2, 3)),
-                TokenWithRange::new(Token::Newline, Range::from_detail(7, 1, 5, 1)),
                 TokenWithRange::new(
                     Token::new_identifier("data"),
                     Range::from_detail(12, 2, 4, 4)
                 ),
-                TokenWithRange::new(Token::Newline, Range::from_detail(16, 2, 8, 1)),
                 TokenWithRange::new(
                     Token::Punctuator(Punctuator::BracketClose),
                     Range::from_detail(17, 3, 0, 1)
@@ -5236,11 +5448,7 @@ mod tests {
                 "#
             )
             .unwrap(),
-            vec![
-                Token::new_integer_number(7),
-                Token::new_integer_number(17),
-                Token::Newline,
-            ]
+            vec![Token::new_integer_number(7), Token::new_integer_number(17),]
         );
 
         // line comment chars "//" within the block comment
@@ -5251,11 +5459,7 @@ mod tests {
                 "#
             )
             .unwrap(),
-            vec![
-                Token::new_integer_number(7),
-                Token::new_integer_number(19),
-                Token::Newline,
-            ]
+            vec![Token::new_integer_number(7), Token::new_integer_number(19),]
         );
 
         // block comment within the line comment
@@ -5271,7 +5475,6 @@ mod tests {
             vec![
                 Token::new_integer_number(7),
                 Token::new_integer_number(11),
-                Token::Newline,
                 Token::new_integer_number(13),
             ]
         );
@@ -5323,7 +5526,7 @@ mod tests {
                 "#
             )
             .unwrap(),
-            vec![Token::new_integer_number(11), Token::Newline,]
+            vec![Token::new_integer_number(11)]
         );
 
         assert_eq!(
@@ -5338,7 +5541,7 @@ mod tests {
                 "#
             )
             .unwrap(),
-            vec![Token::new_integer_number(11), Token::Newline,]
+            vec![Token::new_integer_number(11)]
         );
     }
 
