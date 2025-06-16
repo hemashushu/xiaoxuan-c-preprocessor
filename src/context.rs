@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    PreprocessError, TokenWithLocation, file_cache::FileCache, file_provider::FileProvider,
+    PreprocessError, TokenWithLocation, header_file_cache::HeaderFileCache, file_provider::FileProvider,
     macro_map::MacroMap, prompt::Prompt,
 };
 
@@ -37,7 +37,7 @@ where
     pub file_provider: &'a T,
 
     /// Mutable reference to the file cache.
-    pub file_cache: &'a mut FileCache,
+    pub file_cache: &'a mut HeaderFileCache,
 
     /// Macro definitions and related state.
     pub macro_map: MacroMap,
@@ -129,7 +129,7 @@ where
     /// * `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
     pub fn new(
         file_provider: &'a T,
-        file_cache: &'a mut FileCache,
+        file_cache: &'a mut HeaderFileCache,
         project_root_directory: &Path,
         resolve_relative_file: bool,
         current_file_number: usize,
@@ -170,7 +170,7 @@ where
     /// Returns a `Context` initialized with the provided macro definitions.
     pub fn from_keyvalues(
         file_provider: &'a T,
-        file_cache: &'a mut FileCache,
+        file_cache: &'a mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
         project_root_directory: &Path,
         resolve_relative_file: bool,

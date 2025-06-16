@@ -12,13 +12,15 @@ use crate::{
     token::{Punctuator, Token},
 };
 
-pub struct PreprocessorParser<'a> {
+/// InlineParser is a parser that processes tokens with their locations.
+/// It is used to parse such as code statements and condition expressions.
+pub struct InlineParser<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
     pub last_location: Location,
     pub current_file_number: usize,
 }
 
-impl<'a> PreprocessorParser<'a> {
+impl<'a> InlineParser<'a> {
     pub fn new(
         upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
         current_file_number: usize,

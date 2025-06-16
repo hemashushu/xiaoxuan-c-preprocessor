@@ -6,18 +6,18 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{PreprocessError, PreprocessFileError, ast::Program, parser::parse_from_str};
+use crate::ast::Program;
 
 /// A cache for files, typically header files (`*.h`) that have been included.
 /// Stores the canonical path, source code, and the parsed program for each file.
 /// This cache prevents redundant parsing of the same file multiple times.
 ///
 /// The souce code file (`*.c`) should not be cached.
-pub struct FileCache {
-    items: Vec<FileCacheItem>,
+pub struct HeaderFileCache {
+    items: Vec<CacheItem>,
 }
 
-struct FileCacheItem {
+struct CacheItem {
     canonical_full_path: PathBuf,
 
     /// The source code of the file.
@@ -27,7 +27,7 @@ struct FileCacheItem {
     program: Program,
 }
 
-impl FileCache {
+impl HeaderFileCache {
     /// Creates a new, empty `FileCache`.
     pub fn new() -> Self {
         Self { items: Vec::new() }
@@ -41,13 +41,12 @@ impl FileCache {
     ///
     /// # Returns
     /// Returns the file number assigned to this file.
-    /// File number 0 is reserved for predefined macros,
-    /// so the first file added will have file number 1.
+    /// File number starts from 1 since 0 is reserved for predefined macros.
     pub fn add(&mut self, canonical_full_path: &Path, text_content: &str) -> usize {
         // File number starts from 1 since 0 is reserved for predefined macros.
         let file_number = self.items.len() + 1;
 
-        let item = FileCacheItem {
+        let item = CacheItem {
             canonical_full_path: canonical_full_path.to_path_buf(),
             text_content: text_content.to_owned(),
             program: Program::default(),
@@ -58,6 +57,12 @@ impl FileCache {
         file_number
     }
 
+    /// Sets the program for a file in the cache.
+    ///
+    /// The `Program` is set after parsing the file instead of during the `add` method.
+    /// This is because the `Program` is generated after parsing the file,
+    /// and the parse operation may fail and raise an error, which contains
+    /// the `file_number`, this number only exists after the file is `add` to the cache.
     pub fn set_program(&mut self, canonical_full_path: &Path, program: Program) {
         let file_number = self
             .items
@@ -100,7 +105,7 @@ impl FileCache {
     ///
     /// The file number for the first item is 1, since 0 is reserved for predefined macros.
     /// For example, the first item will be `(1, "/path/to/file.h")`.
-    pub fn get_cache_list(&self) -> Vec<(usize, PathBuf)> {
+    pub fn get_cache_file_list(&self) -> Vec<(usize, PathBuf)> {
         self.items
             .iter()
             .enumerate()

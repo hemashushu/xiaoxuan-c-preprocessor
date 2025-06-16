@@ -18,20 +18,20 @@ mod ast;
 mod ast_printer;
 mod char_with_position;
 mod context;
-mod macro_map;
+mod inline_parser;
 mod lexer;
 mod location;
+mod macro_map;
 mod memory_file_provider;
 mod parser;
 mod peekable_iter;
 mod position;
-mod preprocessor_parser;
 mod range;
 mod token;
 
 pub mod error_printer;
-pub mod file_cache;
 pub mod file_provider;
+pub mod header_file_cache;
 pub mod native_file_provider;
 pub mod preprocessor;
 pub mod prompt;
@@ -95,4 +95,3 @@ impl Display for PreprocessFileError {
 }
 
 impl std::error::Error for PreprocessFileError {}
-
