@@ -72,8 +72,10 @@ pub enum Token {
     // See: https://en.cppreference.com/w/c/preprocessor.html
     DirectiveEnd,
 
-    // Pound (`#`) and PoundPound (`##`) are operators used in C preprocessor.
+    // Pound (`#`)
     Pound,
+
+    // PoundPound (`##`)
     PoundPound,
 
     // The file path of the directive `#include` or `#embed`.
@@ -273,27 +275,7 @@ impl Display for Token {
                 };
 
                 // Escape special characters in the string
-                let escaped = s
-                    .chars()
-                    .map(|c| {
-                        match c {
-                            '\\' => "\\\\".to_string(),
-                            '"' => "\\\"".to_string(),
-                            '\'' => "\\'".to_string(),
-                            '\0' => "\\0".to_string(), // Null character
-                            '\t' => "\\t".to_string(), // \x09, Tab
-                            '\n' => "\\n".to_string(), // \x0a, Newline
-                            '\r' => "\\r".to_string(), // \x0d, Carriage return
-                            '\x00'..='\x1f' | '\u{80}'..='\u{ff}' => {
-                                // For control characters (non-printable) characters, and extended ASCII codes,
-                                // use hexadecimal escape
-                                format!("\\x{:02x}", c as u8)
-                            }
-                            _ => c.to_string(),
-                        }
-                    })
-                    .collect::<String>();
-
+                let escaped = escape_string(s);
                 write!(f, "{}{}\"", quote, escaped)
             }
             Token::Char(c, t) => {
@@ -306,29 +288,35 @@ impl Display for Token {
                 };
 
                 // Escape special character
-                // ignore all other octal and hexadecimal escape sequences
-                let escaped = match c {
-                    '\\' => "\\\\".to_string(),
-                    '"' => "\\\"".to_string(),
-                    '\'' => "\\'".to_string(),
-                    '\0' => "\\0".to_string(), // Null character
-                    '\t' => "\\t".to_string(), // \x09, Tab
-                    '\n' => "\\n".to_string(), // \x0a, Newline
-                    '\r' => "\\r".to_string(), // \x0d, Carriage return
-                    '\x00'..='\x1f' | '\u{80}'..='\u{ff}' => {
-                        // For control characters (non-printable) characters, and extended ASCII codes,
-                        // use hexadecimal escape
-                        format!("\\x{:02x}", *c as u8)
-                    }
-                    _ => c.to_string(),
-                };
-
+                let escaped = escape_char(*c);
                 write!(f, "{}{}'", prefix, escaped)
             }
             Token::Punctuator(p) => write!(f, "{}", p),
             _ => unreachable!("Preprocessor tokens should not be displayed: {}", self),
         }
     }
+}
+
+pub fn escape_char(c: char) -> String {
+    match c {
+        '\\' => "\\\\".to_string(),
+        '"' => "\\\"".to_string(),
+        '\'' => "\\'".to_string(),
+        '\0' => "\\0".to_string(), // Null character
+        '\t' => "\\t".to_string(), // \x09, Tab
+        '\n' => "\\n".to_string(), // \x0a, Newline
+        '\r' => "\\r".to_string(), // \x0d, Carriage return
+        '\x00'..='\x1f' | '\u{80}'..='\u{ff}' => {
+            // For control characters (non-printable) characters, and extended ASCII codes,
+            // use hexadecimal escape
+            format!("\\x{:02x}", c as u8)
+        }
+        _ => c.to_string(),
+    }
+}
+
+pub fn escape_string(s: &str) -> String {
+    s.chars().map(escape_char).collect::<Vec<String>>().join("")
 }
 
 impl Display for Number {

@@ -306,13 +306,16 @@ struct Lexer<'a> {
     // The last position of the character consumed by `next_char()`.
     pub last_position: Position,
 
-    // The index of the next token that is expected to be a directive start token (`#`).
+    // The index of the last newline character.
+    //
     // It is used to determine if the next token is a directive start token.
-    pub expect_next_directive_start_token_index: usize,
+    // For example, if the next token is `#` and the last newline position is the same as the
+    // this token, it means that this token is a directive start token.
+    pub last_newline_position: usize,
 
     // The index of last directive line.
     // It is used to determine if the next newline character is the end of a directive.
-    pub last_directive_line_index: usize,
+    pub last_directive_line_index: Option<usize>,
 
     // Stack of positions.
     // Used to store the positions of characters when consuming them in sequence.
@@ -325,8 +328,8 @@ impl<'a> Lexer<'a> {
         Self {
             upstream,
             last_position: Position::new(0, 0, 0),
-            expect_next_directive_start_token_index: 0,
-            last_directive_line_index: usize::MAX, // no directive line at initialization
+            last_newline_position: 0, // to make the `#` as directive start token if it is the first token
+            last_directive_line_index: None, // no directive line at initialization
             stored_positions: vec![],
         }
     }
@@ -403,7 +406,7 @@ impl<'a> Lexer<'a> {
 
 impl Lexer<'_> {
     fn lex(&mut self) -> Result<Vec<TokenWithRange>, PreprocessError> {
-        let mut token_with_ranges = vec![];
+        let mut output = vec![];
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
@@ -418,42 +421,44 @@ impl Lexer<'_> {
                     self.next_char(); // consume '\r'
                     self.next_char(); // consume '\n'
 
-                    if self.last_position.line == self.last_directive_line_index {
-                        token_with_ranges.push(TokenWithRange::new(
+                    if matches!(self.last_directive_line_index, Some(idx) if idx == self.last_position.line)
+                    {
+                        output.push(TokenWithRange::new(
                             Token::DirectiveEnd,
                             Range::from_single_position(&self.last_position),
                         ));
                     }
 
-                    self.expect_next_directive_start_token_index = token_with_ranges.len();
+                    self.last_newline_position = output.len();
                 }
                 '\n' => {
                     self.next_char(); // consume '\n'
 
-                    if self.last_position.line == self.last_directive_line_index {
-                        token_with_ranges.push(TokenWithRange::new(
+                    if matches!(self.last_directive_line_index, Some(idx) if idx == self.last_position.line)
+                    {
+                        output.push(TokenWithRange::new(
                             Token::DirectiveEnd,
                             Range::from_single_position(&self.last_position),
                         ));
                     }
 
-                    self.expect_next_directive_start_token_index = token_with_ranges.len();
+                    self.last_newline_position = output.len();
                 }
                 '\'' => {
                     // char
-                    token_with_ranges.push(self.lex_char(CharType::Default, 0)?);
+                    output.push(self.lex_char(CharType::Default, 0)?);
                 }
                 '"' => {
-                    if is_directive_include(&token_with_ranges)
-                        || (self.last_position.line == self.last_directive_line_index
-                            && is_function_has_include(&token_with_ranges))
+                    if is_directive_include(&output)
+                        || (matches!(self.last_directive_line_index, Some(idx) if idx == self.last_position.line)
+                            && is_function_has_include(&output))
                     {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
-                        token_with_ranges.push(self.lex_filepath()?);
+                        output.push(self.lex_filepath()?);
                     } else {
                         // normal string
-                        token_with_ranges.push(self.lex_string(StringType::Default, 0)?);
+                        output.push(self.lex_string(StringType::Default, 0)?);
                     }
                 }
                 '+' => {
@@ -464,7 +469,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '+'
                         self.next_char(); // consume '+'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Increase),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -475,7 +480,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '+'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::AddAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -483,7 +488,7 @@ impl Lexer<'_> {
                         // `+`
                         self.next_char(); // consume '+'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Add),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -497,7 +502,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '-'
                         self.next_char(); // consume '-'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Decrease),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -508,7 +513,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '-'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::SubtractAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -519,7 +524,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '-'
                         self.next_char(); // consume '>'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Arrow),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -527,7 +532,7 @@ impl Lexer<'_> {
                         // `-`
                         self.next_char(); // consume '-'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Subtract),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -541,7 +546,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '*'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::MultiplyAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -549,7 +554,7 @@ impl Lexer<'_> {
                         // `*`
                         self.next_char(); // consume '*'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Multiply),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -563,7 +568,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '/'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::DivideAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -571,7 +576,7 @@ impl Lexer<'_> {
                         // `/`
                         self.next_char(); // consume '/'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Divide),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -585,7 +590,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '%'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::ModulusAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -593,7 +598,7 @@ impl Lexer<'_> {
                         // `%`
                         self.next_char(); // consume '%'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Modulo),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -607,7 +612,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '='
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Equal),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -615,7 +620,7 @@ impl Lexer<'_> {
                         // `=`
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Assign),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -629,7 +634,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '!'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::NotEqual),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -637,7 +642,7 @@ impl Lexer<'_> {
                         // `!`
                         self.next_char(); // consume '!'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Not),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -651,7 +656,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '>'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::GreaterThanOrEqual),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -666,13 +671,13 @@ impl Lexer<'_> {
                             // `>>=`
                             self.next_char(); // consume '='
 
-                            token_with_ranges.push(TokenWithRange::new(
+                            output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftRightAssign),
                                 Range::new(&self.pop_position_from_store(), &self.last_position),
                             ));
                         } else {
                             // `>>`
-                            token_with_ranges.push(TokenWithRange::new(
+                            output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftRight),
                                 Range::new(&self.pop_position_from_store(), &self.last_position),
                             ));
@@ -681,20 +686,20 @@ impl Lexer<'_> {
                         // `>`
                         self.next_char(); // consume '>'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::GreaterThan),
                             Range::from_single_position(&self.last_position),
                         ));
                     }
                 }
                 '<' => {
-                    if is_directive_include(&token_with_ranges)
-                        || (self.last_position.line == self.last_directive_line_index
-                            && is_function_has_include(&token_with_ranges))
+                    if is_directive_include(&output)
+                        || (matches!(self.last_directive_line_index, Some(idx) if idx == self.last_position.line)
+                            && is_function_has_include(&output))
                     {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
-                        token_with_ranges.push(self.lex_angle_filepath()?);
+                        output.push(self.lex_angle_filepath()?);
                     } else if self.peek_char_and_equals(1, '=') {
                         // `<=`
                         self.push_peek_position_into_store();
@@ -702,7 +707,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '<'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::LessThanOrEqual),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -717,13 +722,13 @@ impl Lexer<'_> {
                             // `<<=`
                             self.next_char(); // consume '='
 
-                            token_with_ranges.push(TokenWithRange::new(
+                            output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftLeftAssign),
                                 Range::new(&self.pop_position_from_store(), &self.last_position),
                             ));
                         } else {
                             // `<<`
-                            token_with_ranges.push(TokenWithRange::new(
+                            output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftLeft),
                                 Range::new(&self.pop_position_from_store(), &self.last_position),
                             ));
@@ -732,7 +737,7 @@ impl Lexer<'_> {
                         // `<`
                         self.next_char(); // consume '<'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::LessThan),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -746,7 +751,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '&'
                         self.next_char(); // consume '&'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::And),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -757,7 +762,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '&'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseAndAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -765,7 +770,7 @@ impl Lexer<'_> {
                         // `&`
                         self.next_char(); // consume '&'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseAnd),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -779,7 +784,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '|'
                         self.next_char(); // consume '|'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Or),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -790,7 +795,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '|'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseOrAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -798,7 +803,7 @@ impl Lexer<'_> {
                         // `|`
                         self.next_char(); // consume '|'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseOr),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -812,7 +817,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '^'
                         self.next_char(); // consume '='
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseXorAssign),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -820,7 +825,7 @@ impl Lexer<'_> {
                         // `^`
                         self.next_char(); // consume '^'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseXor),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -830,7 +835,7 @@ impl Lexer<'_> {
                     // `~`
                     self.next_char(); // consume '~'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::BitwiseNot),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -839,7 +844,7 @@ impl Lexer<'_> {
                     // `?`
                     self.next_char(); // consume '?'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::QuestionMark),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -848,7 +853,7 @@ impl Lexer<'_> {
                     // `,`
                     self.next_char(); // consume ','
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::Comma),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -856,7 +861,7 @@ impl Lexer<'_> {
                 '.' => {
                     if matches!(self.peek_char(1), Some('0'..'9')) {
                         // This is a number with a leading dot, e.g., `.5`
-                        token_with_ranges.push(self.lex_decimal_number(true)?);
+                        output.push(self.lex_decimal_number(true)?);
                     } else if self.peek_char_and_equals(1, '.') && self.peek_char_and_equals(2, '.')
                     {
                         // `...`
@@ -866,7 +871,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '.'
                         self.next_char(); // consume '.'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Ellipsis),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -874,7 +879,7 @@ impl Lexer<'_> {
                         // `.`
                         self.next_char(); // consume '.'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Dot),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -884,7 +889,7 @@ impl Lexer<'_> {
                     // `{`
                     self.next_char(); // consume '{'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::BraceOpen),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -893,7 +898,7 @@ impl Lexer<'_> {
                     // `}`
                     self.next_char(); // consume '}'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::BraceClose),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -906,7 +911,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume '['
                         self.next_char(); // consume '['
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::AttributeOpen),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -914,7 +919,7 @@ impl Lexer<'_> {
                         // `[`
                         self.next_char(); // consume '['
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BracketOpen),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -928,7 +933,7 @@ impl Lexer<'_> {
                         self.next_char(); // consume ']'
                         self.next_char(); // consume ']'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::AttributeClose),
                             Range::new(&self.pop_position_from_store(), &self.last_position),
                         ));
@@ -937,7 +942,7 @@ impl Lexer<'_> {
                         // `]`
                         self.next_char(); // consume ']'
 
-                        token_with_ranges.push(TokenWithRange::new(
+                        output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BracketClose),
                             Range::from_single_position(&self.last_position),
                         ));
@@ -947,7 +952,7 @@ impl Lexer<'_> {
                     // `(`
                     self.next_char(); // consume '('
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::ParenthesisOpen),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -956,7 +961,7 @@ impl Lexer<'_> {
                     // `)`
                     self.next_char(); // consume ')'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::ParenthesisClose),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -965,7 +970,7 @@ impl Lexer<'_> {
                     // `;`
                     self.next_char(); // consume ';'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::Semicolon),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -974,7 +979,7 @@ impl Lexer<'_> {
                     // `:`
                     self.next_char(); // consume ':'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Punctuator(Punctuator::Colon),
                         Range::from_single_position(&self.last_position),
                     ));
@@ -986,18 +991,18 @@ impl Lexer<'_> {
                     self.next_char(); // consume '#'
                     self.next_char(); // consume '#'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::PoundPound,
                         Range::new(&self.pop_position_from_store(), &self.last_position),
                     ));
                 }
-                '#' if token_with_ranges.len() == self.expect_next_directive_start_token_index => {
+                '#' if output.len() == self.last_newline_position => {
                     // `#` at the beginning of a line or after a newline
                     self.next_char(); // consume '#'
 
-                    self.last_directive_line_index = self.last_position.line;
+                    self.last_directive_line_index = Some(self.last_position.line);
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::DirectiveStart,
                         Range::from_single_position(&self.last_position),
                     ));
@@ -1006,30 +1011,30 @@ impl Lexer<'_> {
                     // `#`, normal pound sign
                     self.next_char(); // consume '#'
 
-                    token_with_ranges.push(TokenWithRange::new(
+                    output.push(TokenWithRange::new(
                         Token::Pound,
                         Range::from_single_position(&self.last_position),
                     ));
                 }
                 '0' if matches!(self.peek_char(1), Some('x' | 'X')) => {
                     // hexadecimal number
-                    token_with_ranges.push(self.lex_hexadecimal_number()?);
+                    output.push(self.lex_hexadecimal_number()?);
                 }
                 '0' if matches!(self.peek_char(1), Some('b' | 'B')) => {
                     // binary number
-                    token_with_ranges.push(self.lex_binary_number()?);
+                    output.push(self.lex_binary_number()?);
                 }
                 '0' if matches!(self.peek_char(1), Some('.')) => {
                     // decimal number
-                    token_with_ranges.push(self.lex_decimal_number(false)?);
+                    output.push(self.lex_decimal_number(false)?);
                 }
                 '0' => {
                     // octal number
-                    token_with_ranges.push(self.lex_octal_number()?);
+                    output.push(self.lex_octal_number()?);
                 }
                 '1'..='9' => {
                     // decimal number
-                    token_with_ranges.push(self.lex_decimal_number(false)?);
+                    output.push(self.lex_decimal_number(false)?);
                 }
                 'L' | 'u' | 'U' if matches!(self.peek_char(1), Some('\'' | '"')) => {
                     let prefix = *current_char;
@@ -1057,7 +1062,7 @@ impl Lexer<'_> {
                         self.lex_string(string_type, 1)?
                     };
 
-                    token_with_ranges.push(token_with_range);
+                    output.push(token_with_range);
                 }
                 'u' if matches!(self.peek_char(1), Some('8'))
                     && matches!(self.peek_char(2), Some('\'' | '"')) =>
@@ -1074,14 +1079,13 @@ impl Lexer<'_> {
                         self.lex_string(StringType::UTF8, 2)?
                     };
 
-                    token_with_ranges.push(token_with_range);
+                    output.push(token_with_range);
                 }
                 'a'..='z' | 'A'..='Z' | '_' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{10ffff}' => {
                     // identifier
                     let token_with_range = self.lex_identifier()?;
 
-                    if is_directive_define(&token_with_ranges) && self.peek_char_and_equals(0, '(')
-                    {
+                    if is_directive_define(&output) && self.peek_char_and_equals(0, '(') {
                         // If the last token is a `#define` directive, and the current identifier
                         // is followed by '(' immediately, it indicates that the identifier is a function-like macro.
                         // Convert the identifier to a function-like macro identifier.
@@ -1092,13 +1096,12 @@ impl Lexer<'_> {
                         {
                             let function_like_macro_identifier =
                                 Token::FunctionLikeMacroIdentifier(id);
-                            token_with_ranges
-                                .push(TokenWithRange::new(function_like_macro_identifier, range));
+                            output.push(TokenWithRange::new(function_like_macro_identifier, range));
                         } else {
                             unreachable!()
                         }
                     } else {
-                        token_with_ranges.push(token_with_range);
+                        output.push(token_with_range);
                     }
                 }
                 current_char => {
@@ -1110,7 +1113,7 @@ impl Lexer<'_> {
             }
         }
 
-        Ok(token_with_ranges)
+        Ok(output)
     }
 
     fn lex_identifier(&mut self) -> Result<TokenWithRange, PreprocessError> {

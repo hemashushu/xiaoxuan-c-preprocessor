@@ -9,7 +9,7 @@ use crate::PreprocessError;
 // A struct representing a range of a snippet in the source text.
 //
 // ```diagram
-//                 /-- snippet offset in source text
+//                 /-- snippet offset in source text (snippet is a substring of source text)
 //                 |
 //                 |            |-- snippet length
 //                 v            v

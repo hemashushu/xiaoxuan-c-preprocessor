@@ -11,19 +11,25 @@ use crate::{
     lexer::lex_from_str, location::Location,
 };
 
-pub struct Definition {
-    items: HashMap<String, DefinitionItem>,
+pub struct MacroMap {
+    macros: HashMap<String, MacroDefinition>,
 }
 
-pub enum DefinitionItem {
+pub enum MacroDefinition {
     ObjectLike(Vec<TokenWithLocation>),
     FunctionLike(Vec<String>, Vec<TokenWithLocation>),
 }
 
-impl Definition {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum MacroManipulationResult {
+    Success,
+    Failure,
+}
+
+impl MacroMap {
     pub fn new() -> Self {
         Self {
-            items: HashMap::new(),
+            macros: HashMap::new(),
         }
     }
 
@@ -32,9 +38,9 @@ impl Definition {
     ) -> Result<Self, PreprocessError> {
         let mut definition = Self::new();
         for (key, value) in predefinitions {
-            if !definition.add_by_key_value(key, value)? {
+            if definition.add_by_key_value(key, value)? == MacroManipulationResult::Failure {
                 return Err(PreprocessError::Message(format!(
-                    "Duplicate definition for key '{}'",
+                    "Duplicate macro: '{}'",
                     key
                 )));
             }
@@ -50,7 +56,11 @@ impl Definition {
     /// an empty value is allowed.
     ///
     /// Returns `Ok(false)` if the key was already present.
-    pub fn add_by_key_value(&mut self, key: &str, value: &str) -> Result<bool, PreprocessError> {
+    pub fn add_by_key_value(
+        &mut self,
+        key: &str,
+        value: &str,
+    ) -> Result<MacroManipulationResult, PreprocessError> {
         // Tokenize the value and create TokenWithLocation instances.
         let tokens = lex_from_str(value)?;
         let token_with_locations: Vec<TokenWithLocation> = tokens
@@ -69,9 +79,12 @@ impl Definition {
             )));
         }
 
-        let item = DefinitionItem::ObjectLike(token_with_locations);
+        let item = MacroDefinition::ObjectLike(token_with_locations);
 
-        Ok(self.items.insert(key.to_owned(), item).is_none())
+        Ok(match self.macros.insert(key.to_owned(), item) {
+            Some(_) => MacroManipulationResult::Failure, // Key was already present
+            None => MacroManipulationResult::Success,    // Key was added successfully
+        })
     }
 
     /// Adds a definition by a key and a list of tokens with ranges.
@@ -80,9 +93,9 @@ impl Definition {
         &mut self,
         file_number: usize,
         key: &str,
-        token_with_ranges: &[TokenWithRange],
-    ) -> Result</* success */ bool, PreprocessError> {
-        let token_with_locations: Vec<TokenWithLocation> = token_with_ranges
+        definition: &[TokenWithRange],
+    ) -> Result<MacroManipulationResult, PreprocessError> {
+        let token_with_locations: Vec<TokenWithLocation> = definition
             .iter()
             .map(|token_with_range| {
                 let location = Location::new(file_number, &token_with_range.range);
@@ -90,9 +103,12 @@ impl Definition {
             })
             .collect();
 
-        let item = DefinitionItem::ObjectLike(token_with_locations);
+        let macro_definition = MacroDefinition::ObjectLike(token_with_locations);
 
-        Ok(self.items.insert(key.to_owned(), item).is_none())
+        Ok(match self.macros.insert(key.to_owned(), macro_definition) {
+            Some(_) => MacroManipulationResult::Failure, // Key was already present
+            None => MacroManipulationResult::Success,    // Key was added successfully
+        })
     }
 
     pub fn add_function_like(
@@ -100,9 +116,9 @@ impl Definition {
         file_number: usize,
         key: &str,
         parameters: &[String],
-        token_with_ranges: &[TokenWithRange],
-    ) -> Result</* success */ bool, PreprocessError> {
-        let token_with_locations: Vec<TokenWithLocation> = token_with_ranges
+        definition: &[TokenWithRange],
+    ) -> Result<MacroManipulationResult, PreprocessError> {
+        let token_with_locations: Vec<TokenWithLocation> = definition
             .iter()
             .map(|token_with_range| {
                 let location = Location::new(file_number, &token_with_range.range);
@@ -110,22 +126,29 @@ impl Definition {
             })
             .collect();
 
-        let item = DefinitionItem::FunctionLike(parameters.to_vec(), token_with_locations);
+        let macro_definition =
+            MacroDefinition::FunctionLike(parameters.to_vec(), token_with_locations);
 
-        Ok(self.items.insert(key.to_owned(), item).is_none())
+        Ok(match self.macros.insert(key.to_owned(), macro_definition) {
+            Some(_) => MacroManipulationResult::Failure, // Key was already present
+            None => MacroManipulationResult::Success,    // Key was added successfully
+        })
     }
 
-    pub fn get(&self, key: &str) -> Option<&DefinitionItem> {
-        self.items.get(key)
+    pub fn get(&self, key: &str) -> Option<&MacroDefinition> {
+        self.macros.get(key)
     }
 
     pub fn contains(&self, key: &str) -> bool {
-        self.items.contains_key(key)
+        self.macros.contains_key(key)
     }
 
     /// Remove the definition for the given key.
     /// Returns `true` if the key was present and removed, `false` otherwise.
-    pub fn remove(&mut self, key: &str) -> bool {
-        self.items.remove(key).is_some()
+    pub fn remove(&mut self, key: &str) -> MacroManipulationResult {
+        match self.macros.remove(key) {
+            Some(_) => MacroManipulationResult::Success, // Key was present and removed
+            None => MacroManipulationResult::Failure,    // Key was not present
+        }
     }
 }

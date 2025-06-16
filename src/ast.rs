@@ -6,12 +6,20 @@
 
 use crate::{TokenWithRange, range::Range};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Program {
     pub statements: Vec<Statement>,
 }
 
-#[derive(Debug, PartialEq)]
+impl Default for Program {
+    fn default() -> Self {
+        Self {
+            statements: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Pragma(Pragma),
     Define(Define),
@@ -47,7 +55,7 @@ pub enum Statement {
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/impl.html
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Pragma {
     pub parts: Vec<TokenWithRange>,
 }
@@ -66,7 +74,7 @@ pub struct Pragma {
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/replace.html
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Define {
     ObjectLike {
         identifier: (String, Range), // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
@@ -99,7 +107,7 @@ pub enum Define {
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/include.html
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Include {
     Identifier(String, Range),
     FilePath {
@@ -144,7 +152,7 @@ pub enum Include {
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/embed.html
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Embed {
     Identifier(String, Range),
     FilePath {
@@ -176,19 +184,19 @@ pub enum Embed {
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/conditional.html
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct If {
     pub branches: Vec<Branch>,
     pub alternative: Option<Vec<Statement>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Branch {
     pub condition: Condition,
     pub consequence: Vec<Statement>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Condition {
     Expression(Vec<TokenWithRange>),
     Defined(/* id */ String, Range),

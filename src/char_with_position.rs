@@ -11,6 +11,7 @@ use crate::position::Position;
 pub struct CharWithPosition {
     /// The character from the source text.
     pub character: char,
+
     /// The position of the character in the source text.
     pub position: Position,
 }
@@ -28,6 +29,7 @@ impl CharWithPosition {
 pub struct CharsWithPositionIter<'a> {
     /// The underlying iterator that provides characters.
     upstream: &'a mut dyn Iterator<Item = char>,
+
     /// Tracks the current position in the source text.
     current_position: Position,
 }

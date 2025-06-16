@@ -37,9 +37,7 @@ impl<'a> PreprocessorParser<'a> {
         }
     }
 
-    pub fn next_token_with_location(
-        &mut self,
-    ) -> Option<TokenWithLocation> {
+    pub fn next_token_with_location(&mut self) -> Option<TokenWithLocation> {
         match self.upstream.next() {
             Some(token_with_location) => {
                 self.last_location = token_with_location.location;

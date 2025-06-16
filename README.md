@@ -91,6 +91,6 @@ ANCPP is designed to be a modern, portable, and strictly standards-compliant C p
 - Using _token concatenation_ operator (`##`) before `__VA_ARGS__` is not supported.
 - Unsupported pragmas will halt processing rather than being ignored. For example, `#pragma GCC dependency` will result in an error.
 - Trigraphs (e.g., `??<`, `??>`) and digraphs (e.g., `<:`, `:>`, and `%:%:`) are not supported.
-- Each file is included only once, even if it does not have header guards.
+- Each file is included only once, even if it does not have header guards or `#pragma once`.
 
 These limitations are intended to make object-like macros behave more like C variables, function-like macros behave more like C functions, and conditional expressions within `#if` structures behave like standard C expressions. As a result, ANCPP is more consistent, predictable, clear, and less error-prone.

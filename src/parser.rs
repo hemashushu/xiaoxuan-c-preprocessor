@@ -203,30 +203,6 @@ impl<'a> Parser<'a> {
             "closing parenthesis",
         )
     }
-    //     // '['
-    //     fn consume_left_bracket(&mut self) -> Result<(), PreprocessError> {
-    //         self.expect_and_consume_token(&Token::LeftBracket, "left bracket")
-    //     }
-    //
-    //     // ']'
-    //     fn consume_right_bracket(&mut self) -> Result<(), PreprocessError> {
-    //         self.expect_and_consume_token(&Token::RightBracket, "right bracket")
-    //     }
-    //
-    //     // '}'
-    //     fn consume_right_brace(&mut self) -> Result<(), PreprocessError> {
-    //         self.expect_and_consume_token(&Token::RightBrace, "right brace")
-    //     }
-    //
-    //     // '='
-    //     fn consume_equal(&mut self) -> Result<(), PreprocessError> {
-    //         self.expect_and_consume_token(&Token::Equal, "equal sign")
-    //     }
-    //
-    //     // ':'
-    //     fn consume_colon(&mut self) -> Result<(), PreprocessError> {
-    //         self.expect_and_consume_token(&Token::Colon, "colon sign")
-    //     }
 }
 
 impl Parser<'_> {

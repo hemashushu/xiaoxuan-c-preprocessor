@@ -18,7 +18,7 @@ mod ast;
 mod ast_printer;
 mod char_with_position;
 mod context;
-mod definition;
+mod macro_map;
 mod lexer;
 mod location;
 mod memory_file_provider;
@@ -95,3 +95,4 @@ impl Display for PreprocessFileError {
 }
 
 impl std::error::Error for PreprocessFileError {}
+

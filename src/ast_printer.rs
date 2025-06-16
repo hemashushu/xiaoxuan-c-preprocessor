@@ -123,14 +123,13 @@ fn print_embed<W: Write>(
     indent_level: usize,
 ) -> std::io::Result<()> {
     let generate_data_text = |definition: &[TokenWithRange]| {
+        // Note that can not join definitions (tokens) use `join(", ")` because
+        // definitions are token sequences, not comma-separated values.
         definition
             .iter()
             .map(|TokenWithRange { token, .. }| token.to_string())
             .collect::<Vec<_>>()
             .join(" ")
-
-        // Note that can not join definitions (tokens) use `join(", ")` because
-        // definitions are token sequences, not comma-separated values.
     };
 
     let indent = DEFAULT_INDENT_CHARS.repeat(indent_level);

@@ -7,6 +7,9 @@
 use std::path::{Path, PathBuf};
 
 pub struct NativeFileProvider {
+    /// The root directory of the project.
+    project_root_directory: PathBuf,
+
     /// Directories to search for system headers.
     system_headers_directories: Vec<PathBuf>,
 
@@ -23,7 +26,11 @@ impl NativeFileProvider {
     /// - `user_headers_directories`: Directories to search for module-specific headers.
     ///   These are used when resolving `#include` directives with double quotes,
     ///   e.g., `#include "relative/path/to/header.h"`.
-    pub fn new(user_headers_directories: &[&Path], system_headers_directories: &[&Path]) -> Self {
+    pub fn new(
+        project_root_directory: &Path,
+        user_headers_directories: &[&Path],
+        system_headers_directories: &[&Path],
+    ) -> Self {
         let user_headers_directories_owned = user_headers_directories
             .iter()
             .map(|&p| PathBuf::from(p))
@@ -35,6 +42,7 @@ impl NativeFileProvider {
             .collect();
 
         Self {
+            project_root_directory: PathBuf::from(project_root_directory),
             system_headers_directories: system_headers_directories_owned,
             user_headers_directories: user_headers_directories_owned,
         }
