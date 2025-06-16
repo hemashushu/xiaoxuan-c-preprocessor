@@ -327,7 +327,7 @@ impl<'a> Lexer<'a> {
     fn new(upstream: &'a mut PeekableIter<'a, CharWithPosition>) -> Self {
         Self {
             upstream,
-            last_position: Position::new(0, 0, 0),
+            last_position: Position::default(),
             last_newline_position: 0, // to make the `#` as directive start token if it is the first token
             last_directive_line_index: None, // no directive line at initialization
             stored_positions: vec![],

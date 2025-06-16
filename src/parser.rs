@@ -39,7 +39,7 @@ impl<'a> Parser<'a> {
             // Initialize last_range with the first token's range.
             first_token.range
         } else {
-            Range::from_detail(0, 0, 0, 0)
+            Range::default()
         };
 
         Self {
@@ -956,9 +956,11 @@ impl Parser<'_> {
                 "ifdef" | "elifdef" => {
                     // Handle `ifdef` or `elifdef` directive
                     let identifier = self.expect_and_consume_identifier()?;
+                    let range = self.last_range;
+
                     self.expect_and_consume_directive_end_or_eof()?;
 
-                    let condition = Condition::Defined(identifier, self.last_range);
+                    let condition = Condition::Defined(identifier, range);
                     let consequence = collect_consequence(self)?;
                     branches.push(Branch {
                         condition,
@@ -968,9 +970,11 @@ impl Parser<'_> {
                 "ifndef" | "elifndef" => {
                     // Handle `ifndef` or `elifndef` directive
                     let identifier = self.expect_and_consume_identifier()?;
+                    let range = self.last_range;
+
                     self.expect_and_consume_directive_end_or_eof()?;
 
-                    let condition = Condition::NotDefined(identifier, self.last_range);
+                    let condition = Condition::NotDefined(identifier, range);
                     let consequence = collect_consequence(self)?;
                     branches.push(Branch {
                         condition,

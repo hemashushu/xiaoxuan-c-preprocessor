@@ -13,7 +13,7 @@ use chrono::Local;
 
 use crate::{
     PreprocessError, PreprocessFileError, TokenWithLocation, TokenWithRange,
-    ast::{Define, Embed, Include, Pragma, Program, Statement},
+    ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     context::{Context, ContextFile, FileSource, IncludeFile},
     file_provider::{FileProvider, ResolvedResult, normalize_path},
     header_file_cache::HeaderFileCache,
@@ -23,7 +23,7 @@ use crate::{
     parser::parse_from_str,
     peekable_iter::PeekableIter,
     prompt::{Prompt, PromptLevel},
-    range::Range,
+    range::{self, Range},
     token::{IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token},
 };
 
@@ -134,7 +134,7 @@ where
             Statement::Undef(identifier, range) => preprocess_undefine(context, identifier, range)?,
             Statement::Include(include) => preprocess_include(context, include)?,
             Statement::Embed(embed) => preprocess_embed(context, embed)?,
-            Statement::If(_) => todo!(),
+            Statement::If(if_) => preprocess_if(context, if_)?,
             Statement::Error(message, range) => preprocess_error(context, message, range)?,
             Statement::Warning(message, range) => preprocess_warnning(context, message, range)?,
             Statement::Code(token_with_ranges) => preprocess_code(context, token_with_ranges)?,
@@ -567,7 +567,7 @@ fn preprocess_include(
             .map_err(|error| PreprocessFileError::new(file_number, error))?;
 
         // check header guard or `#pragma once`
-        // todo
+        check_include_guard(context, file_number, &relative_path, &program);
 
         preprocess_sub_program(
             context,
@@ -616,9 +616,126 @@ fn preprocess_sub_program(
     Ok(())
 }
 
+fn check_include_guard(
+    context: &mut Context<impl FileProvider>,
+    file_number: usize,
+    relative_path: &Path,
+    program: &Program,
+) {
+    // Check if the file has an include guard or `#pragma once`.
+    // If it does, we can skip the preprocessing of the file.
+    // Otherwise, we will preprocess the file normally.
+    let first_statement_opt = program.statements.first();
+
+    if first_statement_opt.is_none() {
+        // File is empty
+        context.prompts.push(Prompt::Message(
+            PromptLevel::Warning,
+            file_number,
+            "Consider adding `#pragma once` to this file to prevent multiple inclusions."
+                .to_string(),
+        ));
+        return;
+    }
+
+    let first_statement = first_statement_opt.unwrap();
+
+    if matches!(
+        first_statement,
+        Statement::Pragma(Pragma { parts, .. })
+        if matches!(
+            parts.first(),
+            Some(TokenWithRange { token: Token::Identifier(name), .. }) if name == "once"))
+    {
+        // The file has `#pragma once`, we can skip further checks.
+        return;
+    }
+
+    let suggested_include_guard_macro_name = relative_path
+        .to_string_lossy()
+        .replace('/', "_")
+        .replace('-', "_")
+        .replace('.', "_")
+        .to_uppercase();
+
+    if matches!(
+        first_statement,
+        Statement::If(If {
+            branches,
+            alternative: None
+        }) if branches.len() == 1 &&
+        matches!(
+            branches.first().unwrap(),
+            Branch {
+                condition: Condition::NotDefined(name0, _),
+                consequence
+            } if matches!(
+                consequence.first(),
+                Some(Statement::Define(Define::ObjectLike {
+                    identifier: (name1, _),
+                    definition
+                })) if name0 == name1 && definition.is_empty()
+            )
+        )
+    ) {
+        let branches = if let Statement::If(If { branches, .. }) = first_statement {
+            branches
+        } else {
+            unreachable!()
+        };
+
+        let branch = branches.first().unwrap();
+
+        let (name, range) = match &branch.condition {
+            Condition::NotDefined(name, range) => (name, range),
+            _ => unreachable!(),
+        };
+
+        // The file has an include guard.
+        if name.ends_with(&suggested_include_guard_macro_name) {
+            // The include guard macro name matches the suggested name.
+            // Suggest using `#pragma once` instead.
+            context.prompts.push(Prompt::Message(
+                PromptLevel::Info,
+                file_number,
+                "Consider using `#pragma once` instead of include guards.".to_owned(),
+            ));
+        } else {
+            // The include guard macro name does not match the suggested name.
+            // Suggest renaming the include guard macro to follow the convention, which
+            // prevents potential conflicts with other macros.
+            context.prompts.push(Prompt::MessageWithRange(
+                PromptLevel::Warning,
+                file_number,
+                format!(
+                    "Consider renaming the include guard macro to `{}` to prevent potential conflicts with other macros.",
+                    suggested_include_guard_macro_name
+                ),
+                *range,
+            ));
+        }
+    } else {
+        // The file does not have an include guard or `#pragma once`.
+        // We suggest adding `#pragma once`.
+        context.prompts.push(Prompt::Message(
+            PromptLevel::Warning,
+            file_number,
+            "Consider adding `#pragma once` to this file to prevent multiple inclusions."
+                .to_owned(),
+        ));
+    }
+}
+
 fn preprocess_embed(
     context: &mut Context<impl FileProvider>,
     embed: &Embed,
+) -> Result<(), PreprocessFileError> {
+    Ok(())
+}
+
+fn preprocess_if(
+    context: &mut Context<impl FileProvider>,
+    if_: &If,
 ) -> Result<(), PreprocessFileError> {
     Ok(())
 }
@@ -2674,6 +2791,156 @@ FOO BAR
                     }
                 )
             })
+        ));
+    }
+
+    #[test]
+    fn test_preprocess_include_guard_check() {
+        // Empty header file
+        assert!(matches!(
+            process_multiple_source(
+                r#"
+#include "foo.h"
+"#,
+                &[("header/foo.h", "",)],
+                &[],
+                &[],
+            )
+            .unwrap()
+            .prompts
+            .first(),
+            Some(Prompt::Message(PromptLevel::Warning, 1, _))
+        ));
+
+        // Header file without include guard or `#pragma once`
+        assert!(matches!(
+            process_multiple_source(
+                r#"
+#include "foo.h"
+"#,
+                &[(
+                    "header/foo.h",
+                    r#"
+#define FOO 42
+"#,
+                )],
+                &[],
+                &[],
+            )
+            .unwrap()
+            .prompts
+            .first(),
+            Some(Prompt::Message(PromptLevel::Warning, 1, _))
+        ));
+
+        // Header file with `#pragma once`
+        assert!(
+            process_multiple_source(
+                r#"
+#include "foo.h"
+"#,
+                &[(
+                    "header/foo.h",
+                    r#"
+#pragma once
+#define FOO 42
+"#,
+                )],
+                &[],
+                &[],
+            )
+            .unwrap()
+            .prompts
+            .is_empty()
+        );
+
+        // Header file with include guard
+        assert!(matches!(
+            process_multiple_source(
+                r#"
+#include "foo.h"
+"#,
+                &[(
+                    "header/foo.h",
+                    r#"
+#ifndef FOO_H
+#define FOO_H
+    #define FOO 42
+#endif
+"#,
+                )],
+                &[],
+                &[],
+            )
+            .unwrap()
+            .prompts
+            .first(),
+            Some(Prompt::Message(PromptLevel::Info, 1, _))
+        ));
+
+        // Header file with include guard and the macro name following the suggested convention
+        assert!(matches!(
+            process_multiple_source(
+                r#"
+#include "foo.h"
+"#,
+                &[(
+                    "header/foo.h",
+                    r#"
+#ifndef PREFIX_FOO_H
+#define PREFIX_FOO_H
+    #define FOO 42
+#endif
+"#,
+                )],
+                &[],
+                &[],
+            )
+            .unwrap()
+            .prompts
+            .first(),
+            Some(Prompt::Message(PromptLevel::Info, 1, _))
+        ));
+
+
+        // Header file with include guard but the macro name does not follow the suggested one
+        assert!(matches!(
+            process_multiple_source(
+                r#"
+#include "foo.h"
+"#,
+                &[(
+                    "header/foo.h",
+                    r#"
+#ifndef BAR_H
+#define BAR_H
+    #define FOO 42
+#endif
+"#,
+                )],
+                &[],
+                &[],
+            )
+            .unwrap()
+            .prompts
+            .first(),
+            Some(Prompt::MessageWithRange(
+                PromptLevel::Warning,
+                1,
+                _,
+                Range {
+                    start: Position {
+                        index: 9,
+                        line: 1,
+                        column: 8
+                    },
+                    end_included: Position {
+                        index: 13,
+                        line: 1,
+                        column: 12
+                    }
+                }
+            ))
         ));
     }
 }
