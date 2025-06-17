@@ -4,13 +4,15 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
+use std::f32::consts::E;
+
 use crate::{
     PreprocessError, TokenWithRange,
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     lexer::lex_from_str,
     peekable_iter::PeekableIter,
     range::Range,
-    token::{Number, Punctuator, StringType, Token},
+    token::{CharType, IntegerNumber, Number, Punctuator, StringType, Token},
 };
 
 const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
@@ -460,8 +462,8 @@ impl Parser<'_> {
 
         let parse_balanced_definition =
             |parser: &mut Parser| -> Result<Vec<TokenWithRange>, PreprocessError> {
-                // for collecting balanced brackets
-                // e.g., `(...)`, `[...]`, `{...}`, etc.
+                // for collecting balanced brackets and quotes
+                // e.g., `(...)`, `[...]`, `{...}`, `"..."`, and `'...'`
                 // when this stack is empty, it means we are in a balanced state.
                 let mut bracket_stack: Vec<Punctuator> = vec![];
 
@@ -476,7 +478,8 @@ impl Parser<'_> {
                                     break; // stop collecting tokens
                                 } else {
                                     return Err(PreprocessError::MessageWithPosition(
-                                        "Unbalanced brackets in macro definition.".to_owned(),
+                                        "Unbalanced brackets or quotes in macro definition."
+                                            .to_owned(),
                                         parser.peek_range(0).unwrap().start,
                                     ));
                                 }
@@ -492,41 +495,33 @@ impl Parser<'_> {
                                 let token_with_range = parser.next_token_with_range().unwrap();
                                 tokens.push(token_with_range);
                             }
-                            Token::Punctuator(Punctuator::ParenthesisClose) => {
-                                if matches!(bracket_stack.last(), Some(Punctuator::ParenthesisOpen))
-                                {
-                                    bracket_stack.pop();
-                                } else {
-                                    return Err(PreprocessError::MessageWithPosition(
-                                        "Unbalanced parentheses in token sequence.".to_owned(),
-                                        parser.peek_range(0).unwrap().start,
-                                    ));
-                                }
-
-                                let token_with_range = parser.next_token_with_range().unwrap();
-                                tokens.push(token_with_range);
-                            }
-                            Token::Punctuator(Punctuator::BraceClose) => {
-                                if matches!(bracket_stack.last(), Some(Punctuator::BraceOpen)) {
-                                    bracket_stack.pop();
-                                } else {
-                                    return Err(PreprocessError::MessageWithPosition(
-                                        "Unbalanced braces in token sequence.".to_owned(),
-                                        parser.peek_range(0).unwrap().start,
-                                    ));
-                                }
-
-                                let token_with_range = parser.next_token_with_range().unwrap();
-                                tokens.push(token_with_range);
-                            }
-                            Token::Punctuator(Punctuator::BracketClose) => {
-                                if matches!(bracket_stack.last(), Some(Punctuator::BracketOpen)) {
-                                    bracket_stack.pop();
-                                } else {
-                                    return Err(PreprocessError::MessageWithPosition(
-                                        "Unbalanced brackets in token sequence.".to_owned(),
-                                        parser.peek_range(0).unwrap().start,
-                                    ));
+                            Token::Punctuator(
+                                closing @ (Punctuator::ParenthesisClose
+                                | Punctuator::BraceClose
+                                | Punctuator::BracketClose),
+                            ) => {
+                                match bracket_stack.last() {
+                                    Some(Punctuator::ParenthesisOpen)
+                                        if closing == &Punctuator::ParenthesisClose =>
+                                    {
+                                        bracket_stack.pop();
+                                    }
+                                    Some(Punctuator::BraceOpen)
+                                        if closing == &Punctuator::BraceClose =>
+                                    {
+                                        bracket_stack.pop();
+                                    }
+                                    Some(Punctuator::BracketOpen)
+                                        if closing == &Punctuator::BracketClose =>
+                                    {
+                                        bracket_stack.pop();
+                                    }
+                                    _ => {
+                                        return Err(PreprocessError::MessageWithPosition(
+                                            "Unpaired brackets in token sequence.".to_owned(),
+                                            parser.peek_range(0).unwrap().start,
+                                        ));
+                                    }
                                 }
 
                                 let token_with_range = parser.next_token_with_range().unwrap();
@@ -664,81 +659,94 @@ impl Parser<'_> {
         // ```
         self.next_token(); // consumes "embed"
 
-        let collect_balanced_tokens =
-            |parser: &mut Parser| -> Result<Vec<TokenWithRange>, PreprocessError> {
-                // for collecting balanced brackets
-                // e.g., `(...)`, `[...]`, `{...}`, etc.
-                // when this stack is empty, it means we are in a balanced state.
-                let mut bracket_stack: Vec<Punctuator> = vec![];
+        let collect_data = |parser: &mut Parser| -> Result<Vec<u8>, PreprocessError> {
+            parser.expect_and_consume_opening_paren()?;
 
-                // Move all tokens to `tokens` until we hit a closing parenthesis.
-                let mut tokens = vec![];
-                while let Some(token) = parser.peek_token(0) {
-                    match token {
-                        Token::Punctuator(Punctuator::ParenthesisClose)
-                            if bracket_stack.is_empty() =>
-                        {
-                            break;
-                        }
-                        Token::Punctuator(
-                            opening @ (Punctuator::ParenthesisOpen
-                            | Punctuator::BraceOpen
-                            | Punctuator::BracketOpen),
-                        ) => {
-                            // If we encounter an opening bracket, we push it onto the stack.
-                            bracket_stack.push(*opening);
+            // Collect all data to `data` until we hit a closing parenthesis.
+            let mut data = vec![];
 
-                            let token_with_range = parser.next_token_with_range().unwrap();
-                            tokens.push(token_with_range);
+            while let Some(token) = parser.peek_token(0) {
+                match token {
+                    Token::Punctuator(Punctuator::ParenthesisClose) => {
+                        break;
+                    }
+                    Token::Char(ch, char_type) => {
+                        if matches!(
+                            char_type,
+                            CharType::Wide | CharType::UTF16 | CharType::UTF32
+                        ) {
+                            return Err(PreprocessError::MessageWithPosition(
+                                "Wide character literals are not supported in embed directive."
+                                    .to_owned(),
+                                parser.peek_range(0).unwrap().start,
+                            ));
                         }
-                        Token::Punctuator(Punctuator::ParenthesisClose) => {
-                            if matches!(bracket_stack.last(), Some(Punctuator::ParenthesisOpen)) {
-                                bracket_stack.pop();
-                            } else {
-                                return Err(PreprocessError::MessageWithPosition(
-                                    "Unbalanced parentheses in token sequence.".to_owned(),
-                                    parser.peek_range(0).unwrap().start,
-                                ));
-                            }
 
-                            let token_with_range = parser.next_token_with_range().unwrap();
-                            tokens.push(token_with_range);
+                        let char_value = *ch as usize;
+                        if char_value > 0xFF {
+                            return Err(PreprocessError::MessageWithRange(
+                                "Character literal value exceeds the maximum value of byte (0xFF)."
+                                    .to_owned(),
+                                *parser.peek_range(0).unwrap(),
+                            ));
                         }
-                        Token::Punctuator(Punctuator::BraceClose) => {
-                            if matches!(bracket_stack.last(), Some(Punctuator::BraceOpen)) {
-                                bracket_stack.pop();
-                            } else {
-                                return Err(PreprocessError::MessageWithPosition(
-                                    "Unbalanced braces in token sequence.".to_owned(),
-                                    parser.peek_range(0).unwrap().start,
-                                ));
-                            }
 
-                            let token_with_range = parser.next_token_with_range().unwrap();
-                            tokens.push(token_with_range);
-                        }
-                        Token::Punctuator(Punctuator::BracketClose) => {
-                            if matches!(bracket_stack.last(), Some(Punctuator::BracketOpen)) {
-                                bracket_stack.pop();
-                            } else {
-                                return Err(PreprocessError::MessageWithPosition(
-                                    "Unbalanced brackets in token sequence.".to_owned(),
-                                    parser.peek_range(0).unwrap().start,
-                                ));
-                            }
+                        data.push(char_value as u8);
 
-                            let token_with_range = parser.next_token_with_range().unwrap();
-                            tokens.push(token_with_range);
+                        // Consumes the character token
+                        parser.next_token();
+                    }
+                    Token::Number(Number::Integer(n)) => {
+                        let number_value = n.as_usize().map_err(|_| {
+                            PreprocessError::MessageWithRange(
+                                "Invalid integer number.".to_owned(),
+                                parser.last_range,
+                            )
+                        })?;
+
+                        if number_value > 0xFF {
+                            return Err(PreprocessError::MessageWithRange(
+                                "Integer number exceeds the maximum value of byte (0xFF)."
+                                    .to_owned(),
+                                *parser.peek_range(0).unwrap()
+                            ));
                         }
-                        _ => {
-                            let token_with_range = parser.next_token_with_range().unwrap();
-                            tokens.push(token_with_range);
-                        }
+
+                        data.push(number_value as u8);
+
+                        // Consumes the number token
+                        parser.next_token();
+                    }
+                    _ => {
+                        return Err(PreprocessError::MessageWithRange(
+                            "Expect a character literal or integer number in embed data."
+                                .to_owned(),
+                            *parser.peek_range(0).unwrap()
+                        ));
                     }
                 }
 
-                Ok(tokens)
-            };
+                if !parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::Comma)) {
+                    break;
+                }
+
+                parser.next_token(); // consumes comma
+
+                // If we have a comma, we expect another character literal or integer number next.
+                if parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::ParenthesisClose))
+                {
+                    return Err(PreprocessError::MessageWithPosition(
+                        "Expect a character literal or integer number after comma in embed data."
+                            .to_owned(),
+                        parser.peek_range(0).unwrap().start,
+                    ));
+                }
+            }
+
+            parser.expect_and_consume_closing_paren()?; // consumes ')'
+
+            Ok(data)
+        };
 
         let embed = match self.peek_token(0) {
             Some(Token::FilePath(file_path, is_system_header)) => {
@@ -751,9 +759,9 @@ impl Parser<'_> {
                 self.next_token(); // consumes the file path token
 
                 let mut limit: Option<usize> = None;
-                let mut suffix: Vec<TokenWithRange> = vec![];
-                let mut prefix: Vec<TokenWithRange> = vec![];
-                let mut if_empty: Option<Vec<TokenWithRange>> = None;
+                let mut suffix: Vec<u8> = vec![];
+                let mut prefix: Vec<u8> = vec![];
+                let mut if_empty: Option<Vec<u8>> = None;
 
                 while let Some(Token::Identifier(param_name)) = self.peek_token(0) {
                     match param_name.as_str() {
@@ -784,24 +792,15 @@ impl Parser<'_> {
                         }
                         "prefix" => {
                             self.next_token(); // consumes "prefix"
-                            self.expect_and_consume_opening_paren()?;
-                            let tokens = collect_balanced_tokens(self)?;
-                            prefix = tokens;
-                            self.expect_and_consume_closing_paren()?;
+                            prefix = collect_data(self)?;
                         }
                         "suffix" => {
                             self.next_token(); // consumes "suffix"
-                            self.expect_and_consume_opening_paren()?;
-                            let tokens = collect_balanced_tokens(self)?;
-                            suffix = tokens;
-                            self.expect_and_consume_closing_paren()?;
+                            suffix = collect_data(self)?;
                         }
                         "if_empty" => {
                             self.next_token(); // consumes "if_empty"
-                            self.expect_and_consume_opening_paren()?;
-                            let tokens = collect_balanced_tokens(self)?;
-                            if_empty = Some(tokens);
-                            self.expect_and_consume_closing_paren()?;
+                            if_empty = Some(collect_data(self)?);
                         }
                         "__limit__" | "__prefix__" | "__suffix__" | "__if_empty__" => {
                             let standard_param_name =
@@ -1197,6 +1196,27 @@ mod tests {
                 }
             ))
         ));
+
+        // err: unbalanced double quote in definition
+        // The actual error is that the parser expects the end of the string literal
+        assert!(matches!(
+            parse_from_str("#define FOO \"a\n"),
+            Err(PreprocessError::UnexpectedEndOfDocument(_))
+        ));
+
+        // err: unbalanced double quote in definition
+        // The actual error is that the parser expects the end of the character literal
+        assert!(matches!(
+            parse_from_str("#define FOO 'a\n"),
+            Err(PreprocessError::MessageWithPosition(
+                _,
+                Position {
+                    index: 14,
+                    line: 0,
+                    column: 14
+                }
+            ))
+        ));
     }
 
     #[test]
@@ -1281,9 +1301,9 @@ mod tests {
 
         assert_eq!(
             format(
-                "#embed </dev/random> limit(100) prefix('a','b') suffix('c','\0') if_empty('x','y', 'z')"
+                "#embed </dev/random> limit(100) prefix(0x11, 0x13) suffix('\0') if_empty('a', 'b', 0)"
             ),
-            "#embed </dev/random> limit(100) prefix('a' , 'b') suffix('c' , '\\0') if_empty('x' , 'y' , 'z')\n"
+            "#embed </dev/random> limit(100) prefix(0x11, 0x13) suffix(0x00) if_empty(0x61, 0x62, 0x00)\n"
         );
 
         // err: missing file path or macro name after `#embed`
@@ -1358,49 +1378,70 @@ mod tests {
             ))
         ));
 
-        // err: unbalanced brackets in the value of `prefix`, 1
+        // err: unsupported data type value in parameter `prefix` - identifier
         assert!(matches!(
-            parse_from_str("#embed <spark.png> prefix(a, [, c)"),
-            Err(PreprocessError::MessageWithPosition(
+            parse_from_str("#embed <spark.png> prefix(11, 'a', c)"),
+            Err(PreprocessError::MessageWithRange(
                 _,
-                Position {
-                    index: 33,
-                    line: 0,
-                    column: 33
+                Range {
+                    start: Position {
+                        index: 35,
+                        line: 0,
+                        column: 35
+                    },
+                    end_included: Position {
+                        index: 35,
+                        line: 0,
+                        column: 35
+                    }
                 }
             ))
         ));
 
-        // err: unbalanced brackets in the value of `prefix`, 2
+        // err: unsupported data type value in parameter `prefix` - number value exceeds byte range
         assert!(matches!(
-            parse_from_str("#embed <spark.png> prefix(a, [, b, ], [, c)"),
-            Err(PreprocessError::MessageWithPosition(
+            parse_from_str("#embed <spark.png> prefix(256, 42)"),
+            Err(PreprocessError::MessageWithRange(
                 _,
-                Position {
-                    index: 42,
-                    line: 0,
-                    column: 42
+                Range {
+                    start: Position {
+                        index: 26,
+                        line: 0,
+                        column: 26
+                    },
+                    end_included: Position {
+                        index: 28,
+                        line: 0,
+                        column: 28
+                    }
                 }
             ))
         ));
 
-        // err: unbalanced brackets in the value of `prefix`, 3
+        // err: unsupported data type value in parameter `prefix` - char value exceeds byte range
         assert!(matches!(
-            parse_from_str("#embed <spark.png> prefix(a, ], b, )"),
-            Err(PreprocessError::MessageWithPosition(
+            parse_from_str("#embed <spark.png> prefix('光', 'a')"),
+            Err(PreprocessError::MessageWithRange(
                 _,
-                Position {
-                    index: 29,
-                    line: 0,
-                    column: 29
+                Range {
+                    start: Position {
+                        index: 26,
+                        line: 0,
+                        column: 26
+                    },
+                    end_included: Position {
+                        index: 28,
+                        line: 0,
+                        column: 28
+                    }
                 }
             ))
         ));
 
-        // err: unbalanced brackets in the value of `prefix`, 4
+        // err: missing commas in the value of parameter `prefix`
         assert!(matches!(
-            parse_from_str("#embed <spark.png> prefix(a, (, c)"),
-            Err(PreprocessError::UnexpectedEndOfDocument(_))
+            parse_from_str("#embed <spark.png> prefix(11 13)"),
+            Err(_)
         ));
     }
 

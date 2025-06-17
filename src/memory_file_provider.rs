@@ -28,10 +28,10 @@ pub struct MemoryFileProvider {
     project_root_directory: PathBuf,
 
     /// Directories to search for system headers.
-    system_headers_directories: Vec<PathBuf>,
+    system_directories: Vec<PathBuf>,
 
     /// Directories to search for user headers.
-    user_headers_directories: Vec<PathBuf>,
+    user_directories: Vec<PathBuf>,
 }
 
 enum FileContent {
@@ -42,18 +42,19 @@ enum FileContent {
 impl MemoryFileProvider {
     /// Creates a new `MemoryFileProvider` with the specified directories for system and user headers.
     pub fn new() -> Self {
-        let user_headers_directories: Vec<PathBuf> = vec![
-            PathBuf::from("/projects/test/header"),
-            PathBuf::from("/projects/test/include"),
+        let user_directories: Vec<PathBuf> = vec![
+            PathBuf::from("/projects/test/header"),  // internal headers
+            PathBuf::from("/projects/test/include"), // public headers
+            PathBuf::from("/projects/test/share"),   // binary files
         ];
 
-        let system_headers_directories: Vec<PathBuf> = vec![PathBuf::from("/usr/include")];
+        let system_directories: Vec<PathBuf> = vec![PathBuf::from("/usr/include")];
 
         Self {
             file_content_map: HashMap::new(),
             project_root_directory: PathBuf::from("/projects/test"),
-            system_headers_directories,
-            user_headers_directories,
+            system_directories,
+            user_directories,
         }
     }
 
@@ -89,8 +90,8 @@ impl MemoryFileProvider {
 }
 
 impl FileProvider for MemoryFileProvider {
-    fn resolve_user_header_file(&self, header_file_path: &Path) -> Option<PathBuf> {
-        for dir in &self.user_headers_directories {
+    fn resolve_user_file(&self, header_file_path: &Path) -> Option<PathBuf> {
+        for dir in &self.user_directories {
             let full_path = dir.join(header_file_path);
             let canonical_full_path = normalize_path(&full_path);
 
@@ -101,8 +102,8 @@ impl FileProvider for MemoryFileProvider {
         None
     }
 
-    fn resolve_system_header_file(&self, header_file_path: &Path) -> Option<PathBuf> {
-        for dir in &self.system_headers_directories {
+    fn resolve_system_file(&self, header_file_path: &Path) -> Option<PathBuf> {
+        for dir in &self.system_directories {
             let full_path = dir.join(header_file_path);
             let canonical_full_path = normalize_path(&full_path);
 
@@ -113,7 +114,7 @@ impl FileProvider for MemoryFileProvider {
         None
     }
 
-    fn resolve_user_header_file_relative_to_source_file(
+    fn resolve_user_file_relative_to_source_file(
         &self,
         header_file_path: &Path,
         source_file_normalize_full_path: &Path,
@@ -163,31 +164,30 @@ impl FileProvider for MemoryFileProvider {
         &self,
         canonical_full_path: &Path,
         offset: usize,
-        length: Option<usize>,
+        max_length: Option<usize>,
     ) -> Result<Vec<u8>, std::io::Error> {
         let file_content = self.file_content_map.get(canonical_full_path);
 
         match file_content {
             Some(FileContent::Binary(content)) => {
-                if let Some(len) = length {
-                    if offset + len > content.len() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "Offset and length exceed file size",
-                        ));
-                    }
-                    // If length is Some, read the specified range
-                    return Ok(content[offset..offset + len].to_vec());
-                } else {
-                    if offset >= content.len() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "Offset exceeds file size",
-                        ));
-                    }
-                    // If length is None, read until the end of the file
-                    return Ok(content[offset..].to_vec());
+                if offset > content.len() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Offset exceeds file size",
+                    ));
                 }
+
+                let end_position = if let Some(len) = max_length {
+                    if offset + len > content.len() {
+                        content.len()
+                    } else {
+                        offset + len
+                    }
+                } else {
+                    content.len()
+                };
+
+                return Ok(content[offset..end_position].to_vec());
             }
             Some(FileContent::Text(_)) => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -295,15 +295,20 @@ mod tests {
             vec![3, 4]
         );
 
-        assert!(
+        assert_eq!(
             provider
-                .load_binary_file(&PathBuf::from("/projects/test/share/hippo.png"), 6, None)
-                .is_err()
+                .load_binary_file(
+                    &PathBuf::from("/projects/test/share/hippo.png"),
+                    2,
+                    Some(10)
+                )
+                .unwrap(),
+            vec![3, 4, 5]
         );
 
         assert!(
             provider
-                .load_binary_file(&PathBuf::from("/projects/test/share/hippo.png"), 3, Some(3))
+                .load_binary_file(&PathBuf::from("/projects/test/share/hippo.png"), 6, None)
                 .is_err()
         );
 
@@ -325,29 +330,34 @@ mod tests {
 
         // Test resolving user header files
         assert_eq!(
-            provider.resolve_user_header_file(Path::new("hello.h")),
+            provider.resolve_user_file(Path::new("hello.h")),
             Some(PathBuf::from("/projects/test/include/hello.h"))
         );
 
         assert_eq!(
-            provider.resolve_user_header_file(Path::new("foo.h")),
+            provider.resolve_user_file(Path::new("foo.h")),
             Some(PathBuf::from("/projects/test/header/foo.h"))
         );
 
         assert_eq!(
-            provider.resolve_user_header_file(Path::new("folder/buz.h")),
+            provider.resolve_user_file(Path::new("folder/buz.h")),
             Some(PathBuf::from("/projects/test/header/folder/buz.h"))
+        );
+
+        assert_eq!(
+            provider.resolve_user_file(Path::new("hippo.png")),
+            Some(PathBuf::from("/projects/test/share/hippo.png"))
         );
 
         // Test resolving system header files
         assert_eq!(
-            provider.resolve_system_header_file(Path::new("stdio.h")),
+            provider.resolve_system_file(Path::new("stdio.h")),
             Some(PathBuf::from("/usr/include/stdio.h"))
         );
 
         // Test resolving user header files relative to a source file
         assert_eq!(
-            provider.resolve_user_header_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_source_file(
                 Path::new("./bar.h"),
                 Path::new("/projects/test/header/foo.h")
             ),
@@ -355,7 +365,7 @@ mod tests {
         );
 
         assert_eq!(
-            provider.resolve_user_header_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_source_file(
                 Path::new("folder/buz.h"),
                 Path::new("/projects/test/header/foo.h")
             ),
@@ -363,7 +373,7 @@ mod tests {
         );
 
         assert_eq!(
-            provider.resolve_user_header_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_source_file(
                 Path::new("../foo.h"),
                 Path::new("/projects/test/header/folder/buz.h")
             ),
@@ -372,7 +382,7 @@ mod tests {
 
         // Test resolving user header files with fallback (resolve to user header directory)
         assert_eq!(
-            provider.resolve_user_header_file_with_fallback(
+            provider.resolve_user_file_with_fallback(
                 Path::new("foo.h"),
                 Path::new("/projects/test/src/main.c"),
                 true
@@ -385,7 +395,7 @@ mod tests {
 
         // Test resolving user header files with fallback (resolve to system header directory)
         assert_eq!(
-            provider.resolve_user_header_file_with_fallback(
+            provider.resolve_user_file_with_fallback(
                 Path::new("elf.h"),
                 Path::new("/projects/test/src/main.c"),
                 true
@@ -398,7 +408,7 @@ mod tests {
 
         // Test resolving user header files with fallback (enable relative path)
         assert_eq!(
-            provider.resolve_user_header_file_with_fallback(
+            provider.resolve_user_file_with_fallback(
                 Path::new("./lib.c"),
                 Path::new("/projects/test/src/main.c"),
                 true
@@ -411,7 +421,7 @@ mod tests {
 
         // Test resolving user header files with fallback (disable relative path)
         assert_eq!(
-            provider.resolve_user_header_file_with_fallback(
+            provider.resolve_user_file_with_fallback(
                 Path::new("./lib.c"),
                 Path::new("/projects/test/src/main.c"),
                 false
@@ -421,17 +431,17 @@ mod tests {
 
         // Test resolving non-existent files
         assert_eq!(
-            provider.resolve_user_header_file(Path::new("non_existent.h")),
+            provider.resolve_user_file(Path::new("non_existent.h")),
             None
         );
 
         assert_eq!(
-            provider.resolve_system_header_file(Path::new("non_existent.h")),
+            provider.resolve_system_file(Path::new("non_existent.h")),
             None
         );
 
         assert_eq!(
-            provider.resolve_user_header_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_source_file(
                 Path::new("non_existent.h"),
                 Path::new("/projects/test/src/main.c")
             ),
@@ -439,7 +449,7 @@ mod tests {
         );
 
         assert_eq!(
-            provider.resolve_user_header_file_with_fallback(
+            provider.resolve_user_file_with_fallback(
                 Path::new("non_existent.h"),
                 Path::new("/projects/test/src/main.c"),
                 true

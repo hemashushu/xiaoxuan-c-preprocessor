@@ -11,10 +11,10 @@ pub struct NativeFileProvider {
     project_root_directory: PathBuf,
 
     /// Directories to search for system headers.
-    system_headers_directories: Vec<PathBuf>,
+    system_directories: Vec<PathBuf>,
 
-    /// Directories to search for user headers.
-    user_headers_directories: Vec<PathBuf>,
+    /// Directories to search for user headers and binary files.
+    user_directories: Vec<PathBuf>,
 }
 
 impl NativeFileProvider {
@@ -28,23 +28,20 @@ impl NativeFileProvider {
     ///   e.g., `#include "relative/path/to/header.h"`.
     pub fn new(
         project_root_directory: &Path,
-        user_headers_directories: &[&Path],
-        system_headers_directories: &[&Path],
+        user_directories: &[&Path],
+        system_directories: &[&Path],
     ) -> Self {
-        let user_headers_directories_owned = user_headers_directories
-            .iter()
-            .map(|&p| PathBuf::from(p))
-            .collect();
+        let user_directories_owned = user_directories.iter().map(|&p| PathBuf::from(p)).collect();
 
-        let system_headers_directories_owned = system_headers_directories
+        let system_directories_owned = system_directories
             .iter()
             .map(|&p| PathBuf::from(p))
             .collect();
 
         Self {
             project_root_directory: PathBuf::from(project_root_directory),
-            system_headers_directories: system_headers_directories_owned,
-            user_headers_directories: user_headers_directories_owned,
+            system_directories: system_directories_owned,
+            user_directories: user_directories_owned,
         }
     }
 }

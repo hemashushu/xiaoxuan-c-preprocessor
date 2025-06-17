@@ -472,11 +472,8 @@ fn preprocess_include(
         ),
     };
 
-    let (canonical_path, is_system_header) = if relative_to_system {
-        match context
-            .file_provider
-            .resolve_system_header_file(&relative_path)
-        {
+    let (canonical_path, is_system_file) = if relative_to_system {
+        match context.file_provider.resolve_system_file(&relative_path) {
             Some(resolved_path) => (resolved_path, true),
             None => {
                 return Err(PreprocessFileError::new(
@@ -492,23 +489,21 @@ fn preprocess_include(
             }
         }
     } else {
-        match context
-            .file_provider
-            .resolve_user_header_file_with_fallback(
-                &relative_path,
-                &context.current_file.source_file.canonical_full_path,
-                context.resolve_relative_file,
-            ) {
+        match context.file_provider.resolve_user_file_with_fallback(
+            &relative_path,
+            &context.current_file.source_file.canonical_full_path,
+            context.resolve_relative_file,
+        ) {
             Some(ResolvedResult {
                 canonical_full_path,
-                is_system_header_file,
-            }) => (canonical_full_path, is_system_header_file),
+                is_system_file,
+            }) => (canonical_full_path, is_system_file),
             None => {
                 return Err(PreprocessFileError::new(
                     context.current_file.number,
                     PreprocessError::MessageWithRange(
                         format!(
-                            "User header file '{}' not found.",
+                            "Header file '{}' not found.",
                             relative_path.to_string_lossy()
                         ),
                         file_path_location.range,
@@ -529,19 +524,19 @@ fn preprocess_include(
     // has no include guards or `#pragma once`.
     context.included_files.push(IncludeFile::new(
         &canonical_path,
-        FileSource::from_header_file(&relative_path, is_system_header),
+        FileSource::from_header_file(&relative_path, is_system_file),
     ));
 
     // Load the file content from the file cache.
     if let Some(program) = context.file_cache.get_program(&canonical_path) {
         let file_number = context.file_cache.get_file_number(&canonical_path).unwrap();
         let program_owned = program.clone();
-        preprocess_sub_program(
+        start_preprocessing_program(
             context,
             file_number,
             &canonical_path,
             &relative_path,
-            is_system_header,
+            is_system_file,
             &program_owned,
         )?;
     } else {
@@ -569,12 +564,12 @@ fn preprocess_include(
         // check header guard or `#pragma once`
         check_include_guard(context, file_number, &relative_path, &program);
 
-        preprocess_sub_program(
+        start_preprocessing_program(
             context,
             file_number,
             &canonical_path,
             &relative_path,
-            is_system_header,
+            is_system_file,
             &program,
         )?;
 
@@ -585,7 +580,7 @@ fn preprocess_include(
     Ok(())
 }
 
-fn preprocess_sub_program(
+fn start_preprocessing_program(
     context: &mut Context<impl FileProvider>,
     file_number: usize,
     canonical_path: &Path,
@@ -658,26 +653,36 @@ fn check_include_guard(
         .replace('.', "_")
         .to_uppercase();
 
-    if matches!(
-        first_statement,
-        Statement::If(If {
-            branches,
-            alternative: None
-        }) if branches.len() == 1 &&
-        matches!(
-            branches.first().unwrap(),
-            Branch {
-                condition: Condition::NotDefined(name0, _),
-                consequence
-            } if matches!(
-                consequence.first(),
-                Some(Statement::Define(Define::ObjectLike {
-                    identifier: (name1, _),
-                    definition
-                })) if name0 == name1 && definition.is_empty()
+    // Check if the entire file consists of a single `#ifndef` structure,
+    //
+    // ```diagram
+    // #ifndef INCLUDE_GUARD_MACRO_NAME
+    // #define INCLUDE_GUARD_MACRO_NAME
+    // ... file content ...
+    // #endif
+    // ```
+    if program.statements.len() == 1
+        && matches!(
+            first_statement,
+            Statement::If(If {
+                branches,
+                alternative: None
+            }) if branches.len() == 1 &&
+            matches!(
+                branches.first().unwrap(),
+                Branch {
+                    condition: Condition::NotDefined(name0, _),
+                    consequence
+                } if matches!(
+                    consequence.first(),
+                    Some(Statement::Define(Define::ObjectLike {
+                        identifier: (name1, _),
+                        definition
+                    })) if name0 == name1 && definition.is_empty()
+                )
             )
         )
-    ) {
+    {
         let branches = if let Statement::If(If { branches, .. }) = first_statement {
             branches
         } else {
@@ -705,10 +710,10 @@ fn check_include_guard(
             // Suggest renaming the include guard macro to follow the convention, which
             // prevents potential conflicts with other macros.
             context.prompts.push(Prompt::MessageWithRange(
-                PromptLevel::Warning,
+                PromptLevel::Info,
                 file_number,
                 format!(
-                    "Consider renaming the include guard macro to `{}` to prevent potential conflicts with other macros.",
+                    "Consider renaming the include guard macro to `{}` to follow the convention.",
                     suggested_include_guard_macro_name
                 ),
                 *range,
@@ -730,6 +735,210 @@ fn preprocess_embed(
     context: &mut Context<impl FileProvider>,
     embed: &Embed,
 ) -> Result<(), PreprocessFileError> {
+    // The `embed` directive output a sequence of `u8` numbers separated by commas,
+    // which represent the bytes of the file.
+    //
+    // e.g.
+    //
+    // `#embed "path/to/file"` will output:
+    //
+    // ```diagram
+    // 104, 105, 112, 112, 111          // decimal
+    // or
+    // 0x68, 0x69, 0x70, 0x70, 0x6F     // hexadecimal
+    // ```
+    //
+    // The content in the parameters `prefix`, `suffix`, and `if_empty` are
+    // output with the same format.
+
+    let (relative_path, relative_to_system, file_path_location, limit, suffix, prefix, if_empty) =
+        match embed {
+            Embed::Identifier(id, range) => {
+                let expended_tokens = expand_marco(
+                    context,
+                    vec![TokenWithLocation::new(
+                        Token::Identifier(id.to_owned()),
+                        Location::new(context.current_file.number, range),
+                    )],
+                    &HashMap::new(),
+                    ExpandContextType::Normal,
+                )?;
+
+                if expended_tokens.is_empty() {
+                    return Err(PreprocessFileError {
+                    file_number: context.current_file.number,
+                    error: PreprocessError::MessageWithRange(
+                        "The macro expands to empty; expected a single string literal representing the file path.".to_owned(),
+                        *range,
+                    ),
+                });
+                }
+
+                if expended_tokens.len() > 1 {
+                    return Err(PreprocessFileError {
+                    file_number: context.current_file.number,
+                    error: PreprocessError::MessageWithRange(
+                        "The macro expands to multiple tokens; expected a single string literal representing the file path."
+                            .to_owned(),
+                        *range,
+                    ),
+                });
+                }
+
+                match expended_tokens.first().unwrap() {
+                    TokenWithLocation {
+                        token: Token::String(relative_path, _),
+                        location,
+                    } => (
+                        PathBuf::from(relative_path),
+                        false,
+                        *location,
+                        None,
+                        vec![],
+                        vec![],
+                        None,
+                    ),
+                    _ => {
+                        return Err(PreprocessFileError {
+                        file_number: context.current_file.number,
+                        error: PreprocessError::MessageWithRange(
+                            "Macro expansion resulted in an unexpected type; a single string literal representing the file path was expected.".to_owned(),
+                            *range,
+                        ),
+                    });
+                    }
+                }
+            }
+            Embed::FilePath {
+                file_path: (relative_path, range),
+                is_system_header,
+                limit,
+                suffix,
+                prefix,
+                if_empty,
+            } => (
+                PathBuf::from(relative_path),
+                *is_system_header,
+                Location::new(context.current_file.number, range),
+                *limit,
+                suffix.to_vec(),
+                prefix.to_vec(),
+                if_empty.to_owned(),
+            ),
+        };
+
+    let (canonical_path, is_system_file) = if relative_to_system {
+        match context.file_provider.resolve_system_file(&relative_path) {
+            Some(resolved_path) => (resolved_path, true),
+            None => {
+                return Err(PreprocessFileError::new(
+                    context.current_file.number,
+                    PreprocessError::MessageWithRange(
+                        format!(
+                            "System binary file '{}' not found.",
+                            relative_path.to_string_lossy()
+                        ),
+                        file_path_location.range,
+                    ),
+                ));
+            }
+        }
+    } else {
+        match context.file_provider.resolve_user_file_with_fallback(
+            &relative_path,
+            &context.current_file.source_file.canonical_full_path,
+            context.resolve_relative_file,
+        ) {
+            Some(ResolvedResult {
+                canonical_full_path,
+                is_system_file,
+            }) => (canonical_full_path, is_system_file),
+            None => {
+                return Err(PreprocessFileError::new(
+                    context.current_file.number,
+                    PreprocessError::MessageWithRange(
+                        format!(
+                            "Binary file '{}' not found.",
+                            relative_path.to_string_lossy()
+                        ),
+                        file_path_location.range,
+                    ),
+                ));
+            }
+        }
+    };
+
+    let binary_data = context
+        .file_provider
+        .load_binary_file(&canonical_path, 0, limit)
+        .map_err(|error| {
+            PreprocessFileError::new(
+                file_path_location.file_number,
+                PreprocessError::MessageWithRange(
+                    format!("Failed to load binary file: {}", error),
+                    file_path_location.range,
+                ),
+            )
+        })?;
+
+    let convert_binary_data_to_tokens = |data: &[u8]| -> Vec<TokenWithLocation> {
+        data.iter()
+            .map(|byte| {
+                TokenWithLocation::new(
+                    Token::Number(Number::Integer(IntegerNumber::new(
+                        format!("0x{:02x}", byte),
+                        false,
+                        IntegerNumberType::Default,
+                    ))),
+                    Location::default(),
+                )
+            })
+            .flat_map(|token| {
+                vec![
+                    token,
+                    TokenWithLocation::new(
+                        Token::Punctuator(Punctuator::Comma),
+                        Location::default(),
+                    ),
+                ]
+            })
+            .take(data.len() * 2 - 1) // Avoid trailing comma
+            .collect()
+    };
+
+    if binary_data.is_empty() {
+        if let Some(alternate_data) = if_empty {
+            // If the file is empty, we output the `if_empty` content.
+            let tokens = convert_binary_data_to_tokens(&alternate_data);
+            context.output.extend(tokens);
+        }
+    } else {
+        // Output the binary data as a sequence of numbers.
+        if !prefix.is_empty() {
+            context
+                .output
+                .extend(convert_binary_data_to_tokens(&prefix));
+            context.output.push(TokenWithLocation::new(
+                Token::Punctuator(Punctuator::Comma),
+                Location::default(),
+            ));
+        }
+
+        context
+            .output
+            .extend(convert_binary_data_to_tokens(&binary_data));
+
+        if !suffix.is_empty() {
+            context.output.push(TokenWithLocation::new(
+                Token::Punctuator(Punctuator::Comma),
+                Location::default(),
+            ));
+            context
+                .output
+                .extend(convert_binary_data_to_tokens(&suffix));
+        }
+    }
+
     Ok(())
 }
 
@@ -2795,6 +3004,108 @@ FOO BAR
     }
 
     #[test]
+    fn test_preprocess_embed() {
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#embed "foo.bin"
+"#,
+                &[],
+                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[],
+            )),
+            "0x01 , 0x02 , 0x03 , 0x04 , 0x05"
+        );
+
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#embed "foo.bin" limit(100)
+"#,
+                &[],
+                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[],
+            )),
+            "0x01 , 0x02 , 0x03 , 0x04 , 0x05"
+        );
+
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#embed "foo.bin" limit(3) prefix(0xaa, 11, 'a') suffix(0)
+"#,
+                &[],
+                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[],
+            )),
+            "0xaa , 0x0b , 0x61 , 0x01 , 0x02 , 0x03 , 0x00"
+        );
+
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#embed "foo.bin" limit(3) if_empty(0x11,0x13,0x17,0x19) prefix(0x3,0x5,0x7) suffix(0x23, 0x29)
+"#,
+                &[],
+                &[("share/foo.bin", &[])],
+                &[],
+            )),
+            "0x11 , 0x13 , 0x17 , 0x19"
+        );
+
+        // load binary multiple times
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#embed "foo.bin"
+#embed "foo.bin"
+"#,
+                &[],
+                &[("share/foo.bin", &[1, 2, 3])],
+                &[],
+            )),
+            "0x01 , 0x02 , 0x03 0x01 , 0x02 , 0x03"
+        );
+
+        // Load binary with identifier
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#define FOO "foo.bin"
+#embed FOO
+"#,
+                &[],
+                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[],
+            )),
+            "0x01 , 0x02 , 0x03 , 0x04 , 0x05"
+        );
+
+        // err: include non-existing file
+        assert!(matches!(
+            process_multiple_source(r#"#embed "non_existing.bin""#, &[], &[], &[],),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    Range {
+                        start: Position {
+                            index: 7,
+                            line: 0,
+                            column: 7
+                        },
+                        end_included: Position {
+                            index: 24,
+                            line: 0,
+                            column: 24
+                        }
+                    }
+                )
+            })
+        ));
+    }
+
+    #[test]
     fn test_preprocess_include_guard_check() {
         // Empty header file
         assert!(matches!(
@@ -2902,7 +3213,6 @@ FOO BAR
             Some(Prompt::Message(PromptLevel::Info, 1, _))
         ));
 
-
         // Header file with include guard but the macro name does not follow the suggested one
         assert!(matches!(
             process_multiple_source(
@@ -2925,7 +3235,7 @@ FOO BAR
             .prompts
             .first(),
             Some(Prompt::MessageWithRange(
-                PromptLevel::Warning,
+                PromptLevel::Info,
                 1,
                 _,
                 Range {

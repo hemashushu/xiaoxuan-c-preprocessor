@@ -4,18 +4,29 @@
 
 Unlike standalone tools such as GNU `cpp` or `gcc -E`, ANCPP is designed to be used as a library. It takes C source code as input and produces a stream of tokens, which can be consumed directly by a parser.
 
+<!-- @import "[TOC]" {cmd="toc" depthFrom=2 depthTo=4 orderedList=false} -->
+
+<!-- code_chunk_output -->
+
+- [Features](#features)
+- [Supporting](#supporting)
+- [Limitations](#limitations)
+
+<!-- /code_chunk_output -->
+
+
 ## Features
 
-- Accurately tracks token positions in the source code, enabling precise and helpful error messages.
 - Fully adheres to the C23 standard, focusing on modern and portable C code.
+- Accurately tracks token positions in the source code, enabling precise and helpful error messages.
 - Does not introduce any non-standard directives, extensions, or behaviors.
 - Limits some "flex" features to make the preprocessor more predictable and less error-prone (see below for details).
 
 ## Supporting
 
-**Directives**
+ANCPP supports almost all of the C23 standard preprocessor directives, operators, and built-in macros.
 
-ANCPP implements almost all of the C23 standard preprocessor directives, including:
+**Directives**
 
 - Macro definition and expansion (`#define`, `#undef`).
 - Function-like macros and variadic macros.
@@ -59,13 +70,15 @@ TODO
 
 ## Limitations
 
-ANCPP is designed to be a modern, portable, and strictly standards-compliant C preprocessor. As such, it does not support certain extensions and features found in other preprocessors:
+The C preprocessor operates as a text-based "find and replace" tool, which makes it extremely "flexible." However, this flexibility can lead to code that does not conform to C syntax or disrupts control flow, often due to unintentional mistakes by developers that are difficult to detect. Additionally, the C preprocessor can sometimes behave anti-intuitive. For example, when passing an expression as an argument to a function-like macro, the expression may be evaluated multiple times, potentially causing unexpected side effects. To avoid such issues, ANCPP intentionally restricts some of the more "flexible" features.
+
+It is worth noting that ANCPP does not change or add features. On the contrary, ANCPP strictly adheres to the C23 standard, but restricts or disables certain features that are prone to errors.
 
 **Macro Definitions**
 
 - A macro cannot be redefined unless it is first undefined. For example, `#define FOO 123` followed by another `#define FOO ...` is not allowed. Some preprocessors permit redefining a macro if the new definition is identical, but ANCPP does not support this behavior.
 - Undefining a macro that does not exist is not allowed.
-- Macro definitions must have balanced brackets. For example, `#define FOO if (` is invalid.
+- Macro definitions must have balanced brackets and quotes. For example, `#define FOO if (i==0` and `#define FOO char* a="bar` is invalid.
 
 **Macro Invocations**
 
@@ -81,6 +94,7 @@ ANCPP is designed to be a modern, portable, and strictly standards-compliant C p
 **Directives**
 
 - Non-standard directives such as `#assert`, `#unassert`, `#ident`, `#sccs`, and `#include_next`, as well as the operator `__has_include_next()`, are not supported.
+- The value of parameters `prefix`, `suffix`, and `if_empty` of directive `#embed` must be a character or integer number sequence separated by commas. For example, `#embed "file.txt" prefix(0xEF, 0xBB, 0xBF) suffix('\0')` is valid, but `#embed "file.txt" prefix(int foo=)` is invalid.
 - The rarely used `#line` directive is not supported.
 - Null directives are not allowed. For example, a line containing only `#` is considered invalid.
 

@@ -238,7 +238,7 @@ impl IntegerNumber {
         } else if self.value.starts_with("0b") {
             // Binary number
             (&self.value[2..], 2)
-        } else if self.value.starts_with("0") {
+        } else if self.value.starts_with("0") && self.value.len() > 1 {
             // Octal number
             (&self.value[1..], 8)
         } else {

@@ -122,15 +122,15 @@ fn print_embed<W: Write>(
     embed: &Embed,
     indent_level: usize,
 ) -> std::io::Result<()> {
-    let generate_data_text = |definition: &[TokenWithRange]| {
-        // Note that can not join definitions (tokens) use `join(", ")` because
-        // definitions are token sequences, not comma-separated values.
-        definition
-            .iter()
-            .map(|TokenWithRange { token, .. }| token.to_string())
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
+    // let generate_data_text = |definition: &[TokenWithRange]| {
+    //     // Note that can not join definitions (tokens) use `join(", ")` because
+    //     // definitions are token sequences, not comma-separated values.
+    //     definition
+    //         .iter()
+    //         .map(|TokenWithRange { token, .. }| token.to_string())
+    //         .collect::<Vec<_>>()
+    //         .join(" ")
+    // };
 
     let indent = DEFAULT_INDENT_CHARS.repeat(indent_level);
 
@@ -156,16 +156,27 @@ fn print_embed<W: Write>(
                 write!(writer, " limit({})", limit_value)?;
             }
 
+            let print_binary_data = |data: &[u8]| -> String {
+                if data.is_empty() {
+                    return String::new();
+                }
+                data
+                    .iter()
+                    .map(|byte| format!("0x{:02x}", byte))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+
             if !prefix.is_empty() {
-                write!(writer, " prefix({})", generate_data_text(prefix))?;
+                write!(writer, " prefix({})", print_binary_data(prefix))?;
             }
 
             if !suffix.is_empty() {
-                write!(writer, " suffix({})", generate_data_text(suffix))?;
+                write!(writer, " suffix({})", print_binary_data(suffix))?;
             }
 
             if let Some(if_empty_data) = if_empty {
-                write!(writer, " if_empty({})", generate_data_text(if_empty_data))?;
+                write!(writer, " if_empty({})", print_binary_data(if_empty_data))?;
             }
 
             writeln!(writer)
@@ -492,62 +503,15 @@ mod tests {
             file_path: ("/dev/random".to_string(), Range::default()),
             is_system_header: true,
             limit: Some(100),
-            prefix: vec![
-                TokenWithRange {
-                    token: Token::Char('a', CharType::Default),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Punctuator(Punctuator::Comma),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Char('b', CharType::Default),
-                    range: Range::default(),
-                },
-            ],
-            suffix: vec![
-                TokenWithRange {
-                    token: Token::Char('c', CharType::Default),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Punctuator(Punctuator::Comma),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Char('\0', CharType::Default),
-                    range: Range::default(),
-                },
-            ],
-            if_empty: Some(vec![
-                TokenWithRange {
-                    token: Token::Char('x', CharType::Default),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Punctuator(Punctuator::Comma),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Char('y', CharType::Default),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Punctuator(Punctuator::Comma),
-                    range: Range::default(),
-                },
-                TokenWithRange {
-                    token: Token::Char('z', CharType::Default),
-                    range: Range::default(),
-                },
-            ]),
+            prefix: vec![0x01, 0x02, 0x03],
+            suffix: vec![0x07, 0x08, 0x09],
+            if_empty: Some(vec![0x11, 0x13, 0x17, 0x19]),
         };
         let mut output_with_params = Vec::new();
         print_embed(&mut output_with_params, &embed_with_params, 0).unwrap();
         assert_eq!(
             String::from_utf8(output_with_params).unwrap(),
-            "#embed </dev/random> limit(100) prefix('a' , 'b') suffix('c' , '\\0') if_empty('x' , 'y' , 'z')\n"
+            "#embed </dev/random> limit(100) prefix(0x01, 0x02, 0x03) suffix(0x07, 0x08, 0x09) if_empty(0x11, 0x13, 0x17, 0x19)\n"
         );
     }
 

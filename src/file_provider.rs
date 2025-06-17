@@ -10,12 +10,12 @@ pub trait FileProvider {
     /// Resolves a user header file path relative to the user header search directories.
     ///
     /// Returns the canonical path if found, or `None` if not found.
-    fn resolve_user_header_file(&self, relative_file_path: &Path) -> Option<PathBuf>;
+    fn resolve_user_file(&self, relative_file_path: &Path) -> Option<PathBuf>;
 
     /// Resolves a user header file path relative to a source file's directory.
     ///
     /// Returns the canonical path if found, or `None` if not found.
-    fn resolve_user_header_file_relative_to_source_file(
+    fn resolve_user_file_relative_to_source_file(
         &self,
         relative_file_path: &Path,
         source_file_canonical_full_path: &Path,
@@ -24,7 +24,7 @@ pub trait FileProvider {
     /// Resolves a system header file path relative to the system header search directories.
     ///
     /// Returns the canonical path if found, or `None` if not found.
-    fn resolve_system_header_file(&self, relative_file_path: &Path) -> Option<PathBuf>;
+    fn resolve_system_file(&self, relative_file_path: &Path) -> Option<PathBuf>;
 
     /// Resolves a user header file path using a fallback strategy.
     /// This mimics the behavior of the quoted include directive in C, e.g., `#include "header.h"`.
@@ -35,14 +35,14 @@ pub trait FileProvider {
     /// 3. If still not found, attempts to resolve the file in the system header search directories.
     ///
     /// Returns the canonical path if found, or `None` if not found.
-    fn resolve_user_header_file_with_fallback(
+    fn resolve_user_file_with_fallback(
         &self,
         relative_file_path: &Path,
         source_file_canonical_full_path: &Path,
         resolve_relative: bool,
     ) -> Option<ResolvedResult> {
         if resolve_relative {
-            if let Some(resolved_path) = self.resolve_user_header_file_relative_to_source_file(
+            if let Some(resolved_path) = self.resolve_user_file_relative_to_source_file(
                 relative_file_path,
                 source_file_canonical_full_path,
             ) {
@@ -50,11 +50,11 @@ pub trait FileProvider {
             }
         }
 
-        if let Some(resolved_path) = self.resolve_user_header_file(relative_file_path) {
+        if let Some(resolved_path) = self.resolve_user_file(relative_file_path) {
             return Some(ResolvedResult::new(resolved_path, false));
         }
 
-        if let Some(resolved_path) = self.resolve_system_header_file(relative_file_path) {
+        if let Some(resolved_path) = self.resolve_system_file(relative_file_path) {
             return Some(ResolvedResult::new(resolved_path, true));
         }
 
@@ -71,7 +71,12 @@ pub trait FileProvider {
         &self,
         canonical_full_path: &Path,
         offset: usize,
-        length: Option<usize>,
+
+        // Optional maximum length to read from the file.
+        // If `None`, reads the entire file.
+        // If `Some(n)`, reads up to `n` bytes.
+        // If the file is shorter than `n`, reads the entire file.
+        max_length: Option<usize>,
     ) -> Result<Vec<u8>, std::io::Error>;
 
     /// Resolves a source file path relative to the project's root directory.
@@ -85,14 +90,14 @@ pub struct ResolvedResult {
     pub canonical_full_path: PathBuf,
 
     /// Indicates whether the resolved file is a system header file.
-    pub is_system_header_file: bool,
+    pub is_system_file: bool,
 }
 
 impl ResolvedResult {
-    pub fn new(canonical_full_path: PathBuf, is_system_header_file: bool) -> Self {
+    pub fn new(canonical_full_path: PathBuf, is_system_file: bool) -> Self {
         Self {
             canonical_full_path,
-            is_system_header_file,
+            is_system_file,
         }
     }
 }

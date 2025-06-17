@@ -101,9 +101,7 @@ pub enum Define {
 // - `__has_include ( string-literal )`
 // - `__has_include ( < h-pp-tokens > )` (5) (since C23)
 //
-// ANCPP supports `#include MACRO_NAME`, but does not support forms where
-// the macro name is enclosed in angle brackets or quotes.
-// For example, `#include <MACRO_NAME>` and `#include "MACRO_NAME"` are not supported.
+// ANCPP supports `#include MACRO_NAME`.
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/include.html
@@ -131,9 +129,7 @@ pub enum Include {
 // - `__has_embed ( string-literal pp-balanced-token-sequence (optional) )`
 // - `__has_embed ( < h-pp-tokens > pp-balanced-token-sequence (optional) )` (5)
 //
-// ANCPP supports `#embed MACRO_NAME`, but does not support forms where
-// the macro name is enclosed in angle brackets or quotes.
-// For example, `#embed <MACRO_NAME>` and `#embed "MACRO_NAME"` are not supported.
+// ANCPP supports `#embed MACRO_NAME`.
 //
 // Optional embed parameters can be specified after the required filename argument.
 // There are four standard parameters:
@@ -147,8 +143,11 @@ pub enum Include {
 //
 // ANCPP also does not support other vendor-specific parameters, such as `gnu::offset` and `gnu::base64`.
 //
-// Note: A "balanced token sequence" refers to a sequence of tokens in which
+// A "balanced token sequence" refers to a sequence of tokens in which
 // parentheses, brackets, and braces are properly balanced.
+// But ANCPP only supports a character or integer number sequence separated by commas.
+// For example, `#embed "file.txt" prefix(0xEF, 0xBB, 0xBF) suffix('\0')` is valid,
+// but `#embed "file.txt" prefix(int foo=)` is invalid.
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/embed.html
@@ -158,10 +157,19 @@ pub enum Embed {
     FilePath {
         file_path: (String, Range),
         is_system_header: bool,
+
+        // Specifies the maximum number of bytes to output from the resource.
+        // This limit does not include the prefix or suffix, and does not limit the numbers of bytes of `if_empty`.
         limit: Option<usize>,
-        suffix: Vec<TokenWithRange>,
-        prefix: Vec<TokenWithRange>,
-        if_empty: Option<Vec<TokenWithRange>>,
+
+        // Sequence to append to the output if the resource is not empty.
+        suffix: Vec<u8>,
+
+        // Sequence to prepend to the output if the resource is not empty.
+        prefix: Vec<u8>,
+
+        // Sequence to output if the resource is empty.
+        if_empty: Option<Vec<u8>>,
     },
 }
 
