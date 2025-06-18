@@ -26,8 +26,9 @@ use crate::{
     token::{IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token},
 };
 
-pub const PEEK_BUFFER_LENGTH_PREPROCESS: usize = 4;
-pub const PEEK_BUFFER_LENGTH_MERGE_STRINGS: usize = 2;
+// const PEEK_BUFFER_LENGTH_PREPROCESS: usize = 4;
+// const PEEK_BUFFER_LENGTH_MERGE_STRINGS: usize = 2;
+const PEEK_BUFFER_LENGTH_PARSE_CODE: usize = 2;
 
 /// Preprocesses C source files.
 ///
@@ -73,10 +74,11 @@ where
         file_provider,
         file_cache,
         predefinitions,
-        project_root_directory,
+        // project_root_directory,
         resolve_relative_file,
         source_file_number,
         source_file_relative_path,
+        &source_file_normalized_full_path,
     )?;
 
     // Add source file to the `included_files` list to
@@ -136,21 +138,22 @@ where
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
-        project_root_directory: &Path,
+        // project_root_directory: &Path,
         resolve_relative_file: bool,
 
         source_file_number: usize,
         source_file_relative_path: &Path,
+        source_file_canonical_full_path: &Path,
     ) -> Result<Self, PreprocessFileError> {
         let context = Context::from_keyvalues(
             file_provider,
             file_cache,
             predefinitions,
-            project_root_directory,
+            // project_root_directory,
             resolve_relative_file,
             source_file_number,
             source_file_relative_path,
-            &normalize_path(&project_root_directory.join(source_file_relative_path)),
+            source_file_canonical_full_path,
         )
         .map_err(|error| PreprocessFileError {
             file_number: source_file_number,
@@ -748,7 +751,7 @@ where
             ),
         };
 
-        let (canonical_path, is_system_file) = if relative_to_system {
+        let (canonical_path, _is_system_file) = if relative_to_system {
             match self
                 .context
                 .file_provider
@@ -1041,7 +1044,7 @@ where
         let mut output = Vec::new();
 
         let mut iter = token_with_locations.into_iter();
-        let mut peekable_iter = PeekableIter::new(&mut iter, 2);
+        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_PARSE_CODE);
         let mut code_parser = CodeParser::new(&mut peekable_iter, self.context.current_file.number);
 
         while let Some(current_token_with_location) = code_parser.next_token_with_location() {

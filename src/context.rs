@@ -27,7 +27,7 @@ pub struct Context<'a, T>
 where
     T: FileProvider,
 {
-    pub project_root_directory: PathBuf,
+    // pub project_root_directory: PathBuf,
 
     pub resolve_relative_file: bool,
 
@@ -56,19 +56,21 @@ impl<'a, T> Context<'a, T>
 where
     T: FileProvider,
 {
+    #[allow(dead_code)]
     /// Creates a new `Context` with empty macro definitions and no included files.
     ///
-    /// # Arguments
-    /// * `file_provider` - Reference to the file provider.
-    /// * `file_cache` - Mutable reference to the file cache.
-    /// * `project_root_directory` - The root directory of the project.
-    /// * `current_file_number` - The file number currently being processed.
-    /// * `current_file_canonical_full_path` - The canonical full path of the current file.
-    /// * `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
+    /// Arguments
+    ///
+    /// - `file_provider` - Reference to the file provider.
+    /// - `file_cache` - Mutable reference to the file cache.
+    /// - `project_root_directory` - The root directory of the project.
+    /// - `current_file_number` - The file number currently being processed.
+    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
+    /// - `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
     pub fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
-        project_root_directory: &Path,
+        // project_root_directory: &Path,
         resolve_relative_file: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
@@ -77,7 +79,7 @@ where
         Self {
             file_provider,
             file_cache,
-            project_root_directory: project_root_directory.to_path_buf(),
+            // project_root_directory: project_root_directory.to_path_buf(),
             resolve_relative_file,
             current_file: ContextFile::new(
                 current_file_number,
@@ -95,14 +97,15 @@ where
 
     /// Creates a new `Context` with predefined macro key-value pairs.
     ///
-    /// # Arguments
-    /// * `file_provider` - Reference to the file provider.
-    /// * `file_cache` - Mutable reference to the file cache.
-    /// * `predefinitions` - A map of macro names to their values.
-    /// * `project_root_directory` - The root directory of the project.
-    /// * `current_file_number` - The file number currently being processed.
-    /// * `current_file_canonical_full_path` - The canonical full path of the current file.
-    /// * `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
+    /// Arguments
+    ///
+    /// - `file_provider` - Reference to the file provider.
+    /// - `file_cache` - Mutable reference to the file cache.
+    /// - `predefinitions` - A map of macro names to their values.
+    /// - `project_root_directory` - The root directory of the project.
+    /// - `current_file_number` - The file number currently being processed.
+    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
+    /// - `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
     ///
     /// # Returns
     /// Returns a `Context` initialized with the provided macro definitions.
@@ -110,7 +113,7 @@ where
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
-        project_root_directory: &Path,
+        // project_root_directory: &Path,
         resolve_relative_file: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
@@ -120,7 +123,7 @@ where
             file_provider,
             file_cache,
             macro_map: MacroMap::from_key_values(predefinitions)?,
-            project_root_directory: project_root_directory.to_path_buf(),
+            // project_root_directory: project_root_directory.to_path_buf(),
             resolve_relative_file,
             current_file: ContextFile::new(
                 current_file_number,

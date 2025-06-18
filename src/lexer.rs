@@ -334,15 +334,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn next_char_with_position(&mut self) -> Option<CharWithPosition> {
-        match self.upstream.next() {
-            Some(char_with_position) => {
-                self.last_position = char_with_position.position;
-                Some(char_with_position)
-            }
-            None => None,
-        }
-    }
+    // fn next_char_with_position(&mut self) -> Option<CharWithPosition> {
+    //     match self.upstream.next() {
+    //         Some(char_with_position) => {
+    //             self.last_position = char_with_position.position;
+    //             Some(char_with_position)
+    //         }
+    //         None => None,
+    //     }
+    // }
 
     fn next_char(&mut self) -> Option<char> {
         match self.upstream.next() {

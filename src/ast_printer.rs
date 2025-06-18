@@ -12,7 +12,7 @@ use crate::{
     token::Token,
 };
 
-pub const DEFAULT_INDENT_CHARS: &str = "    ";
+const DEFAULT_INDENT_CHARS: &str = "    ";
 
 fn print_pragma<W: Write>(
     writer: &mut W,
@@ -287,13 +287,14 @@ fn print_statement<W: Write>(
 /// Print the entire program to the given writer
 ///
 /// This function is used for debugging and testing purposes.
-pub fn print_program<W: Write>(writer: &mut W, program: &Program) -> std::io::Result<()> {
+fn print_program<W: Write>(writer: &mut W, program: &Program) -> std::io::Result<()> {
     for statement in &program.statements {
         print_statement(writer, statement, 0)?;
     }
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn print_to_string(program: &Program) -> String {
     let mut output = Vec::new();
     print_program(&mut output, program).unwrap();

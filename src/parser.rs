@@ -4,15 +4,13 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use std::f32::consts::E;
-
 use crate::{
     PreprocessError, TokenWithRange,
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     lexer::lex_from_str,
     peekable_iter::PeekableIter,
     range::Range,
-    token::{CharType, IntegerNumber, Number, Punctuator, StringType, Token},
+    token::{CharType, Number, Punctuator, StringType, Token},
 };
 
 const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
@@ -708,7 +706,7 @@ impl Parser<'_> {
                             return Err(PreprocessError::MessageWithRange(
                                 "Integer number exceeds the maximum value of byte (0xFF)."
                                     .to_owned(),
-                                *parser.peek_range(0).unwrap()
+                                *parser.peek_range(0).unwrap(),
                             ));
                         }
 
@@ -721,7 +719,7 @@ impl Parser<'_> {
                         return Err(PreprocessError::MessageWithRange(
                             "Expect a character literal or integer number in embed data."
                                 .to_owned(),
-                            *parser.peek_range(0).unwrap()
+                            *parser.peek_range(0).unwrap(),
                         ));
                     }
                 }

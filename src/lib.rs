@@ -18,23 +18,24 @@ mod ast;
 mod ast_printer;
 mod char_with_position;
 mod context;
-// mod inline_parser;
 mod lexer;
 mod location;
 mod macro_map;
-mod memory_file_provider;
 mod parser;
 mod peekable_iter;
 mod position;
+mod processor;
 mod range;
 mod token;
 
 pub mod error_printer;
 pub mod file_provider;
 pub mod header_file_cache;
+pub mod memory_file_provider;
 pub mod native_file_provider;
-pub mod processor;
 pub mod prompt;
+
+pub use processor::process_source_file;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TokenWithRange {
@@ -69,7 +70,7 @@ pub enum PreprocessError {
 }
 
 impl Display for PreprocessError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter) -> std::fmt::Result {
         unimplemented!()
     }
 }
@@ -89,7 +90,7 @@ impl PreprocessFileError {
 }
 
 impl Display for PreprocessFileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter) -> std::fmt::Result {
         unimplemented!()
     }
 }
