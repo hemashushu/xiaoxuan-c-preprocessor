@@ -7,12 +7,11 @@
 
 #[derive(Debug, PartialEq)]
 pub enum Expression {
-    Number((Number, Range)),
-    Identifier((String, Range)),
-    Bool(bool),
-    Binary(BinaryOperator, Box<Expression>, Box<Expression>),
-    Unary(UnaryOperator, Box<Expression>),
-    FunctionCall(/* function name */ String, Vec<Expression>),
+    Number(Number, Range),
+    Identifier(String, Range),
+    Binary(BinaryOperator, Range, Box<Expression>, Box<Expression>),
+    Unary(UnaryOperator, Range, Box<Expression>),
+    FunctionCall(/* function name */ String, Range, Vec<Expression>),
     Group(Vec<Expression>),
 }
 

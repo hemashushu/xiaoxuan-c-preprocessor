@@ -79,53 +79,6 @@ impl<'a> InlineParser<'a> {
             Some(token) if token == expected_token)
     }
 
-    //     fn expect_and_consume_string(&mut self) -> Result<(String, StringType), PreprocessFileError> {
-    //         match self.next_token() {
-    //             Some(Token::String(s, t)) => Ok((s, t)),
-    //             Some(_) => Err(PreprocessFileError::MessageWithPosition(
-    //                 "Expect a string.".to_owned(),
-    //                 self.last_location.start,
-    //             )),
-    //             None => Err(PreprocessFileError::UnexpectedEndOfDocument(
-    //                 "Expect a string.".to_owned(),
-    //             )),
-    //         }
-    //     }
-    //
-    //     fn expect_and_consume_number(&mut self) -> Result<Number, PreprocessFileError> {
-    //         match self.next_token() {
-    //             Some(Token::Number(n)) => Ok(n),
-    //             Some(_) => Err(PreprocessFileError::MessageWithPosition(
-    //                 "Expect a number.".to_owned(),
-    //                 self.last_location.start,
-    //             )),
-    //             None => Err(PreprocessFileError::UnexpectedEndOfDocument(
-    //                 "Expect a number.".to_owned(),
-    //             )),
-    //         }
-    //     }
-    //
-    //     fn expect_and_consume_newline_or_eof(&mut self) -> Result<(), PreprocessFileError> {
-    //         match self.next_token() {
-    //             Some(Token::Newline) => Ok(()),
-    //             Some(_) => Err(PreprocessFileError::MessageWithPosition(
-    //                 "Expect a newline.".to_owned(),
-    //                 self.last_location.start,
-    //             )),
-    //             None => Ok(()), // EOF is acceptable here
-    //         }
-    //     }
-    //
-    //     fn expect_and_consume_newline(&mut self) -> Result<(), PreprocessFileError> {
-    //         match self.next_token() {
-    //             Some(Token::Newline) => Ok(()),
-    //             _ => Err(PreprocessFileError::MessageWithPosition(
-    //                 "Expect a newline.".to_owned(),
-    //                 self.last_location.start,
-    //             )),
-    //         }
-    //     }
-
     pub fn expect_and_consume_token(
         &mut self,
         expected_token: &Token,
@@ -170,34 +123,4 @@ impl<'a> InlineParser<'a> {
             "closing parenthesis",
         )
     }
-
-    // expects comma ',' and consumes it.
-    pub fn expect_and_consume_comma(&mut self) -> Result<(), PreprocessFileError> {
-        self.expect_and_consume_token(&Token::Punctuator(Punctuator::Comma), "comma")
-    }
-
-    //     // '['
-    //     fn consume_left_bracket(&mut self) -> Result<(), PreprocessFileError> {
-    //         self.expect_and_consume_token(&Token::LeftBracket, "left bracket")
-    //     }
-    //
-    //     // ']'
-    //     fn consume_right_bracket(&mut self) -> Result<(), PreprocessFileError> {
-    //         self.expect_and_consume_token(&Token::RightBracket, "right bracket")
-    //     }
-    //
-    //     // '}'
-    //     fn consume_right_brace(&mut self) -> Result<(), PreprocessFileError> {
-    //         self.expect_and_consume_token(&Token::RightBrace, "right brace")
-    //     }
-    //
-    //     // '='
-    //     fn consume_equal(&mut self) -> Result<(), PreprocessFileError> {
-    //         self.expect_and_consume_token(&Token::Equal, "equal sign")
-    //     }
-    //
-    //     // ':'
-    //     fn consume_colon(&mut self) -> Result<(), PreprocessFileError> {
-    //         self.expect_and_consume_token(&Token::Colon, "colon sign")
-    //     }
 }

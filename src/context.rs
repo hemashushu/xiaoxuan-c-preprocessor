@@ -52,6 +52,100 @@ where
     pub output: Vec<TokenWithLocation>,
 }
 
+impl<'a, T> Context<'a, T>
+where
+    T: FileProvider,
+{
+    /// Creates a new `Context` with empty macro definitions and no included files.
+    ///
+    /// # Arguments
+    /// * `file_provider` - Reference to the file provider.
+    /// * `file_cache` - Mutable reference to the file cache.
+    /// * `project_root_directory` - The root directory of the project.
+    /// * `current_file_number` - The file number currently being processed.
+    /// * `current_file_canonical_full_path` - The canonical full path of the current file.
+    /// * `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
+    pub fn new(
+        file_provider: &'a T,
+        file_cache: &'a mut HeaderFileCache,
+        project_root_directory: &Path,
+        resolve_relative_file: bool,
+        current_file_number: usize,
+        current_file_relative_path: &Path,
+        current_file_canonical_full_path: &Path,
+    ) -> Self {
+        Self {
+            file_provider,
+            file_cache,
+            project_root_directory: project_root_directory.to_path_buf(),
+            resolve_relative_file,
+            current_file: ContextFile::new(
+                current_file_number,
+                IncludeFile::new(
+                    current_file_canonical_full_path,
+                    FileSource::from_source_file(current_file_relative_path),
+                ),
+            ),
+            macro_map: MacroMap::new(),
+            included_files: Vec::new(),
+            prompts: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    /// Creates a new `Context` with predefined macro key-value pairs.
+    ///
+    /// # Arguments
+    /// * `file_provider` - Reference to the file provider.
+    /// * `file_cache` - Mutable reference to the file cache.
+    /// * `predefinitions` - A map of macro names to their values.
+    /// * `project_root_directory` - The root directory of the project.
+    /// * `current_file_number` - The file number currently being processed.
+    /// * `current_file_canonical_full_path` - The canonical full path of the current file.
+    /// * `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
+    ///
+    /// # Returns
+    /// Returns a `Context` initialized with the provided macro definitions.
+    pub fn from_keyvalues(
+        file_provider: &'a T,
+        file_cache: &'a mut HeaderFileCache,
+        predefinitions: &HashMap<String, String>,
+        project_root_directory: &Path,
+        resolve_relative_file: bool,
+        current_file_number: usize,
+        current_file_relative_path: &Path,
+        current_file_canonical_full_path: &Path,
+    ) -> Result<Self, PreprocessError> {
+        Ok(Self {
+            file_provider,
+            file_cache,
+            macro_map: MacroMap::from_key_values(predefinitions)?,
+            project_root_directory: project_root_directory.to_path_buf(),
+            resolve_relative_file,
+            current_file: ContextFile::new(
+                current_file_number,
+                IncludeFile::new(
+                    current_file_canonical_full_path,
+                    FileSource::from_source_file(current_file_relative_path),
+                ),
+            ),
+            included_files: Vec::new(),
+            prompts: Vec::new(),
+            output: Vec::new(),
+        })
+    }
+
+    pub fn contains_include_file(
+        &self,
+        canonical_full_path: &Path,
+    ) -> bool {
+        self.included_files
+            .iter()
+            .any(|file| file.canonical_full_path == canonical_full_path)
+    }
+}
+
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct ContextFile {
     pub number: usize,
@@ -111,98 +205,5 @@ impl FileSource {
         } else {
             FileSource::UserHeader(relative_file_path.to_path_buf())
         }
-    }
-}
-
-impl<'a, T> Context<'a, T>
-where
-    T: FileProvider,
-{
-    /// Creates a new `Context` with empty macro definitions and no included files.
-    ///
-    /// # Arguments
-    /// * `file_provider` - Reference to the file provider.
-    /// * `file_cache` - Mutable reference to the file cache.
-    /// * `project_root_directory` - The root directory of the project.
-    /// * `current_file_number` - The file number currently being processed.
-    /// * `current_file_canonical_full_path` - The canonical full path of the current file.
-    /// * `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
-    pub fn new(
-        file_provider: &'a T,
-        file_cache: &'a mut HeaderFileCache,
-        project_root_directory: &Path,
-        resolve_relative_file: bool,
-        current_file_number: usize,
-        current_file_canonical_full_path: &Path,
-        current_file_relative_path: &Path,
-    ) -> Self {
-        Self {
-            file_provider,
-            file_cache,
-            project_root_directory: project_root_directory.to_path_buf(),
-            resolve_relative_file,
-            current_file: ContextFile::new(
-                current_file_number,
-                IncludeFile::new(
-                    current_file_canonical_full_path,
-                    FileSource::from_source_file(current_file_relative_path),
-                ),
-            ),
-            macro_map: MacroMap::new(),
-            included_files: Vec::new(),
-            prompts: Vec::new(),
-            output: Vec::new(),
-        }
-    }
-
-    /// Creates a new `Context` with predefined macro key-value pairs.
-    ///
-    /// # Arguments
-    /// * `file_provider` - Reference to the file provider.
-    /// * `file_cache` - Mutable reference to the file cache.
-    /// * `predefinitions` - A map of macro names to their values.
-    /// * `project_root_directory` - The root directory of the project.
-    /// * `current_file_number` - The file number currently being processed.
-    /// * `current_file_canonical_full_path` - The canonical full path of the current file.
-    /// * `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
-    ///
-    /// # Returns
-    /// Returns a `Context` initialized with the provided macro definitions.
-    pub fn from_keyvalues(
-        file_provider: &'a T,
-        file_cache: &'a mut HeaderFileCache,
-        predefinitions: &HashMap<String, String>,
-        project_root_directory: &Path,
-        resolve_relative_file: bool,
-        current_file_number: usize,
-        current_file_canonical_full_path: &Path,
-        current_file_relative_path: &Path,
-    ) -> Result<Self, PreprocessError> {
-        Ok(Self {
-            file_provider,
-            file_cache,
-            macro_map: MacroMap::from_key_values(predefinitions)?,
-            project_root_directory: project_root_directory.to_path_buf(),
-            resolve_relative_file,
-            current_file: ContextFile::new(
-                current_file_number,
-                IncludeFile::new(
-                    current_file_canonical_full_path,
-                    FileSource::from_source_file(current_file_relative_path),
-                ),
-            ),
-            included_files: Vec::new(),
-            prompts: Vec::new(),
-            output: Vec::new(),
-        })
-    }
-
-    pub fn contains_include_file(
-        &self,
-        canonical_full_path: &Path,
-    ) -> bool {
-        self.included_files
-            .iter()
-            .any(|file| file.canonical_full_path == canonical_full_path)
     }
 }

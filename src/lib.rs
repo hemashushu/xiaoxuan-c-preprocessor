@@ -18,7 +18,7 @@ mod ast;
 mod ast_printer;
 mod char_with_position;
 mod context;
-mod inline_parser;
+// mod inline_parser;
 mod lexer;
 mod location;
 mod macro_map;
@@ -33,7 +33,7 @@ pub mod error_printer;
 pub mod file_provider;
 pub mod header_file_cache;
 pub mod native_file_provider;
-pub mod preprocessor;
+pub mod processor;
 pub mod prompt;
 
 #[derive(Debug, PartialEq, Clone)]

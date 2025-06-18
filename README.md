@@ -14,7 +14,6 @@ Unlike standalone tools such as GNU `cpp` or `gcc -E`, ANCPP is designed to be u
 
 <!-- /code_chunk_output -->
 
-
 ## Features
 
 - Fully adheres to the C23 standard, focusing on modern and portable C code.
@@ -70,9 +69,9 @@ TODO
 
 ## Limitations
 
-The C preprocessor operates as a text-based "find and replace" tool, which makes it extremely "flexible." However, this flexibility can lead to code that does not conform to C syntax or disrupts control flow, often due to unintentional mistakes by developers that are difficult to detect. Additionally, the C preprocessor can sometimes behave anti-intuitive. For example, when passing an expression as an argument to a function-like macro, the expression may be evaluated multiple times, potentially causing unexpected side effects. To avoid such issues, ANCPP intentionally restricts some of the more "flexible" features.
+The C preprocessor operates as a text-based "find and replace" tool, which makes it extremely "flexible." However, this flexibility can result in code that does not conform to C syntax or disrupts control flow, often due to unintentional mistakes by developers that are difficult to detect. Additionally, the C preprocessor can sometimes behave counterintuitive. For instance, when an expression is passed as an argument to a function-like macro, it may be evaluated multiple times, potentially causing unexpected side effects. To avoid such issues, ANCPP intentionally restricts some of the more "flexible" features.
 
-It is worth noting that ANCPP does not change or add features. On the contrary, ANCPP strictly adheres to the C23 standard, but restricts or disables certain features that are prone to errors.
+It is worth noting that ANCPP does not change or add features. On the contrary, ANCPP strictly adheres to the C standard, but restricts or disables certain features that are prone to errors.
 
 **Macro Definitions**
 
@@ -107,4 +106,4 @@ It is worth noting that ANCPP does not change or add features. On the contrary, 
 - Trigraphs (e.g., `??<`, `??>`) and digraphs (e.g., `<:`, `:>`, and `%:%:`) are not supported.
 - Each file is included only once, even if it does not have header guards or `#pragma once`.
 
-These limitations are intended to make object-like macros behave more like C variables, function-like macros behave more like C functions, and conditional expressions within `#if` structures behave like standard C expressions. As a result, ANCPP is more consistent, predictable, clear, and less error-prone.
+These limitations are intended to make object-like macros behave more like C variables, function-like macros behave more like C functions, and conditional expressions within `#if` structures behave like standard C expressions. As a result, ANCPP is more clear, consistent, predictable, intuitive, and less error-prone.
