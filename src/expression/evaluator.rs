@@ -154,7 +154,7 @@ fn evaluate_unary_expression(
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions;
+    use pretty_assertions::assert_eq;
 
     use crate::{
         TokenWithLocation,

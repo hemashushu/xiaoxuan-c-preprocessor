@@ -160,8 +160,7 @@ fn print_embed<W: Write>(
                 if data.is_empty() {
                     return String::new();
                 }
-                data
-                    .iter()
+                data.iter()
                     .map(|byte| format!("0x{:02x}", byte))
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -314,9 +313,7 @@ mod tests {
             print_statement, print_to_string,
         },
         range::Range,
-        token::{
-            CharType, IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token,
-        },
+        token::{IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token},
     };
 
     #[test]

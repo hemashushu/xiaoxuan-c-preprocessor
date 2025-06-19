@@ -69,15 +69,15 @@ impl<'a> ExpressionParser<'a> {
         }
     }
 
-    fn next_token_with_location(&mut self) -> Option<TokenWithLocation> {
-        match self.upstream.next() {
-            Some(token_with_location) => {
-                self.last_location = token_with_location.location;
-                Some(token_with_location)
-            }
-            None => None,
-        }
-    }
+    // fn next_token_with_location(&mut self) -> Option<TokenWithLocation> {
+    //     match self.upstream.next() {
+    //         Some(token_with_location) => {
+    //             self.last_location = token_with_location.location;
+    //             Some(token_with_location)
+    //         }
+    //         None => None,
+    //     }
+    // }
 
     fn next_token(&mut self) -> Option<Token> {
         match self.upstream.next() {
@@ -103,11 +103,11 @@ impl<'a> ExpressionParser<'a> {
         }
     }
 
-    fn peek_token_and_equals(&self, offset: usize, expected_token: &Token) -> bool {
-        matches!(
-            self.peek_token(offset),
-            Some(token) if token == expected_token)
-    }
+    // fn peek_token_and_equals(&self, offset: usize, expected_token: &Token) -> bool {
+    //     matches!(
+    //         self.peek_token(offset),
+    //         Some(token) if token == expected_token)
+    // }
 
     fn expect_and_consume_token(
         &mut self,
@@ -338,34 +338,34 @@ impl ExpressionParser<'_> {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, PreprocessFileError> {
-        let parse_arguments =
-            |parser: &mut ExpressionParser| -> Result<Vec<Expression>, PreprocessFileError> {
-                parser.expect_and_consume_opening_paren()?; // Consume the opening parenthesis `(`.
-
-                let mut arguments = Vec::new();
-
-                // Parse arguments until a closing parenthesis is found.
-                while let Some(token) = parser.peek_token(0) {
-                    if token == &Token::Punctuator(Punctuator::ParenthesisClose) {
-                        break; // End of arguments.
-                    }
-
-                    // Parse an expression for the argument.
-                    let argument = parser.parse_expression()?;
-                    arguments.push(argument);
-
-                    // Check for a comma to separate arguments.
-                    if parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::Comma)) {
-                        parser.next_token(); // Consume the comma.
-                    } else {
-                        break; // No more arguments.
-                    }
-                }
-
-                parser.expect_and_consume_closing_paren()?;
-
-                Ok(arguments)
-            };
+        // let parse_arguments =
+        //     |parser: &mut ExpressionParser| -> Result<Vec<Expression>, PreprocessFileError> {
+        //         parser.expect_and_consume_opening_paren()?; // Consume the opening parenthesis `(`.
+        //
+        //         let mut arguments = Vec::new();
+        //
+        //         // Parse arguments until a closing parenthesis is found.
+        //         while let Some(token) = parser.peek_token(0) {
+        //             if token == &Token::Punctuator(Punctuator::ParenthesisClose) {
+        //                 break; // End of arguments.
+        //             }
+        //
+        //             // Parse an expression for the argument.
+        //             let argument = parser.parse_expression()?;
+        //             arguments.push(argument);
+        //
+        //             // Check for a comma to separate arguments.
+        //             if parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::Comma)) {
+        //                 parser.next_token(); // Consume the comma.
+        //             } else {
+        //                 break; // No more arguments.
+        //             }
+        //         }
+        //
+        //         parser.expect_and_consume_closing_paren()?;
+        //
+        //         Ok(arguments)
+        //     };
 
         if let Some(token) = self.peek_token(0) {
             match token {
@@ -387,7 +387,7 @@ impl ExpressionParser<'_> {
                 }
                 // Handle grouped expression.
                 Token::Punctuator(Punctuator::ParenthesisOpen) => {
-                    self.next_token(); // Consume the opening parenthesis.
+                    self.expect_and_consume_opening_paren()?;
                     // Parse the inner expression.
                     let inner_expression = self.parse_expression()?;
                     // Expect and consume the closing parenthesis.

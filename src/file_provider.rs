@@ -82,6 +82,8 @@ pub trait FileProvider {
     /// Resolves a source file path relative to the project's root directory.
     /// Returns the canonical path if found, or an `std::io::Error` if an error occurs.
     fn resolve_source_file(&self, relative_file_path: &Path) -> Result<PathBuf, std::io::Error>;
+
+    fn file_size(&self, canonical_full_path: &Path) -> Result<usize, std::io::Error>;
 }
 
 #[derive(Debug, PartialEq)]

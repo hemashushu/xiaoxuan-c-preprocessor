@@ -8,3 +8,5 @@ mod ast;
 mod ast_printer;
 mod evaluator;
 mod parser;
+
+pub use evaluator::evaluate_token_with_locations;

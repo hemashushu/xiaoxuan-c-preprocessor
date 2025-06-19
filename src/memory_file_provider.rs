@@ -199,6 +199,19 @@ impl FileProvider for MemoryFileProvider {
             )),
         }
     }
+
+    fn file_size(&self, canonical_full_path: &Path) -> Result<usize, std::io::Error> {
+        let file_content = self.file_content_map.get(canonical_full_path);
+
+        match file_content {
+            Some(FileContent::Binary(content)) => Ok(content.len()),
+            Some(FileContent::Text(content)) => Ok(content.len()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "File not found",
+            )),
+        }
+    }
 }
 
 #[cfg(test)]

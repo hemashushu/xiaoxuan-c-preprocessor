@@ -15,6 +15,7 @@ use crate::{
     PreprocessError, PreprocessFileError, TokenWithLocation, TokenWithRange,
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
     context::{Context, ContextFile, FileSource, IncludeFile},
+    expression::evaluate_token_with_locations,
     file_provider::{FileProvider, ResolvedResult, normalize_path},
     header_file_cache::HeaderFileCache,
     location::Location,
@@ -167,146 +168,39 @@ where
 {
     fn process_program(&mut self, program: &Program) -> Result<(), PreprocessFileError> {
         for statement in &program.statements {
-            match statement {
-                Statement::Pragma(pragma) => self.process_pragma(pragma)?,
-                Statement::Define(define) => self.process_define(define)?,
-                Statement::Undef(identifier, range) => self.process_undefine(identifier, range)?,
-                Statement::Include(include) => self.process_include(include)?,
-                Statement::Embed(embed) => self.process_embed(embed)?,
-                Statement::If(if_) => self.process_if(if_)?,
-                Statement::Error(message, range) => self.process_error(message, range)?,
-                Statement::Warning(message, range) => self.process_warnning(message, range)?,
-                Statement::Code(token_with_ranges) => self.process_code(token_with_ranges)?,
-            }
+            self.process_statement(statement)?
         }
 
         Ok(())
     }
 
-    fn process_pragma(&mut self, pragma: &Pragma) -> Result<(), PreprocessFileError> {
+    fn process_statement(&mut self, statement: &Statement) -> Result<(), PreprocessFileError> {
+        match statement {
+            Statement::Pragma(pragma) => self.process_pragma(pragma),
+            Statement::Define(define) => self.process_define(define),
+            Statement::Undef(identifier, range) => self.process_undefine(identifier, range),
+            Statement::Include(include) => self.process_include(include),
+            Statement::Embed(embed) => self.process_embed(embed),
+            Statement::If(if_) => self.process_if(if_),
+            Statement::Error(message, range) => self.process_error(message, range),
+            Statement::Warning(message, range) => self.process_warnning(message, range),
+            Statement::Code(token_with_ranges) => self.process_code(token_with_ranges),
+        }
+    }
+
+    fn process_pragma(&mut self, _pragma: &Pragma) -> Result<(), PreprocessFileError> {
         // Supported pragmas are:
         // - `#pragma once`: Include guard to prevent multiple inclusions of the same file.
         // - `#pragma STDC FENV_ACCESS arg`: Where arg is either ON or OFF or DEFAULT
         // - `#pragma STDC FP_CONTRACT arg`
         // - `#pragma STDC CX_LIMITED_RANGE arg`
 
-        let parse_pragma_argument_value = |s: &str| -> StandardPragmaValue {
-            match s.to_uppercase().as_str() {
-                "DEFAULT" => StandardPragmaValue::Default,
-                "ON" => StandardPragmaValue::On,
-                "OFF" => StandardPragmaValue::Off,
-                _ => unreachable!(),
-            }
-        };
+        // Pragmas are compiler-specific options, not preprocessor directives.
+        // They should ideally be passed to the compiler for handling.
+        // However, I have not yet found a suitable way to do this.
+        // todo
 
-        let mut iter = pragma.parts.iter();
-
-        match iter.next().unwrap() {
-            TokenWithRange {
-                token: Token::Identifier(name),
-                range: name_range,
-            } => {
-                // Handle pragmas based on their identifier.
-                match name.as_str() {
-                    "once" => {
-                        // Handle `#pragma once` directive.
-                        // do nothing since ANCC always includes files only once.
-                        Ok(())
-                    }
-                    "STDC" => {
-                        // Handle standard pragmas.
-                        // Only `FENV_ACCESS`, `FP_CONTRACT`, and `CX_LIMITED_RANGE` are supported.
-                        match iter.next() {
-                            Some(TokenWithRange {
-                                token: Token::Identifier(arg),
-                                range: arg_range,
-                            }) if arg == "FENV_ACCESS"
-                                || arg == "FP_CONTRACT"
-                                || arg == "CX_LIMITED_RANGE" =>
-                            {
-                                // Handle arguments for the pragma.
-                                // The arg can be ON, OFF, or DEFAULT.
-                                match iter.next() {
-                                    Some(TokenWithRange {
-                                        token: Token::Identifier(value),
-                                        range: _,
-                                    }) if value == "ON" || value == "OFF" || value == "DEFAULT" => {
-                                        match iter.next() {
-                                            Some(TokenWithRange {
-                                                token: _,
-                                                range: extraneous_range,
-                                            }) => Err(PreprocessFileError {
-                                                file_number: self.context.current_file.number,
-                                                error: PreprocessError::MessageWithRange(
-                                                    "Extraneous parameter.".to_owned(),
-                                                    *extraneous_range,
-                                                ),
-                                            }),
-                                            None => {
-                                                let value = parse_pragma_argument_value(value);
-                                                let _standard_pragma =
-                                                    match arg.to_uppercase().as_str() {
-                                                        "FENV_ACCESS" => {
-                                                            StandardPragma::FenvAccess(value)
-                                                        }
-                                                        "FP_CONTRACT" => {
-                                                            StandardPragma::FPContract(value)
-                                                        }
-                                                        "CX_LIMITED_RANGE" => {
-                                                            StandardPragma::CxLimitedRange(value)
-                                                        }
-                                                        _ => unreachable!(),
-                                                    };
-
-                                                // todo::
-                                                // Standard pragmas should be passed to the compiler for processing.
-                                                // For example, standard pragmas could be inserted into the output token stream
-                                                // as a new token type or as C attributes.
-                                                // Currently, they are simply ignored.
-                                                Ok(())
-                                            }
-                                        }
-                                    }
-                                    _ => Err(PreprocessFileError {
-                                        file_number: self.context.current_file.number,
-                                        error: PreprocessError::MessageWithRange(
-                                            format!("Expected ON, OFF, or DEFAULT after {}", arg),
-                                            *arg_range,
-                                        ),
-                                    }),
-                                }
-                            }
-                            _ => Err(PreprocessFileError {
-                                file_number: self.context.current_file.number,
-                                error: PreprocessError::MessageWithRange(
-                                    format!(
-                                        "Expected FENV_ACCESS, FP_CONTRACT, or CX_LIMITED_RANGE after STDC"
-                                    ),
-                                    *name_range,
-                                ),
-                            }),
-                        }
-                    }
-                    _ => Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
-                        error: PreprocessError::MessageWithRange(
-                            format!("Unsupported pragma: {}", name),
-                            *name_range,
-                        ),
-                    }),
-                }
-            }
-            TokenWithRange {
-                token: _,
-                range: invalid_range,
-            } => Err(PreprocessFileError {
-                file_number: self.context.current_file.number,
-                error: PreprocessError::MessageWithRange(
-                    "Directive `#pragma` should be followed by an identifier".to_string(),
-                    *invalid_range,
-                ),
-            }),
-        }
+        Ok(())
     }
 
     fn process_code(
@@ -466,13 +360,13 @@ where
 
                 if expended_tokens.len() > 1 {
                     return Err(PreprocessFileError {
-                    file_number: self.context.current_file.number,
-                    error: PreprocessError::MessageWithRange(
-                        "The macro expands to multiple tokens; expected a single string literal representing the file path."
-                            .to_owned(),
-                        *range,
-                    ),
-                });
+                        file_number: self.context.current_file.number,
+                        error: PreprocessError::MessageWithRange(
+                            "The macro expands to multiple tokens; expected a single string literal representing the file path."
+                                .to_owned(),
+                            *range,
+                        ),
+                    });
                 }
 
                 match expended_tokens.first().unwrap() {
@@ -869,6 +763,75 @@ where
     }
 
     fn process_if(&mut self, if_: &If) -> Result<(), PreprocessFileError> {
+        let mut found = false;
+
+        let extra_operator_names = ["__has_include", "__has_embed", "__has_c_attribute"];
+
+        for branch in &if_.branches {
+            // Evaluate the condition of the branch.
+            let condition_result: isize = match &branch.condition {
+                Condition::Defined(identifier, _) => {
+                    if self.context.macro_map.contains(identifier)
+                        || extra_operator_names.contains(&identifier.as_str())
+                    {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                Condition::NotDefined(identifier, _) => {
+                    if self.context.macro_map.contains(identifier)
+                        || extra_operator_names.contains(&identifier.as_str())
+                    {
+                        0
+                    } else {
+                        1
+                    }
+                }
+                Condition::Expression(tokens) => {
+                    // Evaluate the expression.
+                    let token_with_locations = tokens
+                        .iter()
+                        .map(|item| {
+                            TokenWithLocation::new(
+                                item.token.clone(),
+                                Location::new(self.context.current_file.number, &item.range),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+
+                    let expanded_tokens = self.expand_marco(
+                        token_with_locations,
+                        &HashMap::new(),
+                        ExpandContextType::ConditionalExpression,
+                    )?;
+
+                    evaluate_token_with_locations(
+                        &expanded_tokens,
+                        self.context.current_file.number,
+                    )?
+                }
+            };
+
+            if condition_result != 0 {
+                found = true;
+
+                for statement in &branch.consequence {
+                    self.process_statement(statement)?;
+                }
+                break; // Exit after processing the first true branch.
+            }
+        }
+
+        if !found {
+            // If no branch was true, process the alternative if it exists.
+            if let Some(alternative) = &if_.alternative {
+                for statement in alternative {
+                    self.process_statement(statement)?;
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1189,13 +1152,507 @@ where
                             );
                             output.push(token);
                         }
-                        "__has_include" => {
-                            // _Pragma(...)
+                        "__STDC_EMBED_NOT_FOUND__"
+                        | "__STDC_EMBED_FOUND__"
+                        | "__STDC_EMBED_EMPTY__" => {
+                            let value = match name.as_str() {
+                                "__STDC_EMBED_NOT_FOUND__" => 0,
+                                "__STDC_EMBED_FOUND__" => 1,
+                                "__STDC_EMBED_EMPTY__" => 2,
+                                _ => unreachable!(),
+                            };
+
+                            output.push(TokenWithLocation::new(
+                                Token::Number(Number::Integer(IntegerNumber::new(
+                                    value.to_string(),
+                                    false,
+                                    IntegerNumberType::Default,
+                                ))),
+                                Location::default(),
+                            ));
+                        }
+                        "__Pragma" => {
+                            if expand_context_type != ExpandContextType::ObjectLikeDefinition
+                                || expand_context_type != ExpandContextType::FunctionLikeDefinition
+                                || expand_context_type
+                                    != ExpandContextType::VariadicFunctionLikeDefinition
+                            {
+                                return Err(PreprocessFileError {
+                                    file_number: current_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "__Pragma can only be used in macro definitions."
+                                            .to_owned(),
+                                        current_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+
+                            code_parser.expect_and_consume_opening_paren()?; // Consumes '('
+
+                            let (_pragma_content, _location) = match code_parser.peek_token(0) {
+                                Some(Token::String(content, _)) => {
+                                    let content_owned = content.to_owned();
+                                    let location = *code_parser.peek_location(0).unwrap();
+                                    code_parser.next_token(); // consumes the string token
+
+                                    (content_owned, location)
+                                }
+                                Some(_) => {
+                                    let location = code_parser.peek_location(0).unwrap();
+                                    return Err(PreprocessFileError {
+                                        file_number: location.file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            "__Pragma must be followed by a string literal."
+                                                .to_owned(),
+                                            location.range,
+                                        ),
+                                    });
+                                }
+                                None => {
+                                    return Err(PreprocessFileError {
+                                        file_number: current_token_with_location
+                                            .location
+                                            .file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            "__Pragma must be followed by a string literal."
+                                                .to_owned(),
+                                            current_token_with_location.location.range,
+                                        ),
+                                    });
+                                }
+                            };
+
+                            code_parser.expect_and_consume_closing_paren()?; // Consumes ')'
+
+                            // Pragmas are compiler-specific options, not preprocessor directives.
+                            // They should ideally be passed to the compiler for handling.
+                            // However, I have not yet found a suitable way to do this.
+                            // todo
+                        }
+                        "defined" => {
+                            // `defined` is a preprocessor operator that checks if a macro is defined.
+                            // It can be used in conditional expressions and as part of `#if` and `#elif`.
                             //
-                            // defined ...
-                            // defined(...)
-                            // __has_include(...)
-                            // __has_embed(...)
+                            // Syntax:
+                            // - `defined identifier`
+                            // - `defined(identifier)`
+
+                            if expand_context_type != ExpandContextType::ConditionalExpression {
+                                return Err(PreprocessFileError {
+                                    file_number: current_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "`defined` can only be used in conditional expressions."
+                                            .to_owned(),
+                                        current_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+
+                            let has_parentheses = code_parser.peek_token_and_equals(
+                                0,
+                                &Token::Punctuator(Punctuator::ParenthesisOpen),
+                            );
+
+                            if has_parentheses {
+                                code_parser.expect_and_consume_opening_paren()?;
+                            }
+
+                            let identifier = match code_parser.peek_token(0) {
+                                Some(Token::Identifier(id)) => {
+                                    let id_owned = id.to_owned();
+                                    code_parser.next_token(); // consumes the identifier token
+
+                                    id_owned
+                                }
+                                Some(_) => {
+                                    let location = code_parser.peek_location(0).unwrap();
+                                    return Err(PreprocessFileError {
+                                        file_number: location.file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            "`defined` must be followed by an identifier."
+                                                .to_owned(),
+                                            location.range,
+                                        ),
+                                    });
+                                }
+                                None => {
+                                    return Err(PreprocessFileError {
+                                        file_number: current_token_with_location
+                                            .location
+                                            .file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            "`defined` must be followed by an identifier."
+                                                .to_owned(),
+                                            current_token_with_location.location.range,
+                                        ),
+                                    });
+                                }
+                            };
+
+                            if has_parentheses {
+                                code_parser.expect_and_consume_closing_paren()?; // Consumes ')'
+                            }
+
+                            let extra_operator_names =
+                                ["__has_include", "__has_embed", "__has_c_attribute"];
+
+                            let number = if self.context.macro_map.contains(&identifier)
+                                || extra_operator_names.contains(&identifier.as_str())
+                            {
+                                1
+                            } else {
+                                0
+                            };
+
+                            output.push(TokenWithLocation::new(
+                                Token::Number(Number::Integer(IntegerNumber::new(
+                                    number.to_string(),
+                                    false,
+                                    IntegerNumberType::Default,
+                                ))),
+                                Location::default(),
+                            ));
+                        }
+                        "__has_include" => {
+                            // `__has_include` is a preprocessor operator that checks if a file can be included.
+                            // It can be used in conditional expressions and as part of `#if` and `#elif`.
+                            //
+                            // Syntax:
+                            // - `__has_include("file")`
+                            // - `__has_include(<file>)`
+                            // - `__has_include(file)`
+                            //
+                            // The __has_include expression evaluates to 1 if the search for the source file
+                            // succeeds, and to ​0​ if the search fails.
+                            //
+                            // see:
+                            // https://en.cppreference.com/w/c/preprocessor/include.html
+
+                            if expand_context_type != ExpandContextType::ConditionalExpression {
+                                return Err(PreprocessFileError {
+                                    file_number: current_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "`__has_include` can only be used in conditional expressions."
+                                            .to_owned(),
+                                        current_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+
+                            code_parser.expect_and_consume_opening_paren()?; // Consumes '('
+
+                            let (relative_path, relative_to_system, _file_path_location) =
+                                match code_parser.peek_token(0) {
+                                    Some(Token::Identifier(id)) => {
+                                        let id_owned = id.to_owned();
+                                        let location = *code_parser.peek_location(0).unwrap();
+                                        code_parser.next_token(); // consumes the identifier token
+
+                                        let expended_tokens = self.expand_marco(
+                                            vec![TokenWithLocation::new(
+                                                Token::Identifier(id_owned),
+                                                location,
+                                            )],
+                                            &HashMap::new(),
+                                            ExpandContextType::Normal,
+                                        )?;
+
+                                        if expended_tokens.is_empty() {
+                                            return Err(PreprocessFileError {
+                                                file_number: location.file_number,
+                                                error: PreprocessError::MessageWithRange(
+                                                    "The macro expands to empty; expected a single string literal representing the file path.".to_owned(),
+                                                    location.range,
+                                                ),
+                                            });
+                                        }
+
+                                        if expended_tokens.len() > 1 {
+                                            return Err(PreprocessFileError {
+                                                file_number: location.file_number,
+                                                error: PreprocessError::MessageWithRange(
+                                                    "The macro expands to multiple tokens; expected a single string literal representing the file path."
+                                                        .to_owned(),
+                                                    location.range,
+                                                ),
+                                            });
+                                        }
+
+                                        match expended_tokens.first().unwrap() {
+                                            TokenWithLocation {
+                                                token: Token::String(relative_path, _),
+                                                location,
+                                            } => (PathBuf::from(relative_path), false, *location),
+                                            _ => {
+                                                return Err(PreprocessFileError {
+                                                    file_number: location.file_number,
+                                                    error: PreprocessError::MessageWithRange(
+                                                        "Macro expansion resulted in an unexpected type; a single string literal representing the file path was expected.".to_owned(),
+                                                        location.range,
+                                                    ),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Some(Token::FilePath(relative_path, is_system_header)) => {
+                                        let relative_path_owned = relative_path.to_owned();
+                                        let is_system_header_owned = *is_system_header;
+                                        let location = *code_parser.peek_location(0).unwrap();
+                                        code_parser.next_token(); // consumes the file path token
+
+                                        (
+                                            PathBuf::from(relative_path_owned),
+                                            is_system_header_owned,
+                                            location,
+                                        )
+                                    }
+                                    Some(_) => {
+                                        let location = code_parser.peek_location(0).unwrap();
+                                        return Err(PreprocessFileError {
+                                            file_number: location.file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "`__has_include` must be followed by a file path or identifier."
+                                                    .to_owned(),
+                                                location.range,
+                                            ),
+                                        });
+                                    }
+                                    None => {
+                                        return Err(PreprocessFileError {
+                                            file_number: current_token_with_location
+                                                .location
+                                                .file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "`__has_include` must be followed by a file path or identifier."
+                                                    .to_owned(),
+                                                current_token_with_location.location.range,
+                                            ),
+                                        });
+                                    }
+                                };
+
+                            let result = if relative_to_system {
+                                if self
+                                    .context
+                                    .file_provider
+                                    .resolve_system_file(&relative_path)
+                                    .is_some()
+                                {
+                                    1
+                                } else {
+                                    0
+                                }
+                            } else {
+                                if self
+                                    .context
+                                    .file_provider
+                                    .resolve_user_file_with_fallback(
+                                        &relative_path,
+                                        &self.context.current_file.source_file.canonical_full_path,
+                                        self.context.resolve_relative_path,
+                                    )
+                                    .is_some()
+                                {
+                                    1
+                                } else {
+                                    0
+                                }
+                            };
+
+                            output.push(TokenWithLocation::new(
+                                Token::Number(Number::Integer(IntegerNumber::new(
+                                    result.to_string(),
+                                    false,
+                                    IntegerNumberType::Default,
+                                ))),
+                                Location::default(),
+                            ));
+
+                            code_parser.expect_and_consume_closing_paren()?; // Consumes ')'
+                        }
+                        "__has_embed" => {
+                            // `__has_embed` is a preprocessor operator that checks if a file can be embedded.
+                            // It can be used in conditional expressions and as part of `#if` and `#elif`.
+                            //
+                            // Syntax:
+                            // - `__has_embed("file")`
+                            // - `__has_embed(<file>)`
+                            // - `__has_embed(file)`
+                            //
+                            // Returns:
+                            // - `__STDC_EMBED_FOUND__` (1_isize) if the search for the resource succeeds,
+                            //   the resource is non empty and all the parameters are supported.
+                            // - `__STDC_EMBED_EMPTY__` (2_isize) if the resource is empty and all the parameters are supported.
+                            // - `__STDC_EMBED_NOT_FOUND__` (0_isize) if the search fails or one of the parameters
+                            //    passed is not supported by the implementation.
+
+                            if expand_context_type != ExpandContextType::ConditionalExpression {
+                                return Err(PreprocessFileError {
+                                    file_number: current_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "`__has_embed` can only be used in conditional expressions."
+                                            .to_owned(),
+                                        current_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+
+                            code_parser.expect_and_consume_opening_paren()?; // Consumes '('
+
+                            let (relative_path, relative_to_system, _file_path_location) =
+                                match code_parser.peek_token(0) {
+                                    Some(Token::Identifier(id)) => {
+                                        let id_owned = id.to_owned();
+                                        let location = *code_parser.peek_location(0).unwrap();
+                                        code_parser.next_token(); // consumes the identifier token
+
+                                        let expended_tokens = self.expand_marco(
+                                            vec![TokenWithLocation::new(
+                                                Token::Identifier(id_owned),
+                                                location,
+                                            )],
+                                            &HashMap::new(),
+                                            ExpandContextType::Normal,
+                                        )?;
+
+                                        if expended_tokens.is_empty() {
+                                            return Err(PreprocessFileError {
+                                                file_number: location.file_number,
+                                                error: PreprocessError::MessageWithRange(
+                                                    "The macro expands to empty; expected a single string literal representing the file path.".to_owned(),
+                                                    location.range,
+                                                ),
+                                            });
+                                        }
+
+                                        if expended_tokens.len() > 1 {
+                                            return Err(PreprocessFileError {
+                                                file_number: location.file_number,
+                                                error: PreprocessError::MessageWithRange(
+                                                    "The macro expands to multiple tokens; expected a single string literal representing the file path."
+                                                        .to_owned(),
+                                                    location.range
+                                                ),
+                                            });
+                                        }
+
+                                        match expended_tokens.first().unwrap() {
+                                            TokenWithLocation {
+                                                token: Token::String(relative_path, _),
+                                                location,
+                                            } => (PathBuf::from(relative_path), false, *location),
+                                            _ => {
+                                                return Err(PreprocessFileError {
+                                                    file_number: location.file_number,
+                                                    error: PreprocessError::MessageWithRange(
+                                                        "Macro expansion resulted in an unexpected type; a single string literal representing the file path was expected.".to_owned(),
+                                                        location.range,
+                                                    ),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Some(Token::FilePath(relative_path, is_system_header)) => {
+                                        let relative_path_owned = relative_path.to_owned();
+                                        let is_system_header_owned = *is_system_header;
+                                        let location = *code_parser.peek_location(0).unwrap();
+                                        code_parser.next_token(); // consumes the file path token
+
+                                        (
+                                            PathBuf::from(relative_path_owned),
+                                            is_system_header_owned,
+                                            location,
+                                        )
+                                    }
+                                    Some(_) => {
+                                        let location = code_parser.peek_location(0).unwrap();
+                                        return Err(PreprocessFileError {
+                                            file_number: location.file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "`__has_embed` must be followed by a file path or identifier."
+                                                    .to_owned(),
+                                                location.range,
+                                            ),
+                                        });
+                                    }
+                                    None => {
+                                        return Err(PreprocessFileError {
+                                            file_number: current_token_with_location
+                                                .location
+                                                .file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "`__has_include` must be followed by a file path or identifier."
+                                                    .to_owned(),
+                                                current_token_with_location.location.range,
+                                            ),
+                                        });
+                                    }
+                                };
+
+                            // The possible return values are:
+                            //
+                            // - `__STDC_EMBED_FOUND__`
+                            // - `__STDC_EMBED_EMPTY__`
+                            // - `__STDC_EMBED_NOT_FOUND__`
+                            //
+                            // see:
+                            // https://en.cppreference.com/w/c/preprocessor/embed.html
+                            let result = if relative_to_system {
+                                self.context
+                                    .file_provider
+                                    .resolve_system_file(&relative_path)
+                                    .map_or(0, |canonical_full_path| {
+                                        self.context
+                                            .file_provider
+                                            .file_size(&canonical_full_path)
+                                            .map_or(0, |size| {
+                                                if size == 0 {
+                                                    2 // __STDC_EMBED_EMPTY__
+                                                } else {
+                                                    1 // __STDC_EMBED_FOUND__
+                                                }
+                                            })
+                                    })
+                            } else {
+                                self.context
+                                    .file_provider
+                                    .resolve_user_file_with_fallback(
+                                        &relative_path,
+                                        &self.context.current_file.source_file.canonical_full_path,
+                                        self.context.resolve_relative_path,
+                                    )
+                                    .map_or(
+                                        0,
+                                        |ResolvedResult {
+                                             canonical_full_path,
+                                             ..
+                                         }| {
+                                            self.context
+                                                .file_provider
+                                                .file_size(&canonical_full_path)
+                                                .map_or(0, |size| {
+                                                    if size == 0 {
+                                                        2 // __STDC_EMBED_EMPTY__
+                                                    } else {
+                                                        1 // __STDC_EMBED_FOUND__
+                                                    }
+                                                })
+                                        },
+                                    )
+                            };
+
+                            output.push(TokenWithLocation::new(
+                                Token::Number(Number::Integer(IntegerNumber::new(
+                                    result.to_string(),
+                                    false,
+                                    IntegerNumberType::Default,
+                                ))),
+                                Location::default(),
+                            ));
+
+                            code_parser.expect_and_consume_closing_paren()?; // Consumes ')'
+                        }
+                        "__has_c_attribute" => {
                             // __has_c_attribute(...)
                             //
                             // __has_c_attribute can be expanded in the expression of #if and #elif.
@@ -1214,6 +1671,86 @@ where
                             //
                             // see:
                             // https://en.cppreference.com/w/c/language/attributes.html#Attribute_testing
+
+                            if expand_context_type != ExpandContextType::ConditionalExpression {
+                                return Err(PreprocessFileError {
+                                    file_number: current_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "`__has_c_attribute` can only be used in conditional expressions."
+                                            .to_owned(),
+                                        current_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+
+                            code_parser.expect_and_consume_opening_paren()?; // Consumes '('
+
+                            let (attribute_name, location) = match code_parser.peek_token(0) {
+                                Some(Token::Identifier(id)) => {
+                                    let id_owned = id.to_owned();
+                                    let location = *code_parser.peek_location(0).unwrap();
+                                    code_parser.next_token(); // consumes the identifier token
+
+                                    (id_owned, location)
+                                }
+                                Some(_) => {
+                                    let location = code_parser.peek_location(0).unwrap();
+                                    return Err(PreprocessFileError {
+                                        file_number: location.file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            "`__has_c_attribute` must be followed by an attribute token."
+                                                .to_owned(),
+                                            location.range,
+                                        ),
+                                    });
+                                }
+                                None => {
+                                    return Err(PreprocessFileError {
+                                        file_number: current_token_with_location
+                                            .location
+                                            .file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            "`__has_c_attribute` must be followed by an attribute token."
+                                                .to_owned(),
+                                            current_token_with_location.location.range,
+                                        ),
+                                    });
+                                }
+                            };
+
+                            code_parser.expect_and_consume_closing_paren()?; // Consumes ')'
+
+                            let value = match attribute_name.as_str() {
+                                "deprecated" => 201904,
+                                "fallthrough" => 201904,
+                                "maybe_unused" => 201904,
+                                "nodiscard" => 202003,
+                                "noreturn" => 202202,
+                                "_Noreturn" => 202202,
+                                "unsequenced" => 202207,
+                                "reproducible" => 202207,
+                                _ => {
+                                    return Err(PreprocessFileError {
+                                        file_number: location.file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            format!(
+                                                "Unknown attribute token: '{}'.",
+                                                attribute_name
+                                            ),
+                                            location.range,
+                                        ),
+                                    });
+                                }
+                            };
+
+                            output.push(TokenWithLocation::new(
+                                Token::Number(Number::Integer(IntegerNumber::new(
+                                    value.to_string(),
+                                    false,
+                                    IntegerNumberType::Long,
+                                ))),
+                                Location::default(),
+                            ));
                         }
                         _ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => {
                             // _Token concatenation_ (the `##` operator).
@@ -1777,6 +2314,9 @@ enum ExpandContextType {
 
     /// Variadic function-like macro definition, where `__VA_ARGS__` and `__VA_OPT__` are allowed.
     VariadicFunctionLikeDefinition = 3,
+
+    /// Conditional expression, i.e., `#if` and `#elif`.
+    ConditionalExpression = 4,
 }
 
 /// Convert a token to a string.
@@ -1836,23 +2376,6 @@ enum ArgumentValue {
 
     /// The value list of variadic arguments.
     Concatenated(Vec<Vec<TokenWithLocation>>),
-}
-
-// Represents a pragma directive, e.g., `#pragma STDC FENV_ACCESS ON`.
-// Pragmas are used to control compiler behavior and
-// should be passed to the compiler for further processing.
-#[derive(Debug, PartialEq, Clone)]
-pub enum StandardPragma {
-    FenvAccess(StandardPragmaValue), // Floating-point environment access
-    FPContract(StandardPragmaValue), // Floating-point contractions
-    CxLimitedRange(StandardPragmaValue), // Complex limited range
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum StandardPragmaValue {
-    Default,
-    On,
-    Off,
 }
 
 struct CodeParser<'a> {
@@ -3282,6 +3805,107 @@ FOO BAR
                 )
             })
         ));
+    }
+
+    #[test]
+    fn test_process_if() {
+        let predefinitions = HashMap::new();
+
+        // Test `ifdef`
+        assert_eq!(
+            print_tokens(&process_single_source_tokens(
+                r#"
+#define FOO 'a'
+#define BAR
+
+#ifdef FOO
+    FOO
+#else
+    'b'
+#endif
+
+#ifdef BAR
+    "hello"
+#else
+    "world"
+#endif
+
+#ifdef BAZ
+    11
+#else
+    13
+#endif
+"#,
+                &predefinitions,
+            )),
+            "'a' \"hello\" 13"
+        );
+
+        // Test `ifndef`
+        assert_eq!(
+            print_tokens(&process_single_source_tokens(
+                r#"
+#define FOO 'a'
+#define BAR
+
+#ifndef FOO
+    FOO
+#else
+    'b'
+#endif
+
+#ifndef BAR
+    "hello"
+#else
+    "world"
+#endif
+
+#ifndef BAZ
+    11
+#else
+    13
+#endif
+"#,
+                &predefinitions,
+            )),
+            "'b' \"world\" 11"
+        );
+
+        // Test operator `defined`
+        assert_eq!(
+            print_tokens(&process_single_source_tokens(
+                r#"
+#define FOO 'a'
+
+#if defined(FOO)
+    FOO
+#else
+    'b'
+#endif
+
+#if !defined(FOO)
+    "hello"
+#else
+    "world"
+#endif
+
+#if defined BAR
+    11
+#else
+    13
+#endif
+
+#if !defined BAR
+    17
+#else
+    19
+#endif
+
+"#,
+                &predefinitions,
+            )),
+            "'a' \"world\" 13 17"
+        );
     }
 
     #[test]

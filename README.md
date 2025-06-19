@@ -50,12 +50,15 @@ TODO
 - Logical operators: `&&`, `||`
 - Bitwise operators: `&`, `|`, `^`, `<<`, `>>`
 - Unary operators: `+`, `-`, `!`, `~`
-- Grouping operator: `(...)`
+
+Grouping `(...)`
 
 Other operators
 
 - `defined`, `defined(...)`
-- `__has_include(...)`, `__has_embed(...)`
+- `__has_include(...)`,
+- `__has_embed(...)`
+- `__has_c_attribute(...)`
 
 **Built-in Macros**
 
@@ -65,6 +68,11 @@ Other operators
 - `__TIME__`
 - `__VA_ARGS__`
 
+- `__STDC_EMBED_NOT_FOUND__`
+- `__STDC_EMBED_FOUND__`
+- `__STDC_EMBED_EMPTY__`
+
+(C23)
 TODO
 
 ## Limitations
