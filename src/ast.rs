@@ -6,17 +6,9 @@
 
 use crate::{TokenWithRange, range::Range};
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct Program {
     pub statements: Vec<Statement>,
-}
-
-impl Default for Program {
-    fn default() -> Self {
-        Self {
-            statements: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Clone)]

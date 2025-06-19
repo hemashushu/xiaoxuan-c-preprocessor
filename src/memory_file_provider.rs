@@ -89,6 +89,12 @@ impl MemoryFileProvider {
     }
 }
 
+impl Default for MemoryFileProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileProvider for MemoryFileProvider {
     fn resolve_user_file(&self, header_file_path: &Path) -> Option<PathBuf> {
         for dir in &self.user_directories {
@@ -187,7 +193,7 @@ impl FileProvider for MemoryFileProvider {
                     content.len()
                 };
 
-                return Ok(content[offset..end_position].to_vec());
+                Ok(content[offset..end_position].to_vec())
             }
             Some(FileContent::Text(_)) => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

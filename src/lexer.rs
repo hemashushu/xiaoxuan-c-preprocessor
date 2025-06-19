@@ -152,7 +152,7 @@ fn remove_comments(
 
                 // Line comment: consume all characters until the end of the line.
                 // Note: This includes the newline character (includes both `\r\n` and `\n`).
-                while let Some(next_char_with_position) = chars.next() {
+                for next_char_with_position in chars.by_ref() {
                     if next_char_with_position.character == '\n' {
                         break;
                     }
@@ -219,7 +219,7 @@ fn remove_shebang(
         chars.next(); // Consume '!'
 
         // Consume shebang line
-        while let Some(next_char_with_position) = chars.next() {
+        for next_char_with_position in chars.by_ref() {
             if next_char_with_position.character == '\n' {
                 break; // Stop at the end of the line
             }
@@ -859,7 +859,7 @@ impl Lexer<'_> {
                     ));
                 }
                 '.' => {
-                    if matches!(self.peek_char(1), Some('0'..'9')) {
+                    if matches!(self.peek_char(1), Some('0'..='9')) {
                         // This is a number with a leading dot, e.g., `.5`
                         output.push(self.lex_decimal_number(true)?);
                     } else if self.peek_char_and_equals(1, '.') && self.peek_char_and_equals(2, '.')
@@ -1927,7 +1927,7 @@ impl Lexer<'_> {
                                                 ),
                                             ));
                                     }
-                                    '0'..'9' => {
+                                    '0'..='7' => {
                                         // Octal escape sequence.
                                         // format: `\o`, `\oo`, and `\ooo`.
                                         // e.g. `\0`, `\70` (`'8'`), `\101` (`'A'`)
@@ -1939,15 +1939,31 @@ impl Lexer<'_> {
                                         buffer.push(current_char2);
 
                                         while let Some(next_char) = self.peek_char(0) {
-                                            if next_char.is_ascii_digit() {
-                                                buffer.push(*next_char);
-                                                self.next_char(); // consume digit
+                                            match next_char {
+                                                '0'..='7' => {
+                                                    buffer.push(*next_char);
+                                                    self.next_char(); // consume digit
 
-                                                if buffer.len() >= MAX_OCTAL_DIGITS {
+                                                    if buffer.len() >= MAX_OCTAL_DIGITS {
+                                                        break;
+                                                    }
+                                                }
+                                                '8' | '9' => {
+                                                    // invalid octal digit
+                                                    return Err(PreprocessError::MessageWithRange(
+                                                        format!(
+                                                            "Invalid octal escape sequence '\\{}'. Expected octal digit.",
+                                                            buffer
+                                                        ),
+                                                        Range::new(
+                                                            &self.pop_position_from_store(),
+                                                            &self.last_position,
+                                                        ),
+                                                    ));
+                                                }
+                                                _ => {
                                                     break;
                                                 }
-                                            } else {
-                                                break;
                                             }
                                         }
 
@@ -2229,7 +2245,7 @@ impl Lexer<'_> {
                                                 ),
                                                 ));
                                         }
-                                        '0'..'9' => {
+                                        '0'..='7' => {
                                             // Octal escape sequence.
                                             // format: `\o`, `\oo`, and `\ooo`.
                                             // e.g. `\0`, `\70` (`'8'`), `\101` (`'A'`)
@@ -2241,15 +2257,33 @@ impl Lexer<'_> {
                                             buffer.push(current_char2);
 
                                             while let Some(next_char) = self.peek_char(0) {
-                                                if next_char.is_ascii_digit() {
-                                                    buffer.push(*next_char);
-                                                    self.next_char(); // consume digit
+                                                match next_char {
+                                                    '0'..='7' => {
+                                                        buffer.push(*next_char);
+                                                        self.next_char(); // consume digit
 
-                                                    if buffer.len() >= MAX_OCTAL_DIGITS {
+                                                        if buffer.len() >= MAX_OCTAL_DIGITS {
+                                                            break;
+                                                        }
+                                                    }
+                                                    '8' | '9' => {
+                                                        // invalid octal digit
+                                                        return Err(
+                                                            PreprocessError::MessageWithRange(
+                                                                format!(
+                                                                    "Invalid octal escape sequence '\\{}'. Expected octal digit.",
+                                                                    buffer
+                                                                ),
+                                                                Range::new(
+                                                                    &self.pop_position_from_store(),
+                                                                    &self.last_position,
+                                                                ),
+                                                            ),
+                                                        );
+                                                    }
+                                                    _ => {
                                                         break;
                                                     }
-                                                } else {
-                                                    break;
                                                 }
                                             }
 
@@ -2603,7 +2637,7 @@ impl Lexer<'_> {
 
 fn is_directive_include(token_with_ranges: &[TokenWithRange]) -> bool {
     let length = token_with_ranges.len();
-    if length >= 2
+    length >= 2
         && matches!(
             token_with_ranges.get(length - 2),
             Some(TokenWithRange {
@@ -2613,16 +2647,11 @@ fn is_directive_include(token_with_ranges: &[TokenWithRange]) -> bool {
         )
         && matches!(token_with_ranges.last(),
         Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "include" || id == "embed")
-    {
-        true
-    } else {
-        false
-    }
 }
 
 fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
     let length = token_with_ranges.len();
-    if length >= 2
+    length >= 2
         && matches!(
             token_with_ranges.get(length - 2),
             Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "__has_include" || id == "__has_embed"
@@ -2634,11 +2663,6 @@ fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
                 ..
             })
         )
-    {
-        true
-    } else {
-        false
-    }
 }
 
 /// Checks whether the last token in the provided token list is the `define` directive macro.
@@ -2646,13 +2670,9 @@ fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
 /// This is used to identify function-like macro definitions, which require the macro name to be
 /// immediately followed by an opening parenthesis with no intervening whitespace.
 fn is_directive_define(token_with_ranges: &[TokenWithRange]) -> bool {
-    if matches!(token_with_ranges.last(),
-    Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "define")
-    {
-        true
-    } else {
-        false
-    }
+    matches!(
+        token_with_ranges.last(),
+        Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "define")
 }
 
 // fn is_line_start(token_with_ranges: &[TokenWithRange]) -> bool {

@@ -6,7 +6,7 @@
 
 use crate::range::Range;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub struct Location {
     pub file_number: usize,
     pub range: Range,
@@ -29,14 +29,5 @@ impl Location {
     ) -> Self {
         let range = Range::from_detail(index, line, column, length);
         Self { file_number, range }
-    }
-}
-
-impl Default for Location {
-    fn default() -> Self {
-        Self {
-            file_number: 0,
-            range: Range::default(),
-        }
     }
 }

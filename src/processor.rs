@@ -207,7 +207,7 @@ where
         &mut self,
         token_with_ranges: &[TokenWithRange],
     ) -> Result<(), PreprocessFileError> {
-        let tokens = token_with_ranges
+        let token_with_locations = token_with_ranges
             .iter()
             .map(|token_with_range| {
                 TokenWithLocation::new(
@@ -217,11 +217,14 @@ where
             })
             .collect::<Vec<_>>();
 
-        // No arguments for code block because it is not a (function-like) macro.
-        let argument_map = HashMap::<String, ArgumentValue>::new();
-        let expanded_tokens =
-            self.expand_marco(tokens, &argument_map, ExpandContextType::Normal)?;
+        let expanded_tokens = self.expand_marco(
+            token_with_locations,
+            &HashMap::new(),
+            ExpandContextType::Normal,
+        )?;
+
         self.context.output.extend(expanded_tokens);
+
         Ok(())
     }
 
@@ -241,16 +244,13 @@ where
                     });
                 }
 
-                let result = self
-                    .context
-                    .macro_map
-                    .add_object_like(self.context.current_file.number, name, definition)
-                    .map_err(|error| PreprocessFileError {
-                        file_number: self.context.current_file.number,
-                        error,
-                    })?;
+                let add_result = self.context.macro_map.add_object_like(
+                    self.context.current_file.number,
+                    name,
+                    definition,
+                );
 
-                if result == MacroManipulationResult::Failure {
+                if add_result == MacroManipulationResult::Failure {
                     return Err(PreprocessFileError {
                         file_number: self.context.current_file.number,
                         error: PreprocessError::MessageWithRange(
@@ -275,19 +275,12 @@ where
                     });
                 }
 
-                let result = self
-                    .context
-                    .macro_map
-                    .add_function_like(
-                        self.context.current_file.number,
-                        name,
-                        parameters,
-                        definition,
-                    )
-                    .map_err(|error| PreprocessFileError {
-                        file_number: self.context.current_file.number,
-                        error,
-                    })?;
+                let result = self.context.macro_map.add_function_like(
+                    self.context.current_file.number,
+                    name,
+                    parameters,
+                    definition,
+                );
 
                 if result == MacroManipulationResult::Failure {
                     return Err(PreprocessFileError {
@@ -320,6 +313,7 @@ where
         }
 
         let result = self.context.macro_map.remove(identifier);
+
         if result == MacroManipulationResult::Failure {
             return Err(PreprocessFileError {
                 file_number: self.context.current_file.number,
@@ -374,12 +368,12 @@ where
                         token: Token::String(relative_path, _),
                         location,
                     } => (PathBuf::from(relative_path), false, *location),
-                    _ => {
+                    TokenWithLocation { location, .. } => {
                         return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: location.file_number,
                         error: PreprocessError::MessageWithRange(
                             "Macro expansion resulted in an unexpected type; a single string literal representing the file path was expected.".to_owned(),
-                            *range,
+                            location.range,
                         ),
                     });
                     }
@@ -404,7 +398,7 @@ where
                 Some(resolved_path) => (resolved_path, true),
                 None => {
                     return Err(PreprocessFileError::new(
-                        self.context.current_file.number,
+                        file_path_location.file_number,
                         PreprocessError::MessageWithRange(
                             format!(
                                 "System header file '{}' not found.",
@@ -427,7 +421,7 @@ where
                 }) => (canonical_full_path, is_system_file),
                 None => {
                     return Err(PreprocessFileError::new(
-                        self.context.current_file.number,
+                        file_path_location.file_number,
                         PreprocessError::MessageWithRange(
                             format!(
                                 "Header file '{}' not found.",
@@ -462,6 +456,7 @@ where
                 .get_file_number(&canonical_path)
                 .unwrap();
             let program_owned = program.clone();
+
             self.processing_sub_program(
                 file_number,
                 &canonical_path,
@@ -492,6 +487,11 @@ where
             let program = parse_from_str(&file_content)
                 .map_err(|error| PreprocessFileError::new(file_number, error))?;
 
+            // update cache
+            self.context
+                .file_cache
+                .set_program(&canonical_path, program.clone());
+
             // check header guard or `#pragma once`
             self.check_include_guard(file_number, &relative_path, &program);
 
@@ -502,11 +502,6 @@ where
                 is_system_file,
                 &program,
             )?;
-
-            // update cache
-            self.context
-                .file_cache
-                .set_program(&canonical_path, program);
         }
 
         Ok(())
@@ -523,21 +518,23 @@ where
         // Preprocess the program in the context of the included file.
         // This will handle any macros, directives, and other preprocessing tasks.
 
-        // store the last context file
+        // store the current context file as `last_context_file`
         let last_context_file = self.context.current_file.clone();
 
-        let context_file = ContextFile::new(
+        // update the current context file to the included file
+        let current_context_file = ContextFile::new(
             file_number,
             IncludeFile::new(
                 canonical_path,
                 FileSource::from_header_file(relative_path, is_system_header),
             ),
         );
-        self.context.current_file = context_file;
+        self.context.current_file = current_context_file;
 
-        self.process_program(&program)?;
+        // process the program
+        self.process_program(program)?;
 
-        // restore the last context file
+        // restore the `last_context_file`
         self.context.current_file = last_context_file;
 
         Ok(())
@@ -581,23 +578,23 @@ where
 
                 if expended_tokens.is_empty() {
                     return Err(PreprocessFileError {
-                    file_number: self.context.current_file.number,
-                    error: PreprocessError::MessageWithRange(
-                        "The macro expands to empty; expected a single string literal representing the file path.".to_owned(),
-                        *range,
-                    ),
-                });
+                        file_number: self.context.current_file.number,
+                        error: PreprocessError::MessageWithRange(
+                            "The macro expands to empty; expected a single string literal representing the file path.".to_owned(),
+                            *range,
+                        ),
+                    });
                 }
 
                 if expended_tokens.len() > 1 {
                     return Err(PreprocessFileError {
-                    file_number: self.context.current_file.number,
-                    error: PreprocessError::MessageWithRange(
-                        "The macro expands to multiple tokens; expected a single string literal representing the file path."
-                            .to_owned(),
-                        *range,
-                    ),
-                });
+                        file_number: self.context.current_file.number,
+                        error: PreprocessError::MessageWithRange(
+                            "The macro expands to multiple tokens; expected a single string literal representing the file path."
+                                .to_owned(),
+                            *range,
+                        ),
+                    });
                 }
 
                 match expended_tokens.first().unwrap() {
@@ -613,14 +610,14 @@ where
                         vec![],
                         None,
                     ),
-                    _ => {
+                    TokenWithLocation { location, .. } => {
                         return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
-                        error: PreprocessError::MessageWithRange(
-                            "Macro expansion resulted in an unexpected type; a single string literal representing the file path was expected.".to_owned(),
-                            *range,
-                        ),
-                    });
+                            file_number: location.file_number,
+                            error: PreprocessError::MessageWithRange(
+                                "Macro expansion resulted in an unexpected type; a single string literal representing the file path was expected.".to_owned(),
+                                location.range,
+                            ),
+                        });
                     }
                 }
             }
@@ -651,7 +648,7 @@ where
                 Some(resolved_path) => (resolved_path, true),
                 None => {
                     return Err(PreprocessFileError::new(
-                        self.context.current_file.number,
+                        file_path_location.file_number,
                         PreprocessError::MessageWithRange(
                             format!(
                                 "System binary file '{}' not found.",
@@ -674,7 +671,7 @@ where
                 }) => (canonical_full_path, is_system_file),
                 None => {
                     return Err(PreprocessFileError::new(
-                        self.context.current_file.number,
+                        file_path_location.file_number,
                         PreprocessError::MessageWithRange(
                             format!(
                                 "Binary file '{}' not found.",
@@ -861,7 +858,12 @@ where
         Ok(())
     }
 
-    fn check_include_guard(&mut self, file_number: usize, relative_path: &Path, program: &Program) {
+    fn check_include_guard(
+        &mut self,
+        file_number_of_header_file: usize,
+        relative_path: &Path,
+        program: &Program,
+    ) {
         // Check if the file has an include guard or `#pragma once`.
         // If it does, we can skip the preprocessing of the file.
         // Otherwise, we will preprocess the file normally.
@@ -871,7 +873,7 @@ where
             // File is empty
             self.context.prompts.push(Prompt::Message(
                 PromptLevel::Warning,
-                file_number,
+                file_number_of_header_file,
                 "Consider adding `#pragma once` to this file to prevent multiple inclusions."
                     .to_string(),
             ));
@@ -881,11 +883,11 @@ where
         let first_statement = first_statement_opt.unwrap();
 
         if matches!(
-        first_statement,
-        Statement::Pragma(Pragma { parts, .. })
-        if matches!(
-            parts.first(),
-            Some(TokenWithRange { token: Token::Identifier(name), .. }) if name == "once"))
+            first_statement,
+            Statement::Pragma(Pragma { parts, .. })
+            if matches!(
+                parts.first(),
+                Some(TokenWithRange { token: Token::Identifier(name), .. }) if name == "once"))
         {
             // The file has `#pragma once`, we can skip further checks.
             return;
@@ -893,9 +895,7 @@ where
 
         let suggested_include_guard_macro_name = relative_path
             .to_string_lossy()
-            .replace('/', "_")
-            .replace('-', "_")
-            .replace('.', "_")
+            .replace(['/', '-', '.'], "_")
             .to_uppercase();
 
         // Check if the entire file consists of a single `#ifndef` structure,
@@ -947,7 +947,7 @@ where
                 // Suggest using `#pragma once` instead.
                 self.context.prompts.push(Prompt::Message(
                     PromptLevel::Info,
-                    file_number,
+                    file_number_of_header_file,
                     "Consider using `#pragma once` instead of include guards.".to_owned(),
                 ));
             } else {
@@ -955,21 +955,21 @@ where
                 // Suggest renaming the include guard macro to follow the convention, which
                 // prevents potential conflicts with other macros.
                 self.context.prompts.push(Prompt::MessageWithRange(
-                PromptLevel::Info,
-                file_number,
-                format!(
-                    "Consider renaming the include guard macro to `{}` to follow the convention.",
-                    suggested_include_guard_macro_name
-                ),
-                *range,
-            ));
+                    PromptLevel::Info,
+                    file_number_of_header_file,
+                    format!(
+                        "Consider renaming the include guard macro to `{}` to follow the convention.",
+                        suggested_include_guard_macro_name
+                    ),
+                    *range,
+                ));
             }
         } else {
             // The file does not have an include guard or `#pragma once`.
             // We suggest adding `#pragma once`.
             self.context.prompts.push(Prompt::Message(
                 PromptLevel::Warning,
-                file_number,
+                file_number_of_header_file,
                 "Consider adding `#pragma once` to this file to prevent multiple inclusions."
                     .to_owned(),
             ));
@@ -1021,7 +1021,7 @@ where
                                 != ExpandContextType::VariadicFunctionLikeDefinition
                             {
                                 return Err(PreprocessFileError {
-                                file_number: self.context.current_file.number,
+                                file_number: current_token_with_location.location.file_number,
                                 error: PreprocessError::MessageWithRange(
                                     "__VA_ARGS__ can only be used in variadic function-like macros."
                                         .to_owned(),
@@ -1052,7 +1052,7 @@ where
                                 != ExpandContextType::VariadicFunctionLikeDefinition
                             {
                                 return Err(PreprocessFileError {
-                                file_number: self.context.current_file.number,
+                                file_number: current_token_with_location.location.file_number,
                                 error: PreprocessError::MessageWithRange(
                                     "__VA_OPT__ can only be used in variadic function-like macros."
                                         .to_owned(),
@@ -1155,6 +1155,8 @@ where
                         "__STDC_EMBED_NOT_FOUND__"
                         | "__STDC_EMBED_FOUND__"
                         | "__STDC_EMBED_EMPTY__" => {
+                            // see:
+                            // https://en.cppreference.com/w/c/preprocessor/replace.html
                             let value = match name.as_str() {
                                 "__STDC_EMBED_NOT_FOUND__" => 0,
                                 "__STDC_EMBED_FOUND__" => 1,
@@ -1442,21 +1444,19 @@ where
                                 } else {
                                     0
                                 }
+                            } else if self
+                                .context
+                                .file_provider
+                                .resolve_user_file_with_fallback(
+                                    &relative_path,
+                                    &self.context.current_file.source_file.canonical_full_path,
+                                    self.context.resolve_relative_path,
+                                )
+                                .is_some()
+                            {
+                                1
                             } else {
-                                if self
-                                    .context
-                                    .file_provider
-                                    .resolve_user_file_with_fallback(
-                                        &relative_path,
-                                        &self.context.current_file.source_file.canonical_full_path,
-                                        self.context.resolve_relative_path,
-                                    )
-                                    .is_some()
-                                {
-                                    1
-                                } else {
-                                    0
-                                }
+                                0
                             };
 
                             output.push(TokenWithLocation::new(
@@ -1770,12 +1770,13 @@ where
                                 && expand_context_type
                                     != ExpandContextType::VariadicFunctionLikeDefinition
                             {
+                                let location = code_parser.peek_location(0).unwrap();
                                 return Err(PreprocessFileError {
-                                file_number: self.context.current_file.number,
+                                file_number: location.file_number,
                                 error: PreprocessError::MessageWithRange(
                                     "Token concatenation (##) can only be used in macro definitions."
                                         .to_owned(),
-                                    code_parser.peek_location(0).unwrap().range,
+                                    location.range,
                                 ),
                             });
                             }
@@ -1832,7 +1833,7 @@ where
                                                 match arg_values.first().unwrap() {
                                                     TokenWithLocation {
                                                         token: Token::Identifier(value),
-                                                        location: _,
+                                                        ..
                                                     } => {
                                                         // The argument value is an identifier
                                                         value.to_owned()
@@ -1842,16 +1843,16 @@ where
                                                             Token::Number(Number::Integer(
                                                                 IntegerNumber { value, .. },
                                                             )),
-                                                        location: _,
+                                                        location
                                                     } => {
                                                         // The argument value is an integer number
                                                         if is_first_part {
                                                             return Err(PreprocessFileError {
-                                                                file_number: token_with_location.location.file_number,
+                                                                file_number: location.file_number,
                                                                 error: PreprocessError::MessageWithRange(
                                                                     "Token concatenation (##) cannot start with an integer number."
                                                                         .to_owned(),
-                                                                    token_with_location.location.range,
+                                                                    location.range,
                                                                 ),
                                                             });
                                                         } else {
@@ -1942,13 +1943,13 @@ where
                                     }
                                 } else {
                                     return Err(PreprocessFileError {
-                                    file_number: self.context.current_file.number,
-                                    error: PreprocessError::MessageWithRange(
-                                        "Token concatenation (##) must be followed by an identifier or number."
-                                            .to_owned(),
-                                        code_parser.last_location.range,
-                                    ),
-                                });
+                                        file_number: code_parser.last_location.file_number,
+                                        error: PreprocessError::MessageWithRange(
+                                            "Token concatenation (##) must be followed by an identifier or number."
+                                                .to_owned(),
+                                            code_parser.last_location.range,
+                                        ),
+                                    });
                                 }
                             }
 
@@ -2029,14 +2030,15 @@ where
                                                         if merged_string_type != *next_string_type {
                                                             // If the string types are different, we cannot concatenate them.
                                                             return Err(
-                                                        PreprocessFileError::new(
-                                                            merged_file_number,
-                                                        PreprocessError::MessageWithRange(
-                                                        "Cannot concatenate string literals with different encoding types."
-                                                            .to_owned(),
-                                                        next_arg_location.range,
-                                                        )
-                                                    ));
+                                                                PreprocessFileError::new(
+                                                                    next_arg_location.file_number,
+                                                                PreprocessError::MessageWithRange(
+                                                                        "Cannot concatenate string literals with different encoding types."
+                                                                            .to_owned(),
+                                                                        next_arg_location.range,
+                                                                        )
+                                                                )
+                                                            );
                                                         }
 
                                                         // merge the next string literal
@@ -2082,12 +2084,12 @@ where
                                                 let arg_location =
                                                     code_parser.peek_location(0).unwrap();
                                                 return Err(PreprocessFileError {
-                                                file_number: arg_location.file_number,
-                                                error: PreprocessError::MessageWithRange(
-                                                    "Invalid argument type for macro invocation, only single identifier, number, string (or adjacent strings), or char are allowed.".to_string(),
-                                                    arg_location.range,
-                                                ),
-                                            });
+                                                    file_number: arg_location.file_number,
+                                                    error: PreprocessError::MessageWithRange(
+                                                        "Invalid argument type for macro invocation, only single identifier, number, string (or adjacent strings), or char are allowed.".to_string(),
+                                                        arg_location.range,
+                                                    ),
+                                                });
                                             }
                                         }
 
@@ -2108,7 +2110,9 @@ where
                                         || (!is_variadic && args.len() != params.len())
                                     {
                                         return Err(PreprocessFileError {
-                                            file_number: self.context.current_file.number,
+                                            file_number: current_token_with_location
+                                                .location
+                                                .file_number,
                                             error: PreprocessError::MessageWithRange(
                                                 format!(
                                                     "Not enough arguments provided for macro: {}.",
@@ -2186,13 +2190,13 @@ where
                         && expand_context_type != ExpandContextType::VariadicFunctionLikeDefinition
                     {
                         return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
-                        error: PreprocessError::MessageWithRange(
-                            "Stringizing (#) can only be used in function-like macro definitions."
-                                .to_owned(),
-                            current_token_with_location.location.range,
-                        ),
-                    });
+                            file_number: current_token_with_location.location.file_number,
+                            error: PreprocessError::MessageWithRange(
+                                "Stringizing (#) can only be used in function-like macro definitions."
+                                    .to_owned(),
+                                current_token_with_location.location.range,
+                            ),
+                        });
                     }
 
                     // Consume the next token, which should be a macro parameter.
@@ -2204,13 +2208,13 @@ where
                                         != ExpandContextType::VariadicFunctionLikeDefinition
                                     {
                                         return Err(PreprocessFileError {
-                                        file_number: self.context.current_file.number,
-                                        error: PreprocessError::MessageWithRange(
-                                            "__VA_ARGS__ can only be used in variadic function-like macros."
-                                                .to_owned(),
-                                            next_token_with_location.location.range,
-                                        ),
-                                    });
+                                            file_number: next_token_with_location.location.file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "__VA_ARGS__ can only be used in variadic function-like macros."
+                                                    .to_owned(),
+                                                next_token_with_location.location.range,
+                                            ),
+                                        });
                                     }
 
                                     // If the next token is `__VA_ARGS__`, we need to handle it specially.
@@ -2244,7 +2248,9 @@ where
                                         }
                                         _ => {
                                             return Err(PreprocessFileError {
-                                                file_number: self.context.current_file.number,
+                                                file_number: next_token_with_location
+                                                    .location
+                                                    .file_number,
                                                 error: PreprocessError::MessageWithRange(
                                                     format!(
                                                         "Stringizing can only be applied to macro parameters, but '{}' is not a parameter.",
@@ -2259,7 +2265,7 @@ where
                             }
                             _ => {
                                 return Err(PreprocessFileError {
-                                    file_number: self.context.current_file.number,
+                                    file_number: next_token_with_location.location.file_number,
                                     error: PreprocessError::MessageWithRange(
                                         "Stringizing (#) can only be applied to macro parameters."
                                             .to_owned(),
@@ -2270,7 +2276,7 @@ where
                         }
                     } else {
                         return Err(PreprocessFileError {
-                            file_number: self.context.current_file.number,
+                            file_number: current_token_with_location.location.file_number,
                             error: PreprocessError::MessageWithRange(
                                 "Stringizing (#) operator must be followed by a macro parameter."
                                     .to_owned(),
@@ -2283,7 +2289,7 @@ where
                     // Token concatenation (the `##` operator) is handled above.
                     // If we reach here, it means the token was not an identifier or a macro.
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: current_token_with_location.location.file_number,
                         error: PreprocessError::MessageWithRange(
                             "Token concatenation (##) must follow an identifier.".to_owned(),
                             current_token_with_location.location.range,
@@ -3304,20 +3310,10 @@ CONCAT(1, hello)",
                 file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
                 error: PreprocessError::MessageWithRange(
                     _,
-                    Range {
-                        start: Position {
-                            index: 21,
-                            line: 0,
-                            column: 21
-                        },
-                        end_included: Position {
-                            index: 21,
-                            line: 0,
-                            column: 21
-                        }
-                    }
+                    range
                 )
             })
+            if range == Range::from_detail(33, 1, 7, 1)
         ));
 
         // err: concatenate an identifier and a string
@@ -3658,20 +3654,10 @@ FOO BAR
                 file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
                 error: PreprocessError::MessageWithRange(
                     _,
-                    Range {
-                        start: Position {
-                            index: 33,
-                            line: 1,
-                            column: 9
-                        },
-                        end_included: Position {
-                            index: 43,
-                            line: 1,
-                            column: 19
-                        }
-                    }
+                    range
                 )
             })
+            if range == Range::from_detail(20, 0, 20, 3)
         ));
 
         // err: include with identifier which expands to multiple tokens
@@ -3871,7 +3857,7 @@ FOO BAR
             "'b' \"world\" 11"
         );
 
-        // Test operator `defined`
+        // Test `if` and operator `defined`
         assert_eq!(
             print_tokens(&process_single_source_tokens(
                 r#"
@@ -3906,6 +3892,8 @@ FOO BAR
             )),
             "'a' \"world\" 13 17"
         );
+
+        // TODO
     }
 
     #[test]

@@ -530,14 +530,12 @@ impl Parser<'_> {
                                 tokens.push(token_with_range);
                             }
                         }
+                    } else if bracket_stack.is_empty() {
+                        break; // stop collecting tokens
                     } else {
-                        if bracket_stack.is_empty() {
-                            break; // stop collecting tokens
-                        } else {
-                            return Err(PreprocessError::UnexpectedEndOfDocument(
-                                "Unbalanced brackets in macro definition.".to_owned(),
-                            ));
-                        }
+                        return Err(PreprocessError::UnexpectedEndOfDocument(
+                            "Unbalanced brackets in macro definition.".to_owned(),
+                        ));
                     }
                 }
 
@@ -822,16 +820,14 @@ impl Parser<'_> {
 
                 self.expect_and_consume_directive_end_or_eof()?;
 
-                let embed = Embed::FilePath {
+                Embed::FilePath {
                     file_path: (file_path_owned, range),
                     is_system_header: is_system_header_owned,
                     limit,
                     prefix,
                     suffix,
                     if_empty,
-                };
-
-                embed
+                }
             }
             Some(Token::Identifier(identifier)) => {
                 // Handle embed with macro name
@@ -1437,10 +1433,7 @@ mod tests {
         ));
 
         // err: missing commas in the value of parameter `prefix`
-        assert!(matches!(
-            parse_from_str("#embed <spark.png> prefix(11 13)"),
-            Err(_)
-        ));
+        assert!(parse_from_str("#embed <spark.png> prefix(11 13)").is_err());
     }
 
     #[test]

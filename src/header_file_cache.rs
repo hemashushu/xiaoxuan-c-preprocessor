@@ -113,3 +113,9 @@ impl HeaderFileCache {
             .collect()
     }
 }
+
+impl Default for HeaderFileCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}

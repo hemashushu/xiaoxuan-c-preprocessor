@@ -40,7 +40,7 @@ impl MacroMap {
         for (key, value) in predefinitions {
             if definition.add_by_key_value(key, value)? == MacroManipulationResult::Failure {
                 return Err(PreprocessError::Message(format!(
-                    "Duplicate macro: '{}'",
+                    "Macro '{}' is already defined.",
                     key
                 )));
             }
@@ -73,7 +73,7 @@ impl MacroMap {
 
         if token_with_locations.len() > 1 {
             return Err(PreprocessError::Message(format!(
-                "Expected a single token for key '{}', but got {} tokens.",
+                "Expected a single value for key '{}', but got {} tokens.",
                 key,
                 token_with_locations.len()
             )));
@@ -94,7 +94,7 @@ impl MacroMap {
         file_number: usize,
         key: &str,
         definition: &[TokenWithRange],
-    ) -> Result<MacroManipulationResult, PreprocessError> {
+    ) -> MacroManipulationResult {
         let token_with_locations: Vec<TokenWithLocation> = definition
             .iter()
             .map(|token_with_range| {
@@ -105,10 +105,10 @@ impl MacroMap {
 
         let macro_definition = MacroDefinition::ObjectLike(token_with_locations);
 
-        Ok(match self.macros.insert(key.to_owned(), macro_definition) {
+        match self.macros.insert(key.to_owned(), macro_definition) {
             Some(_) => MacroManipulationResult::Failure, // Key was already present
             None => MacroManipulationResult::Success,    // Key was added successfully
-        })
+        }
     }
 
     pub fn add_function_like(
@@ -117,7 +117,7 @@ impl MacroMap {
         key: &str,
         parameters: &[String],
         definition: &[TokenWithRange],
-    ) -> Result<MacroManipulationResult, PreprocessError> {
+    ) -> MacroManipulationResult {
         let token_with_locations: Vec<TokenWithLocation> = definition
             .iter()
             .map(|token_with_range| {
@@ -129,10 +129,10 @@ impl MacroMap {
         let macro_definition =
             MacroDefinition::FunctionLike(parameters.to_vec(), token_with_locations);
 
-        Ok(match self.macros.insert(key.to_owned(), macro_definition) {
+        match self.macros.insert(key.to_owned(), macro_definition) {
             Some(_) => MacroManipulationResult::Failure, // Key was already present
             None => MacroManipulationResult::Success,    // Key was added successfully
-        })
+        }
     }
 
     pub fn get(&self, key: &str) -> Option<&MacroDefinition> {

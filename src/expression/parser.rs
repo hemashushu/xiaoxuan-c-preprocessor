@@ -24,7 +24,7 @@ pub fn parse_from_tokens(
         "Token list cannot be empty."
     );
 
-    let mut token_iter = token_with_locations.to_vec().into_iter();
+    let mut token_iter = token_with_locations.iter().cloned();
     let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_PARSER);
     let mut parser = ExpressionParser::new(&mut peekable_token_iter, file_number);
 
@@ -46,8 +46,8 @@ pub fn parse_from_tokens(
 
 pub struct ExpressionParser<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
+    current_file_number: usize,
     pub last_location: Location,
-    pub current_file_number: usize,
 }
 
 impl<'a> ExpressionParser<'a> {
@@ -64,8 +64,8 @@ impl<'a> ExpressionParser<'a> {
 
         Self {
             upstream,
-            last_location,
             current_file_number,
+            last_location,
         }
     }
 
@@ -155,7 +155,7 @@ impl<'a> ExpressionParser<'a> {
     }
 }
 
-/**
+/*
  * C Operator Precedence
  * ---------------------
  *
@@ -383,7 +383,7 @@ impl ExpressionParser<'_> {
                     })?;
 
                     self.next_token(); // Consume the number token.
-                    return Ok(Expression::Number(number_value, location));
+                    Ok(Expression::Number(number_value, location))
                 }
                 // Handle grouped expression.
                 Token::Punctuator(Punctuator::ParenthesisOpen) => {
@@ -392,29 +392,29 @@ impl ExpressionParser<'_> {
                     let inner_expression = self.parse_expression()?;
                     // Expect and consume the closing parenthesis.
                     self.expect_and_consume_closing_paren()?;
-                    return Ok(inner_expression);
+                    Ok(inner_expression)
                 }
                 _ => {
                     let location = *self.peek_location(0).unwrap();
-                    return Err(PreprocessFileError::new(
+                    Err(PreprocessFileError::new(
                         location.file_number,
                         PreprocessError::MessageWithRange(
                             "Expect a defined macro, integer number, or operator.".to_string(),
                             location.range,
                         ),
-                    ));
+                    ))
                 }
             }
         } else {
             // If no token is available, return an error.
-            return Err(PreprocessFileError::new(
-                self.current_file_number,
+            Err(PreprocessFileError::new(
+                self.last_location.file_number,
                 PreprocessError::MessageWithRange(
                     "Expect a defined macro, integer number, or operator after this token."
                         .to_string(),
                     self.last_location.range,
                 ),
-            ));
+            ))
         }
     }
 }

@@ -30,7 +30,7 @@ pub mod error_printer;
 pub mod file_provider;
 pub mod header_file_cache;
 pub mod memory_file_provider;
-pub mod native_file_provider;
+// pub mod native_file_provider;
 pub mod prompt;
 
 pub use processor::process_source_file;

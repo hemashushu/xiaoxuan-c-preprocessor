@@ -6,7 +6,7 @@
 
 use crate::position::Position;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub struct Range {
     pub start: Position,
     pub end_included: Position,
@@ -49,15 +49,6 @@ impl Range {
         Self {
             start: left.start,
             end_included: right.end_included,
-        }
-    }
-}
-
-impl Default for Range {
-    fn default() -> Self {
-        Self {
-            start: Position::default(),
-            end_included: Position::default(),
         }
     }
 }
