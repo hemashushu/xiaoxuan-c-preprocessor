@@ -285,15 +285,16 @@ fn print_statement<W: Write>(
 }
 
 /// Print the entire program to the given writer
-///
 /// This function is used for debugging and testing purposes.
-fn print_program<W: Write>(writer: &mut W, program: &Program) -> std::io::Result<()> {
+pub fn print_program<W: Write>(writer: &mut W, program: &Program) -> std::io::Result<()> {
     for statement in &program.statements {
         print_statement(writer, statement, 0)?;
     }
     Ok(())
 }
 
+/// Print the entire program to a string
+/// This function is used for debugging and testing purposes.
 #[allow(dead_code)]
 pub fn print_to_string(program: &Program) -> String {
     let mut output = Vec::new();

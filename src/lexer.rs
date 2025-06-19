@@ -2694,11 +2694,11 @@ mod tests {
     use super::{lex_from_str, merge_continued_lines, remove_comments, remove_shebang};
 
     impl Token {
-        pub fn new_identifier(s: &str) -> Self {
+        fn new_identifier(s: &str) -> Self {
             Token::Identifier(s.to_owned())
         }
 
-        pub fn new_integer_number(i: i32) -> Self {
+        fn new_integer_number(i: i32) -> Self {
             Token::Number(Number::Integer(IntegerNumber::new(
                 i.to_string(),
                 false,
@@ -2706,11 +2706,11 @@ mod tests {
             )))
         }
 
-        pub fn new_char(c: char) -> Self {
+        fn new_char(c: char) -> Self {
             Token::Char(c, CharType::Default)
         }
 
-        pub fn new_string(s: &str) -> Self {
+        fn new_string(s: &str) -> Self {
             Token::String(s.to_owned(), StringType::Default)
         }
     }

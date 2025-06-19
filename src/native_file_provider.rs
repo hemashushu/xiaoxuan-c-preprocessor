@@ -23,7 +23,7 @@ impl NativeFileProvider {
     /// - `system_headers_directories`: Directories to search for system and external module headers.
     ///   These are used when resolving `#include` directives with angle brackets,
     ///   e.g., `#include <stdio.h>`.
-    /// - `user_headers_directories`: Directories to search for module-specific headers.
+    /// - `user_directories`: Directories to search for module-specific headers.
     ///   These are used when resolving `#include` directives with double quotes,
     ///   e.g., `#include "relative/path/to/header.h"`.
     pub fn new(

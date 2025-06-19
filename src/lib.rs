@@ -6,18 +6,13 @@
 
 use std::fmt::Display;
 
-use position::Position;
-use range::Range;
-
-use crate::{location::Location, token::Token};
-
-pub const FILE_NUMBER_PREDEFINED: usize = 0;
-pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2_usize.pow(16);
+use crate::{location::Location, position::Position, range::Range, token::Token};
 
 mod ast;
 mod ast_printer;
 mod char_with_position;
 mod context;
+mod expression;
 mod lexer;
 mod location;
 mod macro_map;
@@ -27,6 +22,9 @@ mod position;
 mod processor;
 mod range;
 mod token;
+
+pub const FILE_NUMBER_PREDEFINED: usize = 0;
+pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2_usize.pow(16);
 
 pub mod error_printer;
 pub mod file_provider;

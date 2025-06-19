@@ -206,7 +206,7 @@ pub struct Branch {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Condition {
-    Expression(Vec<TokenWithRange>),
+    Expression(Vec<TokenWithRange>), // expression never empty
     Defined(/* id */ String, Range),
     NotDefined(/* id */ String, Range),
 }

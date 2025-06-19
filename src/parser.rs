@@ -206,7 +206,7 @@ impl<'a> Parser<'a> {
 }
 
 impl Parser<'_> {
-    pub fn parse_program(&mut self) -> Result<Program, PreprocessError> {
+    fn parse_program(&mut self) -> Result<Program, PreprocessError> {
         let mut statements: Vec<Statement> = vec![];
         while self.peek_token(0).is_some() {
             let statement = self.parse_statement()?;
@@ -698,7 +698,7 @@ impl Parser<'_> {
                         let number_value = n.as_usize().map_err(|_| {
                             PreprocessError::MessageWithRange(
                                 "Invalid integer number.".to_owned(),
-                                parser.last_range,
+                                *parser.peek_range(0).unwrap(),
                             )
                         })?;
 

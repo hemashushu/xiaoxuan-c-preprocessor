@@ -35,11 +35,11 @@ const PEEK_BUFFER_LENGTH_PARSE_CODE: usize = 2;
 /// Arguments:
 /// - `file_number`: The file number for the source file, used for error reporting.
 /// - `source_file_relative_path`: The C source files to preprocess.
-/// - `resolve_relative_file`: If true, also search for headers in the directory where the source file resides.
+/// - `resolve_relative_path`: If true, also search for headers in the directory where the source file resides.
 ///   For example, if the source file is `src/foo/bar.c` and this flag is set,
 ///   then `#include "header.h"` will look in `src/foo/`,
 ///   and `#include "../hello/world.h"` will look in `src/hello`.
-///   otherwise, it will only search in the specified `user_headers_directories`.
+///   otherwise, it will only search in the specified `user_directories`.
 /// - `predefinitions`: Predefined macros to be used during preprocessing.
 ///   There are many predefined macros in C, such as `__STDC_VERSION__` etc.
 ///   This map should only contain static predefinitions, dynamic macros (such as `__FILE__`)
@@ -58,7 +58,7 @@ pub fn process_source_file<T>(
     file_cache: &mut HeaderFileCache,
     predefinitions: &HashMap<String, String>,
     project_root_directory: &Path,
-    resolve_relative_file: bool,
+    resolve_relative_path: bool,
 
     /* Source file refer to the C source file (e.g. `main.c`) */
     source_file_number: usize,
@@ -74,8 +74,7 @@ where
         file_provider,
         file_cache,
         predefinitions,
-        // project_root_directory,
-        resolve_relative_file,
+        resolve_relative_path,
         source_file_number,
         source_file_relative_path,
         &source_file_normalized_full_path,
@@ -134,12 +133,11 @@ impl<'a, T> Processor<'a, T>
 where
     T: FileProvider,
 {
-    pub fn new(
+    fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
-        // project_root_directory: &Path,
-        resolve_relative_file: bool,
+        resolve_relative_path: bool,
 
         source_file_number: usize,
         source_file_relative_path: &Path,
@@ -149,8 +147,7 @@ where
             file_provider,
             file_cache,
             predefinitions,
-            // project_root_directory,
-            resolve_relative_file,
+            resolve_relative_path,
             source_file_number,
             source_file_relative_path,
             source_file_canonical_full_path,
@@ -528,7 +525,7 @@ where
             match self.context.file_provider.resolve_user_file_with_fallback(
                 &relative_path,
                 &self.context.current_file.source_file.canonical_full_path,
-                self.context.resolve_relative_file,
+                self.context.resolve_relative_path,
             ) {
                 Some(ResolvedResult {
                     canonical_full_path,
@@ -775,7 +772,7 @@ where
             match self.context.file_provider.resolve_user_file_with_fallback(
                 &relative_path,
                 &self.context.current_file.source_file.canonical_full_path,
-                self.context.resolve_relative_file,
+                self.context.resolve_relative_path,
             ) {
                 Some(ResolvedResult {
                     canonical_full_path,
@@ -1191,6 +1188,32 @@ where
                                 Location::default(),
                             );
                             output.push(token);
+                        }
+                        "__has_include" => {
+                            // _Pragma(...)
+                            //
+                            // defined ...
+                            // defined(...)
+                            // __has_include(...)
+                            // __has_embed(...)
+                            // __has_c_attribute(...)
+                            //
+                            // __has_c_attribute can be expanded in the expression of #if and #elif.
+                            // It is treated as a defined macro by #ifdef, #ifndef and defined but
+                            // cannot be used anywhere else.
+                            //
+                            // attribute-token  Attribute           Value       Standard
+                            // deprecated       [[deprecated]]      201904L     (C23)
+                            // fallthrough      [[fallthrough]]     201904L     (C23)
+                            // maybe_unused     [[maybe_unused]]    201904L     (C23)
+                            // nodiscard        [[nodiscard]]       202003L     (C23)
+                            // noreturn         [[noreturn]]        202202L     (C23)
+                            // _Noreturn        [[_Noreturn]]       202202L     (C23)
+                            // unsequenced      [[unsequenced]]     202207L     (C23)
+                            // reproducible     [[reproducible]]    202207L     (C23)
+                            //
+                            // see:
+                            // https://en.cppreference.com/w/c/language/attributes.html#Attribute_testing
                         }
                         _ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => {
                             // _Token concatenation_ (the `##` operator).
@@ -1832,14 +1855,14 @@ pub enum StandardPragmaValue {
     Off,
 }
 
-pub struct CodeParser<'a> {
+struct CodeParser<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
-    pub last_location: Location,
-    pub current_file_number: usize,
+    last_location: Location,
+    current_file_number: usize,
 }
 
 impl<'a> CodeParser<'a> {
-    pub fn new(
+    fn new(
         upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
         current_file_number: usize,
     ) -> Self {
@@ -1857,7 +1880,7 @@ impl<'a> CodeParser<'a> {
         }
     }
 
-    pub fn next_token_with_location(&mut self) -> Option<TokenWithLocation> {
+    fn next_token_with_location(&mut self) -> Option<TokenWithLocation> {
         match self.upstream.next() {
             Some(token_with_location) => {
                 self.last_location = token_with_location.location;
@@ -1867,7 +1890,7 @@ impl<'a> CodeParser<'a> {
         }
     }
 
-    pub fn next_token(&mut self) -> Option<Token> {
+    fn next_token(&mut self) -> Option<Token> {
         match self.upstream.next() {
             Some(TokenWithLocation { token, location }) => {
                 self.last_location = location;
@@ -1877,27 +1900,27 @@ impl<'a> CodeParser<'a> {
         }
     }
 
-    pub fn peek_location(&self, offset: usize) -> Option<&Location> {
+    fn peek_location(&self, offset: usize) -> Option<&Location> {
         match self.upstream.peek(offset) {
             Some(TokenWithLocation { location, .. }) => Some(location),
             None => None,
         }
     }
 
-    pub fn peek_token(&self, offset: usize) -> Option<&Token> {
+    fn peek_token(&self, offset: usize) -> Option<&Token> {
         match self.upstream.peek(offset) {
             Some(TokenWithLocation { token, .. }) => Some(token),
             None => None,
         }
     }
 
-    pub fn peek_token_and_equals(&self, offset: usize, expected_token: &Token) -> bool {
+    fn peek_token_and_equals(&self, offset: usize, expected_token: &Token) -> bool {
         matches!(
             self.peek_token(offset),
             Some(token) if token == expected_token)
     }
 
-    pub fn expect_and_consume_token(
+    fn expect_and_consume_token(
         &mut self,
         expected_token: &Token,
         token_description: &str,
@@ -1927,7 +1950,7 @@ impl<'a> CodeParser<'a> {
     }
 
     // expects open parenthesis '(' and consumes it.
-    pub fn expect_and_consume_opening_paren(&mut self) -> Result<(), PreprocessFileError> {
+    fn expect_and_consume_opening_paren(&mut self) -> Result<(), PreprocessFileError> {
         self.expect_and_consume_token(
             &Token::Punctuator(Punctuator::ParenthesisOpen),
             "opening parenthesis",
@@ -1935,7 +1958,7 @@ impl<'a> CodeParser<'a> {
     }
 
     // expects close parenthesis ')' and consumes it.
-    pub fn expect_and_consume_closing_paren(&mut self) -> Result<(), PreprocessFileError> {
+    fn expect_and_consume_closing_paren(&mut self) -> Result<(), PreprocessFileError> {
         self.expect_and_consume_token(
             &Token::Punctuator(Punctuator::ParenthesisClose),
             "closing parenthesis",

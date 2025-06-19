@@ -27,10 +27,12 @@ pub struct Context<'a, T>
 where
     T: FileProvider,
 {
-    // pub project_root_directory: PathBuf,
+    /// Whether to resolve relative file paths.
+    /// For example, `#include "../../folder/header.h"` will be resolved to the actual file path
+    /// using the current source or header file as the base directory.
+    pub resolve_relative_path: bool,
 
-    pub resolve_relative_file: bool,
-
+    /// The file number currently being processed.
     pub current_file: ContextFile,
 
     /// Reference to the file provider used for file access.
@@ -63,15 +65,14 @@ where
     ///
     /// - `file_provider` - Reference to the file provider.
     /// - `file_cache` - Mutable reference to the file cache.
-    /// - `project_root_directory` - The root directory of the project.
+    /// - `resolve_relative_path` - Whether to resolve relative file paths.
     /// - `current_file_number` - The file number currently being processed.
-    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
     /// - `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
+    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
     pub fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
-        // project_root_directory: &Path,
-        resolve_relative_file: bool,
+        resolve_relative_path: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
@@ -79,8 +80,7 @@ where
         Self {
             file_provider,
             file_cache,
-            // project_root_directory: project_root_directory.to_path_buf(),
-            resolve_relative_file,
+            resolve_relative_path,
             current_file: ContextFile::new(
                 current_file_number,
                 IncludeFile::new(
@@ -102,10 +102,10 @@ where
     /// - `file_provider` - Reference to the file provider.
     /// - `file_cache` - Mutable reference to the file cache.
     /// - `predefinitions` - A map of macro names to their values.
-    /// - `project_root_directory` - The root directory of the project.
+    /// - `resolve_relative_path` - Whether to resolve relative file paths.
     /// - `current_file_number` - The file number currently being processed.
-    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
     /// - `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
+    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
     ///
     /// # Returns
     /// Returns a `Context` initialized with the provided macro definitions.
@@ -113,8 +113,7 @@ where
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
-        // project_root_directory: &Path,
-        resolve_relative_file: bool,
+        resolve_relative_path: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
@@ -123,8 +122,7 @@ where
             file_provider,
             file_cache,
             macro_map: MacroMap::from_key_values(predefinitions)?,
-            // project_root_directory: project_root_directory.to_path_buf(),
-            resolve_relative_file,
+            resolve_relative_path,
             current_file: ContextFile::new(
                 current_file_number,
                 IncludeFile::new(
