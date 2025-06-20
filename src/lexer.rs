@@ -151,18 +151,12 @@ fn remove_comments(
                 chars.next(); // Consume '/'
 
                 // Line comment: consume all characters until the end of the line.
-                // Note: This includes the newline character (includes both `\r\n` and `\n`).
-                for next_char_with_position in chars.by_ref() {
+                while let Some(next_char_with_position) = chars.peek(0) {
                     if next_char_with_position.character == '\n' {
-                        break;
+                        break; // Stop at the end of the line
                     }
+                    chars.next(); // Consume the character
                 }
-
-                // Insert a space in place of the comment.
-                output.push(CharWithPosition {
-                    character: ' ',
-                    position: char_with_position.position,
-                });
             }
             '/' if matches!(chars.peek(0), Some(CharWithPosition { character: '*', .. })) => {
                 chars.next(); // Consume '*'
@@ -2810,13 +2804,13 @@ mod tests {
                 CharWithPosition::new('1', Position::new(1, 0, 1)),
                 CharWithPosition::new('2', Position::new(2, 0, 2)),
                 CharWithPosition::new(' ', Position::new(3, 0, 3)),
-                CharWithPosition::new(' ', Position::new(4, 0, 4)), // in place of comment
+                CharWithPosition::new('\n', Position::new(10, 0, 10)), // line comment
                 // line 1
                 CharWithPosition::new('1', Position::new(11, 1, 0)),
                 CharWithPosition::new('2', Position::new(12, 1, 1)),
                 CharWithPosition::new('3', Position::new(13, 1, 2)),
                 CharWithPosition::new(' ', Position::new(14, 1, 3)),
-                CharWithPosition::new(' ', Position::new(15, 1, 4)), // in place of comment
+                CharWithPosition::new(' ', Position::new(15, 1, 4)), // block comment
                 // line 2
                 CharWithPosition::new(' ', Position::new(31, 2, 8)),
                 CharWithPosition::new('2', Position::new(32, 2, 9)),
@@ -2865,7 +2859,7 @@ mod tests {
             vec![
                 // line 0
                 CharWithPosition::new('0', Position::new(0, 0, 0)),
-                CharWithPosition::new(' ', Position::new(1, 0, 1)), // in place of comment
+                CharWithPosition::new('\n', Position::new(8, 1, 4)), // line comment
                 // line 2
                 CharWithPosition::new('1', Position::new(9, 2, 0)),
                 CharWithPosition::new(' ', Position::new(10, 2, 1)), // in place of comment

@@ -1685,7 +1685,7 @@ where
 
                             code_parser.expect_and_consume_opening_paren()?; // Consumes '('
 
-                            let (attribute_name, location) = match code_parser.peek_token(0) {
+                            let (attribute_name, _location) = match code_parser.peek_token(0) {
                                 Some(Token::Identifier(id)) => {
                                     let id_owned = id.to_owned();
                                     let location = *code_parser.peek_location(0).unwrap();
@@ -1730,16 +1730,8 @@ where
                                 "unsequenced" => 202207,
                                 "reproducible" => 202207,
                                 _ => {
-                                    return Err(PreprocessFileError {
-                                        file_number: location.file_number,
-                                        error: PreprocessError::MessageWithRange(
-                                            format!(
-                                                "Unknown attribute token: '{}'.",
-                                                attribute_name
-                                            ),
-                                            location.range,
-                                        ),
-                                    });
+                                    // If the attribute is not recognized, return 0.
+                                    0
                                 }
                             };
 
@@ -3893,7 +3885,191 @@ FOO BAR
             "'a' \"world\" 13 17"
         );
 
-        // TODO
+        // Test `if` and binary and unary operators
+        assert_eq!(
+            print_tokens(&process_single_source_tokens(
+                r#"
+#define FOO 11
+#define BAR 3 + 7
+#define BUZ 0
+
+#if FOO
+    a   // <--
+#else
+    b
+#endif
+
+#if FOO == 11
+    c   // <--
+#else
+    d
+#endif
+
+#if FOO + BAR == 21
+    e   // <--
+#else
+    f
+#endif
+
+#if FOO > BAR
+    g   // <--
+#else
+    h
+#endif
+
+#if FOO || BUZ
+    i   // <--
+#else
+    j
+#endif
+
+#if FOO && BUZ
+    k
+#else
+    l   // <--
+#endif
+
+#if !FOO
+    m
+#else
+    n   // <--
+#endif
+"#,
+                &predefinitions,
+            )),
+            "a c e g i l n"
+        );
+    }
+
+    #[test]
+    fn test_process_operator_has_include() {
+        // Test `#has_include`
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#if __has_include("foo.h")
+    11
+#else
+    13
+#endif
+
+#if __has_include("bar.h")
+    17
+#else
+    19
+#endif
+"#,
+                &[("header/foo.h", "123")],
+                &[],
+                &[],
+            )),
+            "11 19"
+        );
+    }
+
+    #[test]
+    fn test_process_operator_has_embed() {
+        // Test `#has_embed`
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#if __has_embed("foo.bin")
+    11
+#else
+    13
+#endif
+
+#if __has_embed("bar.bin")
+    17
+#else
+    19
+#endif
+
+#if __has_embed("baz.bin")
+    23
+#else
+    29
+#endif
+
+#if __has_embed("foo.bin") == __STDC_EMBED_FOUND__
+    foo_found
+#elif __has_embed("foo.bin") == __STDC_EMBED_EMPTY__
+    foo_empty
+#elif __has_embed("foo.bin") == __STDC_EMBED_NOT_FOUND__
+    foo_not_found
+#else
+    foo_otherwise
+#endif
+
+#if __has_embed("bar.bin") == __STDC_EMBED_FOUND__
+    bar_found
+#elif __has_embed("bar.bin") == __STDC_EMBED_EMPTY__
+    bar_empty
+#elif __has_embed("bar.bin") == __STDC_EMBED_NOT_FOUND__
+    bar_not_found
+#else
+    bar_otherwise
+#endif
+
+#if __has_embed("baz.bin") == __STDC_EMBED_FOUND__
+    baz_found
+#elif __has_embed("baz.bin") == __STDC_EMBED_EMPTY__
+    baz_empty
+#elif __has_embed("baz.bin") == __STDC_EMBED_NOT_FOUND__
+    baz_not_found
+#else
+    baz_otherwise
+#endif
+"#,
+                &[],
+                &[("share/foo.bin", &[1, 2, 3]), ("share/bar.bin", &[])],
+                &[],
+            )),
+            "11 17 29 foo_found bar_empty baz_not_found"
+        );
+    }
+
+    #[test]
+    fn test_process_operator_has_c_attribute() {
+        // Test `#has_c_attribute`
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#if __has_c_attribute(deprecated)
+    11
+#else
+    13
+#endif
+
+#if __has_c_attribute(deprecated) == 201904
+    17
+#else
+    19
+#endif
+                "#,
+                &[],
+                &[],
+                &[],
+            )),
+            "11 17"
+        );
+
+        // Test `#has_c_attribute` with non-existing attribute
+        assert_eq!(
+            print_tokens(&process_multiple_source_tokens(
+                r#"
+#if __has_c_attribute(__non_existing__)
+    11
+#else
+    13
+#endif
+                "#,
+                &[],
+                &[],
+                &[],
+            )),
+            "13"
+        );
     }
 
     #[test]

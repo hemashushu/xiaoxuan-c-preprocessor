@@ -72,7 +72,8 @@ Other operators
 - `__STDC_EMBED_FOUND__`
 - `__STDC_EMBED_EMPTY__`
 
-(C23)
+Other macros such as `__STDC__`, `__STDC_VERSION__`, `__STDC_HOSTED__`, they are provided by the compiler and are not defined by ANCPP.
+
 TODO
 
 ## Limitations
@@ -107,10 +108,9 @@ It is worth noting that ANCPP does not change or add features. On the contrary, 
 
 **Other Limitations**
 
-- Stringizing (#) can only be applied to identifiers, numbers, chars, or string literals.
+- Stringizing (`#`) can only be applied to identifiers, numbers, chars, or string literals.
 - The result of _Token concatenation_ operator (`##`) must be a valid C identifier: the first token must be an identifier, and the remaining tokens must be either identifiers or integer numbers. For example, `foo##bar` and `sprite##2##b` are valid, while `9##s` and `+##=` are invalid.
 - Using _token concatenation_ operator (`##`) before `__VA_ARGS__` is not supported.
-- Unsupported pragmas will halt processing rather than being ignored. For example, `#pragma GCC dependency` will result in an error.
 - Trigraphs (e.g., `??<`, `??>`) and digraphs (e.g., `<:`, `:>`, and `%:%:`) are not supported.
 - Each file is included only once, even if it does not have header guards or `#pragma once`.
 
