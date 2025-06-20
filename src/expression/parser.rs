@@ -4,6 +4,32 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
+// C Operator Precedence
+// ---------------------
+//
+// The following table lists the precedence and associativity of C operators.
+// Operators are listed top to bottom, in descending precedence.
+//
+// 1: `()` Function call
+// 2:
+//    - `+ -` Unary plus and minus
+//    - `! ~` Logical NOT and bitwise NOT
+// 3: `* / %` Multiplication, division, and remainder
+// 4: `+ -` Addition and subtraction
+// 5: `<< >>` Bitwise left shift and right shift
+// 6:
+//    - `< <=` For relational operators < and ≤ respectively
+//    - `> >=` For relational operators > and ≥ respectively
+// 7: `== !=` For relational = and ≠ respectively
+// 8: `&` Bitwise AND
+// 9: `^` Bitwise XOR (exclusive or)
+// 10: `|` Bitwise OR (inclusive or)
+// 11: `&&` Logical AND
+// 12: `||` Logical OR
+//
+// See:
+// https://en.cppreference.com/w/c/language/operator_precedence.html
+
 use crate::{
     PreprocessError, PreprocessFileError, TokenWithLocation,
     expression::ast::{BinaryOperator, Expression, UnaryOperator},
@@ -69,16 +95,6 @@ impl<'a> ExpressionParser<'a> {
         }
     }
 
-    // fn next_token_with_location(&mut self) -> Option<TokenWithLocation> {
-    //     match self.upstream.next() {
-    //         Some(token_with_location) => {
-    //             self.last_location = token_with_location.location;
-    //             Some(token_with_location)
-    //         }
-    //         None => None,
-    //     }
-    // }
-
     fn next_token(&mut self) -> Option<Token> {
         match self.upstream.next() {
             Some(TokenWithLocation { token, location }) => {
@@ -102,12 +118,6 @@ impl<'a> ExpressionParser<'a> {
             None => None,
         }
     }
-
-    // fn peek_token_and_equals(&self, offset: usize, expected_token: &Token) -> bool {
-    //     matches!(
-    //         self.peek_token(offset),
-    //         Some(token) if token == expected_token)
-    // }
 
     fn expect_and_consume_token(
         &mut self,
@@ -154,34 +164,6 @@ impl<'a> ExpressionParser<'a> {
         )
     }
 }
-
-/*
- * C Operator Precedence
- * ---------------------
- *
- * The following table lists the precedence and associativity of C operators.
- * Operators are listed top to bottom, in descending precedence.
- *
- * 1: `()` Function call
- * 2:
- *    - `+ -` Unary plus and minus
- *    - `! ~` Logical NOT and bitwise NOT
- * 3: `* / %` Multiplication, division, and remainder
- * 4: `+ -` Addition and subtraction
- * 5: `<< >>` Bitwise left shift and right shift
- * 6:
- *    - `< <=` For relational operators < and ≤ respectively
- *    - `> >=` For relational operators > and ≥ respectively
- * 7: `== !=` For relational = and ≠ respectively
- * 8: `&` Bitwise AND
- * 9: `^` Bitwise XOR (exclusive or)
- * 10: `|` Bitwise OR (inclusive or)
- * 11: `&&` Logical AND
- * 12: `||` Logical OR
- *
- * See:
- * https://en.cppreference.com/w/c/language/operator_precedence.html
- */
 
 impl ExpressionParser<'_> {
     fn parse_expression(&mut self) -> Result<Expression, PreprocessFileError> {
@@ -281,12 +263,11 @@ impl ExpressionParser<'_> {
                 // Parse the right-hand side expression.
                 // This implementation assumes the operator is left-to-right associative.
                 //
-                // For right-to-left associative operators, a separate function such as
-                // `parse_binary_expression_right` should be implemented. In that case,
-                // replace `next_parse_function` below with `parse_expression` and remove the `loop`.
+                // For right-to-left associative operators, you should implement a separate function,
+                // such as `parse_binary_expression_right`. In that case, replace `next_parse_function`
+                // below with `parse_expression` and remove the `loop`.
                 //
                 // About associativity:
-                //
                 // Consider the expression `a + b + c + d`:
                 // - If the operator is left-to-right associative, it is parsed as:
                 //   `((a + b) + c) + d`
@@ -338,35 +319,6 @@ impl ExpressionParser<'_> {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, PreprocessFileError> {
-        // let parse_arguments =
-        //     |parser: &mut ExpressionParser| -> Result<Vec<Expression>, PreprocessFileError> {
-        //         parser.expect_and_consume_opening_paren()?; // Consume the opening parenthesis `(`.
-        //
-        //         let mut arguments = Vec::new();
-        //
-        //         // Parse arguments until a closing parenthesis is found.
-        //         while let Some(token) = parser.peek_token(0) {
-        //             if token == &Token::Punctuator(Punctuator::ParenthesisClose) {
-        //                 break; // End of arguments.
-        //             }
-        //
-        //             // Parse an expression for the argument.
-        //             let argument = parser.parse_expression()?;
-        //             arguments.push(argument);
-        //
-        //             // Check for a comma to separate arguments.
-        //             if parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::Comma)) {
-        //                 parser.next_token(); // Consume the comma.
-        //             } else {
-        //                 break; // No more arguments.
-        //             }
-        //         }
-        //
-        //         parser.expect_and_consume_closing_paren()?;
-        //
-        //         Ok(arguments)
-        //     };
-
         if let Some(token) = self.peek_token(0) {
             match token {
                 // Handle numeric literals.

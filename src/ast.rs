@@ -64,6 +64,10 @@ pub struct Pragma {
 // - `#define identifier ( ... ) replacement-list` (4) (since C99)
 // - `#undef identifier` (5)
 //
+// The definition must be a balanced token sequence. "Balanced" means that all
+// parentheses, brackets, and braces are properly matched. For example,
+// `#define FOO(x) (x + 1)` is a valid definition, while `#define FOO(x) (x + 1` is not.
+//
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/replace.html
 #[derive(Debug, PartialEq, Clone)]
@@ -126,20 +130,18 @@ pub enum Include {
 // Optional embed parameters can be specified after the required filename argument.
 // There are four standard parameters:
 // - `limit`: Specifies the maximum number of bytes to include from the resource.
-// - `prefix`: A balanced token sequence to prepend to the integer literal sequence, if not empty.
-// - `suffix`: A balanced token sequence to append to the integer literal sequence, if not empty.
-// - `if_empty`: A balanced token sequence to use as the expansion if the resource is empty.
+// - `prefix`: A token sequence to prepend to the integer literal sequence, if not empty.
+// - `suffix`: A token sequence to append to the integer literal sequence, if not empty.
+// - `if_empty`: A token sequence to use as the expansion if the resource is empty.
 //
 // ANCPP does not support parameter names that are both prefixed and suffixed with two underscores,
 // such as `__prefix__`, `__suffix__`, and `__if_empty__`.
 //
 // ANCPP also does not support other vendor-specific parameters, such as `gnu::offset` and `gnu::base64`.
 //
-// A "balanced token sequence" refers to a sequence of tokens in which
-// parentheses, brackets, and braces are properly balanced.
-// But ANCPP only supports a character or integer number sequence separated by commas.
+// ANCPP only supports token sequence consist of character or integer number separated by commas.
 // For example, `#embed "file.txt" prefix(0xEF, 0xBB, 0xBF) suffix('\0')` is valid,
-// but `#embed "file.txt" prefix(int foo=)` is invalid.
+// but `#embed "file.txt" prefix(a b c)` is invalid.
 //
 // See also:
 // https://en.cppreference.com/w/c/preprocessor/embed.html
@@ -148,7 +150,7 @@ pub enum Embed {
     Identifier(String, Range),
     FilePath {
         file_path: (String, Range),
-        is_system_header: bool,
+        is_system_file: bool,
 
         // Specifies the maximum number of bytes to output from the resource.
         // This limit does not include the prefix or suffix, and does not limit the numbers of bytes of `if_empty`.
@@ -165,11 +167,11 @@ pub enum Embed {
     },
 }
 
-// Conditional inclusion
+// Conditional compilation
 //
 // The preprocessor supports conditional compilation of source code sections.
-// This is controlled by the #if, #else, #elif, #ifdef, #ifndef, #elifdef,
-// #elifndef (since C23), and #endif directives.
+// This is controlled by the `#if`, `#else`, `#elif`, `#ifdef`, `#ifndef`, `#elifdef`,
+// `#elifndef`, and `#endif` directives.
 //
 // Syntax:
 //
@@ -198,7 +200,8 @@ pub struct Branch {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Condition {
-    Expression(Vec<TokenWithRange>), // expression never empty
+    // Expression never empty
+    Expression(Vec<TokenWithRange>),
     Defined(/* id */ String, Range),
     NotDefined(/* id */ String, Range),
 }

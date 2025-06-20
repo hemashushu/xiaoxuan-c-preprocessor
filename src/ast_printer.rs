@@ -122,16 +122,6 @@ fn print_embed<W: Write>(
     embed: &Embed,
     indent_level: usize,
 ) -> std::io::Result<()> {
-    // let generate_data_text = |definition: &[TokenWithRange]| {
-    //     // Note that can not join definitions (tokens) use `join(", ")` because
-    //     // definitions are token sequences, not comma-separated values.
-    //     definition
-    //         .iter()
-    //         .map(|TokenWithRange { token, .. }| token.to_string())
-    //         .collect::<Vec<_>>()
-    //         .join(" ")
-    // };
-
     let indent = DEFAULT_INDENT_CHARS.repeat(indent_level);
 
     match embed {
@@ -140,13 +130,13 @@ fn print_embed<W: Write>(
         }
         Embed::FilePath {
             file_path: (file_path_string, ..),
-            is_system_header,
+            is_system_file,
             limit,
             suffix,
             prefix,
             if_empty,
         } => {
-            if *is_system_header {
+            if *is_system_file {
                 write!(writer, "{}#embed <{}>", indent, file_path_string)?;
             } else {
                 write!(writer, "{}#embed \"{}\"", indent, file_path_string)?;
@@ -467,7 +457,7 @@ mod tests {
         // Test for embedding with a system file path
         let embed_system = Embed::FilePath {
             file_path: ("data.bin".to_string(), Range::default()),
-            is_system_header: true,
+            is_system_file: true,
             limit: None,
             suffix: vec![],
             prefix: vec![],
@@ -484,7 +474,7 @@ mod tests {
 
         let embed_local = Embed::FilePath {
             file_path: ("hippo.png".to_string(), Range::default()),
-            is_system_header: false,
+            is_system_file: false,
             limit: None,
             suffix: vec![],
             prefix: vec![],
@@ -500,7 +490,7 @@ mod tests {
         // Test for embedding with `limit`, `suffix`, `prefix`, and `if_empty` parameters
         let embed_with_params = Embed::FilePath {
             file_path: ("/dev/random".to_string(), Range::default()),
-            is_system_header: true,
+            is_system_file: true,
             limit: Some(100),
             prefix: vec![0x01, 0x02, 0x03],
             suffix: vec![0x07, 0x08, 0x09],

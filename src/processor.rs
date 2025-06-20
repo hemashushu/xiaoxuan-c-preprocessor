@@ -14,9 +14,9 @@ use chrono::Local;
 use crate::{
     PreprocessError, PreprocessFileError, TokenWithLocation, TokenWithRange,
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
-    context::{Context, ContextFile, FileSource, IncludeFile},
+    context::{Context, ContextFile, FileOrigin, IncludeFile},
     expression::evaluate_token_with_locations,
-    file_provider::{FileProvider, ResolvedResult, normalize_path},
+    file_provider::{FileProvider, ResolvedResult},
     header_file_cache::HeaderFileCache,
     location::Location,
     macro_map::{MacroDefinition, MacroManipulationResult},
@@ -33,71 +33,67 @@ const PEEK_BUFFER_LENGTH_PARSE_CODE: usize = 2;
 
 /// Preprocesses C source files.
 ///
-/// Arguments:
-/// - `file_number`: The file number for the source file, used for error reporting.
-/// - `source_file_relative_path`: The C source files to preprocess.
-/// - `resolve_relative_path`: If true, also search for headers in the directory where the source file resides.
-///   For example, if the source file is `src/foo/bar.c` and this flag is set,
-///   then `#include "header.h"` will look in `src/foo/`,
-///   and `#include "../hello/world.h"` will look in `src/hello`.
-///   otherwise, it will only search in the specified `user_directories`.
-/// - `predefinitions`: Predefined macros to be used during preprocessing.
-///   There are many predefined macros in C, such as `__STDC_VERSION__` etc.
-///   This map should only contain static predefinitions, dynamic macros (such as `__FILE__`)
-///   will be handled by the preprocessor.
-///   see:
-///   - https://gcc.gnu.org/onlinedocs/cpp/Standard-Predefined-Macros.html
-///   - https://en.cppreference.com/w/c/preprocessor/replace.html
-/// - `file_provider`: A trait object that provides access to files.
-/// - `file_cache`: A mutable reference to the file cache, used to avoid redundant parsing of files.
-///
 /// see also:
 /// - https://en.cppreference.com/w/c/language.html
 /// - https://en.cppreference.com/w/c/preprocessor.html
 pub fn process_source_file<T>(
     file_provider: &T,
     file_cache: &mut HeaderFileCache,
-    predefinitions: &HashMap<String, String>,
-    project_root_directory: &Path,
-    resolve_relative_path: bool,
 
-    /* Source file refer to the C source file (e.g. `main.c`) */
+    // The predefined macros to be used during preprocessing.
+    // Such as `__STDC__` and `__STDC_VERSION__`, they are provided by the compiler.
+    // see:
+    // - https://gcc.gnu.org/onlinedocs/cpp/Standard-Predefined-Macros.html
+    // - https://en.cppreference.com/w/c/preprocessor/replace.html
+    predefinitions: &HashMap<String, String>,
+
+    // If true, also search for headers in the directory where the source file resides.
+    // For example, if the source file is `src/foo/bar.c` and this flag is set,
+    // then `#include "header.h"` will look in `src/foo/`,
+    // and `#include "../hello/world.h"` will look in `src/hello`.
+    // otherwise, it will only search in the specified `user_directories`.
+    should_resolve_relative_path: bool,
+
+    // The number of the source file, used for error reporting.
+    // It should begin with `FILE_NUMBER_SOURCE_FILE_BEGIN`.
+    //
+    // _Source file_ refer to the C source file (e.g. `main.c`)
     source_file_number: usize,
+
+    // The relative path of the source file, relative to the project root directory.
+    // It is used to generate the value of the `__FILE__` macro.
     source_file_relative_path: &Path,
+    source_file_canonical_full_path: &Path,
 ) -> Result<PreprocessResult, PreprocessFileError>
 where
     T: FileProvider,
 {
-    let source_file_full_path = project_root_directory.join(source_file_relative_path);
-    let source_file_normalized_full_path = normalize_path(&source_file_full_path);
-
     let mut processor = Processor::new(
         file_provider,
         file_cache,
         predefinitions,
-        resolve_relative_path,
+        should_resolve_relative_path,
         source_file_number,
         source_file_relative_path,
-        &source_file_normalized_full_path,
+        source_file_canonical_full_path,
     )?;
 
     // Add source file to the `included_files` list to
     // prevent recursive inclusion.
     processor.context.included_files.push(IncludeFile::new(
-        &source_file_normalized_full_path,
-        FileSource::from_source_file(source_file_relative_path),
+        source_file_canonical_full_path,
+        FileOrigin::from_source_file(source_file_relative_path),
     ));
 
     // Load and parse the source file.
-
     let src = file_provider
-        .load_text_file(&source_file_normalized_full_path)
+        .load_text_file(source_file_canonical_full_path)
         .map_err(|error| {
             PreprocessFileError::new(
                 source_file_number,
                 PreprocessError::Message(format!(
                     "Failed to load file '{}': {}",
-                    source_file_normalized_full_path.to_string_lossy(),
+                    source_file_canonical_full_path.to_string_lossy(),
                     error
                 )),
             )
@@ -138,7 +134,7 @@ where
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
-        resolve_relative_path: bool,
+        should_resolve_relative_path: bool,
 
         source_file_number: usize,
         source_file_relative_path: &Path,
@@ -148,7 +144,7 @@ where
             file_provider,
             file_cache,
             predefinitions,
-            resolve_relative_path,
+            should_resolve_relative_path,
             source_file_number,
             source_file_relative_path,
             source_file_canonical_full_path,
@@ -331,7 +327,7 @@ where
         // The `include` directive is used to include the contents of another file.
         // The file can be a user header or a system header.
 
-        let (relative_path, relative_to_system, file_path_location) = match include {
+        let (relative_path, stick_to_system, file_path_location) = match include {
             Include::Identifier(id, range) => {
                 let expended_tokens = self.expand_marco(
                     vec![TokenWithLocation::new(
@@ -389,7 +385,7 @@ where
             ),
         };
 
-        let (canonical_path, is_system_file) = if relative_to_system {
+        let (canonical_path, is_system_header) = if stick_to_system {
             match self
                 .context
                 .file_provider
@@ -413,7 +409,7 @@ where
             match self.context.file_provider.resolve_user_file_with_fallback(
                 &relative_path,
                 &self.context.current_file.source_file.canonical_full_path,
-                self.context.resolve_relative_path,
+                self.context.should_resolve_relative_path,
             ) {
                 Some(ResolvedResult {
                     canonical_full_path,
@@ -445,7 +441,11 @@ where
         // has no include guards or `#pragma once`.
         self.context.included_files.push(IncludeFile::new(
             &canonical_path,
-            FileSource::from_header_file(&relative_path, is_system_file),
+            if is_system_header {
+                FileOrigin::from_system_header_file(&relative_path)
+            } else {
+                FileOrigin::from_user_header_file(&relative_path)
+            },
         ));
 
         // Load the file content from the file cache.
@@ -461,7 +461,7 @@ where
                 file_number,
                 &canonical_path,
                 &relative_path,
-                is_system_file,
+                is_system_header,
                 &program_owned,
             )?;
         } else {
@@ -499,7 +499,7 @@ where
                 file_number,
                 &canonical_path,
                 &relative_path,
-                is_system_file,
+                is_system_header,
                 &program,
             )?;
         }
@@ -526,7 +526,11 @@ where
             file_number,
             IncludeFile::new(
                 canonical_path,
-                FileSource::from_header_file(relative_path, is_system_header),
+                if is_system_header {
+                    FileOrigin::from_system_header_file(relative_path)
+                } else {
+                    FileOrigin::from_user_header_file(relative_path)
+                },
             ),
         );
         self.context.current_file = current_context_file;
@@ -559,7 +563,7 @@ where
 
         let (
             relative_path,
-            relative_to_system,
+            stack_to_system_file,
             file_path_location,
             limit,
             suffix,
@@ -623,7 +627,7 @@ where
             }
             Embed::FilePath {
                 file_path: (relative_path, range),
-                is_system_header,
+                is_system_file: is_system_header,
                 limit,
                 suffix,
                 prefix,
@@ -639,7 +643,7 @@ where
             ),
         };
 
-        let (canonical_path, _is_system_file) = if relative_to_system {
+        let (canonical_path, _is_system_file) = if stack_to_system_file {
             match self
                 .context
                 .file_provider
@@ -663,7 +667,7 @@ where
             match self.context.file_provider.resolve_user_file_with_fallback(
                 &relative_path,
                 &self.context.current_file.source_file.canonical_full_path,
-                self.context.resolve_relative_path,
+                self.context.should_resolve_relative_path,
             ) {
                 Some(ResolvedResult {
                     canonical_full_path,
@@ -1095,11 +1099,11 @@ where
                             }
                         }
                         "__FILE__" => {
-                            let file_path = match &self.context.current_file.source_file.file_source
+                            let file_path = match &self.context.current_file.source_file.file_origin
                             {
-                                FileSource::SourceFile(path_buf) => path_buf,
-                                FileSource::UserHeader(path_buf) => path_buf,
-                                FileSource::SystemHeader(path_buf) => path_buf,
+                                FileOrigin::SourceFile(path_buf) => path_buf,
+                                FileOrigin::UserHeader(path_buf) => path_buf,
+                                FileOrigin::SystemHeader(path_buf) => path_buf,
                             };
 
                             // expands to the name of the current file, as a character string literal
@@ -1343,7 +1347,7 @@ where
 
                             code_parser.expect_and_consume_opening_paren()?; // Consumes '('
 
-                            let (relative_path, relative_to_system, _file_path_location) =
+                            let (relative_path, stick_to_system, _file_path_location) =
                                 match code_parser.peek_token(0) {
                                     Some(Token::Identifier(id)) => {
                                         let id_owned = id.to_owned();
@@ -1433,7 +1437,7 @@ where
                                     }
                                 };
 
-                            let result = if relative_to_system {
+                            let result = if stick_to_system {
                                 if self
                                     .context
                                     .file_provider
@@ -1450,7 +1454,7 @@ where
                                 .resolve_user_file_with_fallback(
                                     &relative_path,
                                     &self.context.current_file.source_file.canonical_full_path,
-                                    self.context.resolve_relative_path,
+                                    self.context.should_resolve_relative_path,
                                 )
                                 .is_some()
                             {
@@ -1499,7 +1503,7 @@ where
 
                             code_parser.expect_and_consume_opening_paren()?; // Consumes '('
 
-                            let (relative_path, relative_to_system, _file_path_location) =
+                            let (relative_path, stick_to_system, _file_path_location) =
                                 match code_parser.peek_token(0) {
                                     Some(Token::Identifier(id)) => {
                                         let id_owned = id.to_owned();
@@ -1552,15 +1556,15 @@ where
                                             }
                                         }
                                     }
-                                    Some(Token::FilePath(relative_path, is_system_header)) => {
+                                    Some(Token::FilePath(relative_path, is_system_file)) => {
                                         let relative_path_owned = relative_path.to_owned();
-                                        let is_system_header_owned = *is_system_header;
+                                        let is_system_file_owned = *is_system_file;
                                         let location = *code_parser.peek_location(0).unwrap();
                                         code_parser.next_token(); // consumes the file path token
 
                                         (
                                             PathBuf::from(relative_path_owned),
-                                            is_system_header_owned,
+                                            is_system_file_owned,
                                             location,
                                         )
                                     }
@@ -1597,7 +1601,7 @@ where
                             //
                             // see:
                             // https://en.cppreference.com/w/c/preprocessor/embed.html
-                            let result = if relative_to_system {
+                            let result = if stick_to_system {
                                 self.context
                                     .file_provider
                                     .resolve_system_file(&relative_path)
@@ -1619,7 +1623,7 @@ where
                                     .resolve_user_file_with_fallback(
                                         &relative_path,
                                         &self.context.current_file.source_file.canonical_full_path,
-                                        self.context.resolve_relative_path,
+                                        self.context.should_resolve_relative_path,
                                     )
                                     .map_or(
                                         0,
@@ -2517,10 +2521,10 @@ mod tests {
             &file_provider,
             &mut file_cache,
             predefinitions,
-            Path::new("/projects/test"),
             false,
             FILE_NUMBER_SOURCE_FILE_BEGIN,
             Path::new("src/main.c"),
+            Path::new("/projects/test/src/main.c"),
         )
     }
 
@@ -2560,10 +2564,10 @@ mod tests {
             &file_provider,
             &mut file_cache,
             &predefinitions,
-            Path::new("/projects/test"),
             false,
             FILE_NUMBER_SOURCE_FILE_BEGIN,
             Path::new("src/main.c"),
+            Path::new("/projects/test/src/main.c"),
         )
     }
 

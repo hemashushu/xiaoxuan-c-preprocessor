@@ -12,10 +12,14 @@ pub trait FileProvider {
     /// Returns the canonical path if found, or `None` if not found.
     fn resolve_user_file(&self, relative_file_path: &Path) -> Option<PathBuf>;
 
-    /// Resolves a user header file path relative to a source file's directory.
+    /// Resolves a user header file path relative to the current file.
     ///
-    /// Returns the canonical path if found, or `None` if not found.
-    fn resolve_user_file_relative_to_source_file(
+    /// Examples:
+    /// - if the current file is `/path/to/source.c` and the relative path
+    ///   is `../include/foo.h`, this function will resolve it to `/path/to/include/foo.h`.
+    /// - If the current file is `/path/to/include/foo.h` and the relative path is `./bar.h`,
+    ///   it will resolve it to `/path/to/include/bar.h`.
+    fn resolve_user_file_relative_to_current_file(
         &self,
         relative_file_path: &Path,
         source_file_canonical_full_path: &Path,
@@ -37,24 +41,24 @@ pub trait FileProvider {
     /// Returns the canonical path if found, or `None` if not found.
     fn resolve_user_file_with_fallback(
         &self,
-        relative_file_path: &Path,
+        target_file_relative_path: &Path,
         source_file_canonical_full_path: &Path,
-        resolve_relative: bool,
+        should_resolve_relative_path: bool,
     ) -> Option<ResolvedResult> {
-        if resolve_relative {
-            if let Some(resolved_path) = self.resolve_user_file_relative_to_source_file(
-                relative_file_path,
+        if should_resolve_relative_path {
+            if let Some(resolved_path) = self.resolve_user_file_relative_to_current_file(
+                target_file_relative_path,
                 source_file_canonical_full_path,
             ) {
                 return Some(ResolvedResult::new(resolved_path, false));
             }
         }
 
-        if let Some(resolved_path) = self.resolve_user_file(relative_file_path) {
+        if let Some(resolved_path) = self.resolve_user_file(target_file_relative_path) {
             return Some(ResolvedResult::new(resolved_path, false));
         }
 
-        if let Some(resolved_path) = self.resolve_system_file(relative_file_path) {
+        if let Some(resolved_path) = self.resolve_system_file(target_file_relative_path) {
             return Some(ResolvedResult::new(resolved_path, true));
         }
 
@@ -79,9 +83,9 @@ pub trait FileProvider {
         max_length: Option<usize>,
     ) -> Result<Vec<u8>, std::io::Error>;
 
-    /// Resolves a source file path relative to the project's root directory.
-    /// Returns the canonical path if found, or an `std::io::Error` if an error occurs.
-    fn resolve_source_file(&self, relative_file_path: &Path) -> Result<PathBuf, std::io::Error>;
+    // /// Resolves a source file path relative to the project's root directory.
+    // /// Returns the canonical path if found, or an `std::io::Error` if an error occurs.
+    // fn resolve_source_file(&self, relative_file_path: &Path) -> Result<PathBuf, std::io::Error>;
 
     fn file_size(&self, canonical_full_path: &Path) -> Result<usize, std::io::Error>;
 }

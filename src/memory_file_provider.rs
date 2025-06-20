@@ -17,15 +17,14 @@ use crate::file_provider::{FileProvider, normalize_path};
 /// The in-memory file provider simulates a file system with the following structure:
 /// - `/projects/test` — project root directory
 /// - `/projects/test/src` — source directory
-/// - `/projects/test/header` — internal header directory
+/// - `/projects/test/src/common` — internal shared header such as project's configuration
 /// - `/projects/test/include` — public header directory
+/// - `/projects/test/header` — internal header directory
+/// - `/projects/test/share` — binary files directory
 /// - `/usr/include` — system header directory
 pub struct MemoryFileProvider {
     /// Maps canonical file paths to their contents.
     file_content_map: HashMap<PathBuf, FileContent>,
-
-    /// The root directory of the project.
-    project_root_directory: PathBuf,
 
     /// Directories to search for system headers.
     system_directories: Vec<PathBuf>,
@@ -40,19 +39,18 @@ enum FileContent {
 }
 
 impl MemoryFileProvider {
-    /// Creates a new `MemoryFileProvider` with the specified directories for system and user headers.
     pub fn new() -> Self {
         let user_directories: Vec<PathBuf> = vec![
-            PathBuf::from("/projects/test/header"),  // internal headers
-            PathBuf::from("/projects/test/include"), // public headers
-            PathBuf::from("/projects/test/share"),   // binary files
+            PathBuf::from("/projects/test/header"),     // internal headers
+            PathBuf::from("/projects/test/include"),    // public headers
+            PathBuf::from("/projects/test/share"),      // binary files
+            PathBuf::from("/projects/test/src/common"), // internal shared headers
         ];
 
         let system_directories: Vec<PathBuf> = vec![PathBuf::from("/usr/include")];
 
         Self {
             file_content_map: HashMap::new(),
-            project_root_directory: PathBuf::from("/projects/test"),
             system_directories,
             user_directories,
         }
@@ -120,7 +118,7 @@ impl FileProvider for MemoryFileProvider {
         None
     }
 
-    fn resolve_user_file_relative_to_source_file(
+    fn resolve_user_file_relative_to_current_file(
         &self,
         header_file_path: &Path,
         source_file_normalize_full_path: &Path,
@@ -136,19 +134,19 @@ impl FileProvider for MemoryFileProvider {
         }
     }
 
-    fn resolve_source_file(&self, relative_file_path: &Path) -> Result<PathBuf, std::io::Error> {
-        let full_path = self.project_root_directory.join(relative_file_path);
-        let canonical_full_path = normalize_path(&full_path);
-
-        if self.file_content_map.contains_key(&canonical_full_path) {
-            Ok(canonical_full_path)
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "File not found",
-            ))
-        }
-    }
+//     fn resolve_source_file(&self, relative_file_path: &Path) -> Result<PathBuf, std::io::Error> {
+//         let full_path = self.project_root_directory.join(relative_file_path);
+//         let canonical_full_path = normalize_path(&full_path);
+//
+//         if self.file_content_map.contains_key(&canonical_full_path) {
+//             Ok(canonical_full_path)
+//         } else {
+//             Err(std::io::Error::new(
+//                 std::io::ErrorKind::NotFound,
+//                 "File not found",
+//             ))
+//         }
+//     }
 
     fn load_text_file(&self, canonical_full_path: &Path) -> Result<String, std::io::Error> {
         let file_content = self.file_content_map.get(canonical_full_path);
@@ -376,7 +374,7 @@ mod tests {
 
         // Test resolving user header files relative to a source file
         assert_eq!(
-            provider.resolve_user_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_current_file(
                 Path::new("./bar.h"),
                 Path::new("/projects/test/header/foo.h")
             ),
@@ -384,7 +382,7 @@ mod tests {
         );
 
         assert_eq!(
-            provider.resolve_user_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_current_file(
                 Path::new("folder/buz.h"),
                 Path::new("/projects/test/header/foo.h")
             ),
@@ -392,7 +390,7 @@ mod tests {
         );
 
         assert_eq!(
-            provider.resolve_user_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_current_file(
                 Path::new("../foo.h"),
                 Path::new("/projects/test/header/folder/buz.h")
             ),
@@ -460,7 +458,7 @@ mod tests {
         );
 
         assert_eq!(
-            provider.resolve_user_file_relative_to_source_file(
+            provider.resolve_user_file_relative_to_current_file(
                 Path::new("non_existent.h"),
                 Path::new("/projects/test/src/main.c")
             ),

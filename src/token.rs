@@ -82,7 +82,7 @@ pub enum Token {
     //
     // Although the file path is also a string, it is not a string literal
     // because it does not support escape sequences like `\x40`, `\"`, etc.
-    FilePath(String, /* is_system_header */ bool),
+    FilePath(String, /* stick_to_system */ bool),
 
     // The identifier of a function-like macro. e.g.
     //

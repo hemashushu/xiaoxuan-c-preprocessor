@@ -10,31 +10,16 @@ use std::{
 };
 
 use crate::{
-    PreprocessError, TokenWithLocation, header_file_cache::HeaderFileCache, file_provider::FileProvider,
-    macro_map::MacroMap, prompt::Prompt,
+    PreprocessError, TokenWithLocation, file_provider::FileProvider,
+    header_file_cache::HeaderFileCache, macro_map::MacroMap, prompt::Prompt,
 };
 
 /// The `Context` struct holds all state required during preprocessing.
 /// It manages file access, macro definitions, file inclusion tracking, and user-facing messages.
-///
-/// - `file_provider`: Provides access to files (e.g., headers) during preprocessing.
-/// - `file_cache`: Caches parsed files to avoid redundant parsing.
-/// - `definition`: Stores macro definitions and related state.
-/// - `included_files`: Tracks included files to prevent multiple inclusions.
-/// - `prompts`: Collects informational or warning messages for the user.
-/// - `current_file_number`: Tracks the file number currently being processed.
 pub struct Context<'a, T>
 where
     T: FileProvider,
 {
-    /// Whether to resolve relative file paths.
-    /// For example, `#include "../../folder/header.h"` will be resolved to the actual file path
-    /// using the current source or header file as the base directory.
-    pub resolve_relative_path: bool,
-
-    /// The file number currently being processed.
-    pub current_file: ContextFile,
-
     /// Reference to the file provider used for file access.
     pub file_provider: &'a T,
 
@@ -43,6 +28,14 @@ where
 
     /// Macro definitions and related state.
     pub macro_map: MacroMap,
+
+    /// Whether to resolve relative file paths.
+    /// For example, `#include "../../folder/header.h"` will be resolved to the actual file path
+    /// using the current source or header file as the base directory.
+    pub should_resolve_relative_path: bool,
+
+    /// The file number currently being processed.
+    pub current_file: ContextFile,
 
     /// List of included files to prevent redundant inclusions.
     pub included_files: Vec<IncludeFile>,
@@ -59,20 +52,10 @@ where
     T: FileProvider,
 {
     #[allow(dead_code)]
-    /// Creates a new `Context` with empty macro definitions and no included files.
-    ///
-    /// Arguments
-    ///
-    /// - `file_provider` - Reference to the file provider.
-    /// - `file_cache` - Mutable reference to the file cache.
-    /// - `resolve_relative_path` - Whether to resolve relative file paths.
-    /// - `current_file_number` - The file number currently being processed.
-    /// - `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
-    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
     pub fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
-        resolve_relative_path: bool,
+        should_resolve_relative_path: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
@@ -80,12 +63,12 @@ where
         Self {
             file_provider,
             file_cache,
-            resolve_relative_path,
+            should_resolve_relative_path,
             current_file: ContextFile::new(
                 current_file_number,
                 IncludeFile::new(
                     current_file_canonical_full_path,
-                    FileSource::from_source_file(current_file_relative_path),
+                    FileOrigin::from_source_file(current_file_relative_path),
                 ),
             ),
             macro_map: MacroMap::new(),
@@ -95,25 +78,11 @@ where
         }
     }
 
-    /// Creates a new `Context` with predefined macro key-value pairs.
-    ///
-    /// Arguments
-    ///
-    /// - `file_provider` - Reference to the file provider.
-    /// - `file_cache` - Mutable reference to the file cache.
-    /// - `predefinitions` - A map of macro names to their values.
-    /// - `resolve_relative_path` - Whether to resolve relative file paths.
-    /// - `current_file_number` - The file number currently being processed.
-    /// - `current_file_relative_path` - The relative path of the current file. (relative to the project root directory)
-    /// - `current_file_canonical_full_path` - The canonical full path of the current file.
-    ///
-    /// # Returns
-    /// Returns a `Context` initialized with the provided macro definitions.
     pub fn from_keyvalues(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
-        resolve_relative_path: bool,
+        should_resolve_relative_path: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
@@ -122,12 +91,12 @@ where
             file_provider,
             file_cache,
             macro_map: MacroMap::from_key_values(predefinitions)?,
-            resolve_relative_path,
+            should_resolve_relative_path,
             current_file: ContextFile::new(
                 current_file_number,
                 IncludeFile::new(
                     current_file_canonical_full_path,
-                    FileSource::from_source_file(current_file_relative_path),
+                    FileOrigin::from_source_file(current_file_relative_path),
                 ),
             ),
             included_files: Vec::new(),
@@ -136,16 +105,12 @@ where
         })
     }
 
-    pub fn contains_include_file(
-        &self,
-        canonical_full_path: &Path,
-    ) -> bool {
+    pub fn contains_include_file(&self, canonical_full_path: &Path) -> bool {
         self.included_files
             .iter()
             .any(|file| file.canonical_full_path == canonical_full_path)
     }
 }
-
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ContextFile {
@@ -165,12 +130,12 @@ impl ContextFile {
 #[derive(Debug, PartialEq, Clone)]
 pub struct IncludeFile {
     pub canonical_full_path: PathBuf,
-    pub file_source: FileSource,
+    pub file_origin: FileOrigin,
 }
 
 /// Represents the source of a file.
 #[derive(Debug, PartialEq, Clone)]
-pub enum FileSource {
+pub enum FileOrigin {
     /// Represents a file that is part of the source code, such as `main.c` and `lib.c`.
     /// The `relative_file_path` is the path relative to the project root directory.
     SourceFile(/* relative_file_path */ PathBuf),
@@ -187,24 +152,24 @@ pub enum FileSource {
 }
 
 impl IncludeFile {
-    pub fn new(canonical_full_path: &Path, file_source: FileSource) -> Self {
+    pub fn new(canonical_full_path: &Path, file_origin: FileOrigin) -> Self {
         Self {
             canonical_full_path: canonical_full_path.to_path_buf(),
-            file_source,
+            file_origin,
         }
     }
 }
 
-impl FileSource {
+impl FileOrigin {
     pub fn from_source_file(relative_file_path: &Path) -> Self {
-        FileSource::SourceFile(relative_file_path.to_path_buf())
+        FileOrigin::SourceFile(relative_file_path.to_path_buf())
     }
 
-    pub fn from_header_file(relative_file_path: &Path, is_system_header: bool) -> Self {
-        if is_system_header {
-            FileSource::SystemHeader(relative_file_path.to_path_buf())
-        } else {
-            FileSource::UserHeader(relative_file_path.to_path_buf())
-        }
+    pub fn from_user_header_file(relative_file_path: &Path) -> Self {
+        FileOrigin::UserHeader(relative_file_path.to_path_buf())
+    }
+
+    pub fn from_system_header_file(relative_file_path: &Path) -> Self {
+        FileOrigin::SystemHeader(relative_file_path.to_path_buf())
     }
 }

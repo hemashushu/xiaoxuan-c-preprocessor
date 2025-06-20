@@ -745,12 +745,12 @@ impl Parser<'_> {
         };
 
         let embed = match self.peek_token(0) {
-            Some(Token::FilePath(file_path, is_system_header)) => {
+            Some(Token::FilePath(file_path, is_system_file)) => {
                 // Handle embed with file path
 
                 let range = *self.peek_range(0).unwrap();
                 let file_path_owned = file_path.to_owned();
-                let is_system_header_owned = *is_system_header;
+                let is_system_file_owned = *is_system_file;
 
                 self.next_token(); // consumes the file path token
 
@@ -822,7 +822,7 @@ impl Parser<'_> {
 
                 Embed::FilePath {
                     file_path: (file_path_owned, range),
-                    is_system_header: is_system_header_owned,
+                    is_system_file: is_system_file_owned,
                     limit,
                     prefix,
                     suffix,
