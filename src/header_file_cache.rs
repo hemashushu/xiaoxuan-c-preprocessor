@@ -35,11 +35,9 @@ impl HeaderFileCache {
 
     /// Adds a file to the cache.
     ///
-    /// # Arguments
-    /// * `canonical_full_path` - The canonical path of the file.
-    /// * `text_content` - The source code of the file.
+    /// - `canonical_full_path` - The canonical path of the file.
+    /// - `text_content` - The source code of the file.
     ///
-    /// # Returns
     /// Returns the file number assigned to this file.
     /// File number starts from 1 since 0 is reserved for predefined macros.
     pub fn add(&mut self, canonical_full_path: &Path, text_content: &str) -> usize {

@@ -17,10 +17,11 @@ use crate::file_provider::{FileProvider, normalize_path};
 /// The in-memory file provider simulates a file system with the following structure:
 /// - `/projects/test` — project root directory
 /// - `/projects/test/src` — source directory
-/// - `/projects/test/src/common` — internal shared header such as project's configuration
+/// - `/projects/test/src/common` — internal shared code such as project's configuration
 /// - `/projects/test/include` — public header directory
 /// - `/projects/test/header` — internal header directory
-/// - `/projects/test/share` — binary files directory
+/// - `/projects/test/share` — public binary files directory
+/// - `/projects/test/resources` — internal binary files directory
 /// - `/usr/include` — system header directory
 pub struct MemoryFileProvider {
     /// Maps canonical file paths to their contents.
@@ -43,8 +44,8 @@ impl MemoryFileProvider {
         let user_directories: Vec<PathBuf> = vec![
             PathBuf::from("/projects/test/header"),     // internal headers
             PathBuf::from("/projects/test/include"),    // public headers
-            PathBuf::from("/projects/test/share"),      // binary files
-            PathBuf::from("/projects/test/src/common"), // internal shared headers
+            PathBuf::from("/projects/test/resources"),  // internal binary files
+            PathBuf::from("/projects/test/src/common"), // internal shared code
         ];
 
         let system_directories: Vec<PathBuf> = vec![PathBuf::from("/usr/include")];
@@ -94,9 +95,9 @@ impl Default for MemoryFileProvider {
 }
 
 impl FileProvider for MemoryFileProvider {
-    fn resolve_user_file(&self, header_file_path: &Path) -> Option<PathBuf> {
+    fn resolve_user_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
         for dir in &self.user_directories {
-            let full_path = dir.join(header_file_path);
+            let full_path = dir.join(relative_file_path);
             let canonical_full_path = normalize_path(&full_path);
 
             if self.file_content_map.contains_key(&canonical_full_path) {
@@ -106,9 +107,9 @@ impl FileProvider for MemoryFileProvider {
         None
     }
 
-    fn resolve_system_file(&self, header_file_path: &Path) -> Option<PathBuf> {
+    fn resolve_system_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
         for dir in &self.system_directories {
-            let full_path = dir.join(header_file_path);
+            let full_path = dir.join(relative_file_path);
             let canonical_full_path = normalize_path(&full_path);
 
             if self.file_content_map.contains_key(&canonical_full_path) {
@@ -120,11 +121,11 @@ impl FileProvider for MemoryFileProvider {
 
     fn resolve_user_file_relative_to_current_file(
         &self,
-        header_file_path: &Path,
-        source_file_normalize_full_path: &Path,
+        relative_file_path: &Path,
+        source_file_canonical_full_path: &Path,
     ) -> Option<PathBuf> {
-        let source_file_directory = source_file_normalize_full_path.parent().unwrap();
-        let full_path = source_file_directory.join(header_file_path);
+        let source_file_directory = source_file_canonical_full_path.parent().unwrap();
+        let full_path = source_file_directory.join(relative_file_path);
         let canonical_full_path = normalize_path(&full_path);
 
         if self.file_content_map.contains_key(&canonical_full_path) {
@@ -133,20 +134,6 @@ impl FileProvider for MemoryFileProvider {
             None
         }
     }
-
-//     fn resolve_source_file(&self, relative_file_path: &Path) -> Result<PathBuf, std::io::Error> {
-//         let full_path = self.project_root_directory.join(relative_file_path);
-//         let canonical_full_path = normalize_path(&full_path);
-//
-//         if self.file_content_map.contains_key(&canonical_full_path) {
-//             Ok(canonical_full_path)
-//         } else {
-//             Err(std::io::Error::new(
-//                 std::io::ErrorKind::NotFound,
-//                 "File not found",
-//             ))
-//         }
-//     }
 
     fn load_text_file(&self, canonical_full_path: &Path) -> Result<String, std::io::Error> {
         let file_content = self.file_content_map.get(canonical_full_path);
@@ -238,7 +225,7 @@ mod tests {
         provider.add_user_text_file(Path::new("header/foo.h"), "HEADER_FOO_H");
         provider.add_user_text_file(Path::new("header/bar.h"), "HEADER_BAR_H");
         provider.add_user_text_file(Path::new("header/folder/buz.h"), "HEADER_FOLDER_BUZ_H");
-        provider.add_user_binary_file(Path::new("share/hippo.png"), vec![1, 2, 3, 4, 5]);
+        provider.add_user_binary_file(Path::new("resources/hippo.png"), vec![1, 2, 3, 4, 5]);
         provider.add_system_file(Path::new("stdio.h"), "STDIO_H");
         provider.add_system_file(Path::new("elf.h"), "ELF_H");
 
@@ -286,28 +273,28 @@ mod tests {
 
         assert!(
             provider
-                .load_text_file(&PathBuf::from("/projects/test/share/hippo.png"))
+                .load_text_file(&PathBuf::from("/projects/test/resources/hippo.png"))
                 .is_err()
         );
 
         // Test loading binary files
         assert_eq!(
             provider
-                .load_binary_file(&PathBuf::from("/projects/test/share/hippo.png"), 0, None)
+                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 0, None)
                 .unwrap(),
             vec![1, 2, 3, 4, 5]
         );
 
         assert_eq!(
             provider
-                .load_binary_file(&PathBuf::from("/projects/test/share/hippo.png"), 2, None)
+                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 2, None)
                 .unwrap(),
             vec![3, 4, 5]
         );
 
         assert_eq!(
             provider
-                .load_binary_file(&PathBuf::from("/projects/test/share/hippo.png"), 2, Some(2))
+                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 2, Some(2))
                 .unwrap(),
             vec![3, 4]
         );
@@ -315,7 +302,7 @@ mod tests {
         assert_eq!(
             provider
                 .load_binary_file(
-                    &PathBuf::from("/projects/test/share/hippo.png"),
+                    &PathBuf::from("/projects/test/resources/hippo.png"),
                     2,
                     Some(10)
                 )
@@ -325,14 +312,14 @@ mod tests {
 
         assert!(
             provider
-                .load_binary_file(&PathBuf::from("/projects/test/share/hippo.png"), 6, None)
+                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 6, None)
                 .is_err()
         );
 
         assert!(
             provider
                 .load_binary_file(
-                    &PathBuf::from("/projects/test/share/non_existent.png"),
+                    &PathBuf::from("/projects/test/resources/non_existent.png"),
                     0,
                     None
                 )
@@ -363,7 +350,7 @@ mod tests {
 
         assert_eq!(
             provider.resolve_user_file(Path::new("hippo.png")),
-            Some(PathBuf::from("/projects/test/share/hippo.png"))
+            Some(PathBuf::from("/projects/test/resources/hippo.png"))
         );
 
         // Test resolving system header files

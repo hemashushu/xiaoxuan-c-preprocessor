@@ -27,15 +27,15 @@ use crate::{
     token::{IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token},
 };
 
-// const PEEK_BUFFER_LENGTH_PREPROCESS: usize = 4;
-// const PEEK_BUFFER_LENGTH_MERGE_STRINGS: usize = 2;
 const PEEK_BUFFER_LENGTH_PARSE_CODE: usize = 2;
+const PEEK_BUFFER_LENGTH_CONCATENATE_STRING: usize = 2;
 
 /// Preprocesses C source files.
 ///
 /// see also:
 /// - https://en.cppreference.com/w/c/language.html
 /// - https://en.cppreference.com/w/c/preprocessor.html
+/// - https://en.cppreference.com/w/c/language/translation_phases.html
 pub fn process_source_file<T>(
     file_provider: &T,
     file_cache: &mut HeaderFileCache,
@@ -108,7 +108,15 @@ where
         prompts, output, ..
     } = processor.context;
 
-    let result = PreprocessResult { output, prompts };
+    // concatenates adjacent string literals
+    let mut iter = output.into_iter();
+    let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CONCATENATE_STRING);
+    let concatenated = concatenate_adjacent_strings(&mut peekable_iter)?;
+
+    let result = PreprocessResult {
+        output: concatenated,
+        prompts,
+    };
 
     Ok(result)
 }
@@ -2491,6 +2499,69 @@ impl<'a> CodeParser<'a> {
     }
 }
 
+/// Concatenates adjacent string literals into a single string literal token.
+/// Only string literals with identical encoding prefixes can be concatenated.
+/// For example, `"abc" "def"` becomes `"abcdef"`, but `u8"abc" "def"` is not allowed.
+///
+/// See:
+/// - https://en.cppreference.com/w/c/language/string_literal.html
+fn concatenate_adjacent_strings(
+    tokens: &mut PeekableIter<TokenWithLocation>,
+) -> Result<Vec<TokenWithLocation>, PreprocessFileError> {
+    let mut output = Vec::new();
+
+    while let Some(token_with_location) = tokens.next() {
+        if let TokenWithLocation {
+            token: Token::String(first_string, first_type),
+            location: first_location,
+        } = &token_with_location
+        {
+            let mut merged_string = vec![first_string.to_owned()];
+            let mut merged_location = *first_location;
+
+            // Check if the next token is also a string literal with the same encoding.
+            while let Some(next_token_with_location) = tokens.peek(0) {
+                if let TokenWithLocation {
+                    token: Token::String(next_string, next_type),
+                    location: next_location,
+                } = next_token_with_location
+                {
+                    if first_type != next_type {
+                        // Cannot concatenate string literals with different encoding types.
+                        return Err(PreprocessFileError::new(
+                            next_location.file_number,
+                            PreprocessError::MessageWithRange(
+                                "Cannot concatenate string literals with different encoding types."
+                                    .to_owned(),
+                                next_location.range,
+                            ),
+                        ));
+                    }
+
+                    // Merge the next string literal.
+                    merged_string.push(next_string.to_owned());
+                    merged_location.range.end_included = next_location.range.end_included;
+
+                    tokens.next(); // Consume the string literal token.
+                } else {
+                    break;
+                }
+            }
+
+            let merged_token_with_location = TokenWithLocation::new(
+                Token::String(merged_string.join(""), *first_type),
+                merged_location,
+            );
+
+            output.push(merged_token_with_location);
+        } else {
+            output.push(token_with_location);
+        }
+    }
+
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Local;
@@ -2764,6 +2835,7 @@ hello FOO BAR A B C world.",
 __FILE__
 __LINE__
 __DATE__
+2025 // Prevent ajacent string concatenation
 __TIME__",
             &predefinitions,
         );
@@ -2774,7 +2846,7 @@ __TIME__",
 
         assert_eq!(
             print_tokens(&tokens),
-            format!(r#""src/main.c" 2 "{}" "{}""#, date_string, time_string)
+            format!(r#""src/main.c" 2 "{}" 2025 "{}""#, date_string, time_string)
         );
     }
 
@@ -2933,14 +3005,6 @@ hello A world.",
 // string as argument
 FOO("foo")
 
-// adjacent strings as argument
-FOO(
-    "Hello"
-    ","
-    " "
-    "World!"
-)
-
 // identifier as argument
 FOO(foo)
 
@@ -2952,10 +3016,7 @@ BAR(A,B)"#,
             &predefinitions,
         );
 
-        assert_eq!(
-            print_tokens(&tokens),
-            r#""foo" "Hello, World!" foo 123 '✨' 'a' 'a'"#
-        );
+        assert_eq!(print_tokens(&tokens), r#""foo" foo 123 '✨' 'a' 'a'"#);
 
         let tokens_nested = process_single_source_tokens(
             r#"#define FOO(a) 1 a
@@ -3164,24 +3225,30 @@ FOO(123)",
     fn test_process_stringizing() {
         let predefinitions = HashMap::new();
         let tokens = process_single_source_tokens(
-            "\
-#define FOO 3.14 \"world\" '🐘'
+            r#"
+#define FOO 3.14 "world" '🐘'
 #define STR(x) #x
 #define STR2(x) STR(x)
 #define STR3(...) #__VA_ARGS__
 STR(hello)
-STR(\"world\")
+11              // Prevent adjacent string concatenation
+STR("world")
+13
 STR(FOO)
+17
 STR('🦛')
+19
 STR2('🦛')
+23
 STR3(42)
-STR3(1, '2', \"3\", id, FOO)",
+29
+STR3(1, '2', "3", id, FOO)"#,
             &predefinitions,
         );
 
         assert_eq!(
             print_tokens(&tokens),
-            r#""hello" "\"world\"" "3.14 \"world\" \'🐘\'" "\'🦛\'" "\'🦛\'" "42" "1, \'2\', \"3\", id, 3.14 \"world\" \'🐘\'""#
+            r#""hello" 11 "\"world\"" 13 "3.14 \"world\" \'🐘\'" 17 "\'🦛\'" 19 "\'🦛\'" 23 "42" 29 "1, \'2\', \"3\", id, 3.14 \"world\" \'🐘\'""#
         );
 
         // err: stringizing in a not function-like macro
@@ -3695,7 +3762,7 @@ FOO BAR
 #embed "foo.bin"
 "#,
                 &[],
-                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[("resources/foo.bin", &[1, 2, 3, 4, 5])],
                 &[],
             )),
             "0x01 , 0x02 , 0x03 , 0x04 , 0x05"
@@ -3707,7 +3774,7 @@ FOO BAR
 #embed "foo.bin" limit(100)
 "#,
                 &[],
-                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[("resources/foo.bin", &[1, 2, 3, 4, 5])],
                 &[],
             )),
             "0x01 , 0x02 , 0x03 , 0x04 , 0x05"
@@ -3719,7 +3786,7 @@ FOO BAR
 #embed "foo.bin" limit(3) prefix(0xaa, 11, 'a') suffix(0)
 "#,
                 &[],
-                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[("resources/foo.bin", &[1, 2, 3, 4, 5])],
                 &[],
             )),
             "0xaa , 0x0b , 0x61 , 0x01 , 0x02 , 0x03 , 0x00"
@@ -3731,7 +3798,7 @@ FOO BAR
 #embed "foo.bin" limit(3) if_empty(0x11,0x13,0x17,0x19) prefix(0x3,0x5,0x7) suffix(0x23, 0x29)
 "#,
                 &[],
-                &[("share/foo.bin", &[])],
+                &[("resources/foo.bin", &[])],
                 &[],
             )),
             "0x11 , 0x13 , 0x17 , 0x19"
@@ -3745,7 +3812,7 @@ FOO BAR
 #embed "foo.bin"
 "#,
                 &[],
-                &[("share/foo.bin", &[1, 2, 3])],
+                &[("resources/foo.bin", &[1, 2, 3])],
                 &[],
             )),
             "0x01 , 0x02 , 0x03 0x01 , 0x02 , 0x03"
@@ -3759,7 +3826,7 @@ FOO BAR
 #embed FOO
 "#,
                 &[],
-                &[("share/foo.bin", &[1, 2, 3, 4, 5])],
+                &[("resources/foo.bin", &[1, 2, 3, 4, 5])],
                 &[],
             )),
             "0x01 , 0x02 , 0x03 , 0x04 , 0x05"
@@ -4026,7 +4093,7 @@ FOO BAR
 #endif
 "#,
                 &[],
-                &[("share/foo.bin", &[1, 2, 3]), ("share/bar.bin", &[])],
+                &[("resources/foo.bin", &[1, 2, 3]), ("resources/bar.bin", &[])],
                 &[],
             )),
             "11 17 29 foo_found bar_empty baz_not_found"
@@ -4222,6 +4289,63 @@ FOO BAR
                     }
                 }
             ))
+        ));
+    }
+
+    #[test]
+    fn test_process_adjacent_string_literals() {
+        let predefinitions = HashMap::new();
+
+        assert_eq!(
+            print_tokens(&process_single_source_tokens(
+                r#"
+"foo" "bar"
+"buz"
+
+#define STR1 "Hello, "
+#define STR2 "world!"
+#define STR3 STR1 STR2
+
+STR1
+STR2
+2025
+STR3
+"#,
+                &predefinitions,
+            )),
+            r#""foobarbuzHello, world!" 2025 "Hello, world!""#
+        );
+
+        assert_eq!(
+            print_tokens(&process_single_source_tokens(
+                r#"
+#define FOO(x) x
+
+// adjacent strings as argument
+FOO(
+    "Hello"
+    ","
+    " "
+    "World!"
+)
+"#,
+                &predefinitions,
+            )),
+            r#""Hello, World!""#
+        );
+
+        // err: concatenates string literals with different encoding types.
+        assert!(matches!(
+            process_single_source(r#""abc" u8"xyz""#, &predefinitions),
+            Err(
+                PreprocessFileError {
+                    file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                    error: PreprocessError::MessageWithRange(
+                        _,
+                        range
+                    )
+                }
+            ) if range == Range::from_detail(6, 0, 6, 7)
         ));
     }
 }
