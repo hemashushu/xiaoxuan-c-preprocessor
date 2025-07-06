@@ -21,11 +21,11 @@ mod peekable_iter;
 mod position;
 mod processor;
 mod range;
-mod token;
 
 pub const FILE_NUMBER_PREDEFINED: usize = 0;
 pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2_usize.pow(16);
 
+pub mod token;
 pub mod error_printer;
 pub mod file_provider;
 pub mod header_file_cache;

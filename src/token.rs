@@ -439,6 +439,67 @@ impl Display for Punctuator {
     }
 }
 
+// C23 keywords
+// This list contains all C keywords, including those introduced in C23,
+// but excludes any keywords that have been deprecated or removed in C23.
+// It is used to prevent keywords from being used as macro names in the preprocessor.
+// Reference: https://en.cppreference.com/w/c/keyword.html
+pub const C23_KEYWORDS: [&str; 53] = [
+    "alignas",
+    "alignof",
+    "auto",
+    "bool",
+    "break",
+    "case",
+    "char",
+    "const",
+    "constexpr",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "false",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "nullptr",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "static_assert",
+    "struct",
+    "switch",
+    "thread_local",
+    "true",
+    "typedef",
+    "typeof",
+    "typeof_unqual",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+    "_Atomic",
+    "_BitInt",
+    "_Complex",
+    "_Decimal128",
+    "_Decimal32",
+    "_Decimal64",
+    "_Generic",
+    "_Imaginary",
+];
+
 #[cfg(test)]
 mod tests {
     use crate::token::{CharType, StringType, Token};

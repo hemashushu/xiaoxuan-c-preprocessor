@@ -136,9 +136,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        FILE_NUMBER_SOURCE_FILE_BEGIN, TokenWithLocation, file_provider::FileProvider,
-        header_file_cache::HeaderFileCache, native_file_provider::NativeFileProvider,
-        process_source_file, processor::PreprocessResult,
+        file_provider::FileProvider, header_file_cache::HeaderFileCache, native_file_provider::NativeFileProvider, process_source_file, processor::PreprocessResult, token::C23_KEYWORDS, TokenWithLocation, FILE_NUMBER_SOURCE_FILE_BEGIN
     };
 
     fn get_test_resources_path() -> PathBuf {
@@ -184,7 +182,7 @@ mod tests {
             .join(" ")
     }
 
-    fn preprocess_source_file<T>(
+    fn process<T>(
         source_file_relative_path: &Path,
         file_provider: &T,
         file_cache: &mut HeaderFileCache,
@@ -194,9 +192,11 @@ mod tests {
     where
         T: FileProvider,
     {
+
         process_source_file(
             file_provider,
             file_cache,
+            &C23_KEYWORDS,
             predefinitions,
             false,
             source_file_number,
@@ -213,7 +213,7 @@ mod tests {
         let predefinitions = HashMap::new();
 
         let file_data_c = Path::new("src/data.c");
-        let file_data_c_result = preprocess_source_file(
+        let file_data_c_result = process(
             file_data_c,
             &file_provider,
             &mut file_cache,
@@ -235,7 +235,7 @@ mod tests {
         );
 
         let file_lib_c = Path::new("src/lib.c");
-        let file_lib_c_result = preprocess_source_file(
+        let file_lib_c_result = process(
             file_lib_c,
             &file_provider,
             &mut file_cache,
@@ -247,12 +247,12 @@ mod tests {
             "\
             int add ( int , int ) ; \
             int add ( int a , int b ) { \
-            return a + b ; \
+                return a + b ; \
             }"
         );
 
         let file_main_c = Path::new("src/main.c");
-        let file_main_c_result = preprocess_source_file(
+        let file_main_c_result = process(
             file_main_c,
             &file_provider,
             &mut file_cache,

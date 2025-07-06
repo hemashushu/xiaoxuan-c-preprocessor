@@ -26,6 +26,8 @@ where
     /// Mutable reference to the file cache.
     pub file_cache: &'a mut HeaderFileCache,
 
+    pub reserved_keywords: &'a [&'a str],
+
     /// Macro definitions and related state.
     pub macro_map: MacroMap,
 
@@ -55,6 +57,7 @@ where
     pub fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
+        reserved_keywords: &'a [&'a str],
         should_resolve_relative_path: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
@@ -63,6 +66,7 @@ where
         Self {
             file_provider,
             file_cache,
+            reserved_keywords,
             should_resolve_relative_path,
             current_file: ContextFile::new(
                 current_file_number,
@@ -81,6 +85,7 @@ where
     pub fn from_keyvalues(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
+        reserved_keywords: &'a [&'a str],
         predefinitions: &HashMap<String, String>,
         should_resolve_relative_path: bool,
         current_file_number: usize,
@@ -90,6 +95,7 @@ where
         Ok(Self {
             file_provider,
             file_cache,
+            reserved_keywords,
             macro_map: MacroMap::from_key_values(predefinitions)?,
             should_resolve_relative_path,
             current_file: ContextFile::new(

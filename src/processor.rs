@@ -40,6 +40,8 @@ pub fn process_source_file<T>(
     file_provider: &T,
     file_cache: &mut HeaderFileCache,
 
+    reserved_keywords: &[&str],
+
     // The predefined macros to be used during preprocessing.
     // Such as `__STDC__` and `__STDC_VERSION__`, they are provided by the compiler.
     // see:
@@ -71,6 +73,7 @@ where
     let mut processor = Processor::new(
         file_provider,
         file_cache,
+        reserved_keywords,
         predefinitions,
         should_resolve_relative_path,
         source_file_number,
@@ -141,6 +144,7 @@ where
     fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
+        reserved_keywords: &'a [&'a str],
         predefinitions: &HashMap<String, String>,
         should_resolve_relative_path: bool,
 
@@ -151,6 +155,7 @@ where
         let context = Context::from_keyvalues(
             file_provider,
             file_cache,
+            reserved_keywords,
             predefinitions,
             should_resolve_relative_path,
             source_file_number,
@@ -248,6 +253,19 @@ where
                     });
                 }
 
+                if self.context.reserved_keywords.contains(&name.as_str()) {
+                    return Err(PreprocessFileError {
+                        file_number: self.context.current_file.number,
+                        error: PreprocessError::MessageWithRange(
+                            format!(
+                                "The identifier '{}' is a C keyword and cannot be used as a macro name.",
+                                name
+                            ),
+                            *range,
+                        ),
+                    });
+                }
+
                 let add_result = self.context.macro_map.add_object_like(
                     self.context.current_file.number,
                     name,
@@ -311,6 +329,19 @@ where
                 file_number: self.context.current_file.number,
                 error: PreprocessError::MessageWithRange(
                     "The identifier 'defined' cannot be used as a macro name.".to_string(),
+                    *range,
+                ),
+            });
+        }
+
+        if self.context.reserved_keywords.contains(&identifier) {
+            return Err(PreprocessFileError {
+                file_number: self.context.current_file.number,
+                error: PreprocessError::MessageWithRange(
+                    format!(
+                        "The identifier '{}' is a C keyword and cannot be undefined.",
+                        identifier
+                    ),
                     *range,
                 ),
             });
@@ -2577,7 +2608,7 @@ mod tests {
         processor::{PreprocessResult, process_source_file},
         prompt::{Prompt, PromptLevel},
         range::Range,
-        token::{IntegerNumber, IntegerNumberType, Number, Punctuator, Token},
+        token::{C23_KEYWORDS, IntegerNumber, IntegerNumberType, Number, Punctuator, Token},
     };
 
     fn process_single_source(
@@ -2591,6 +2622,7 @@ mod tests {
         process_source_file(
             &file_provider,
             &mut file_cache,
+            &C23_KEYWORDS,
             predefinitions,
             false,
             FILE_NUMBER_SOURCE_FILE_BEGIN,
@@ -2634,6 +2666,7 @@ mod tests {
         process_source_file(
             &file_provider,
             &mut file_cache,
+            &C23_KEYWORDS,
             &predefinitions,
             false,
             FILE_NUMBER_SOURCE_FILE_BEGIN,
@@ -2923,6 +2956,23 @@ hello FOO BAR A B C world.",
                 )
             })
         ));
+
+        // err: define a macro with the same name as C keyword `return`
+        assert!(matches!(
+            process_single_source(
+                "\
+        #define return break",
+                &HashMap::new(),
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    range
+                )
+            })
+            if range == Range::from_detail(8, 0, 8, 6)
+        ));
     }
 
     #[test]
@@ -2990,6 +3040,23 @@ hello A world.",
                     }
                 )
             })
+        ));
+
+        // err: undefine a macro with the same name as C keyword `return`
+        assert!(matches!(
+            process_single_source(
+                "\
+        #undef return",
+                &HashMap::new(),
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    range
+                )
+            })
+            if range == Range::from_detail(7, 0, 7, 6)
         ));
     }
 
@@ -4093,7 +4160,10 @@ FOO BAR
 #endif
 "#,
                 &[],
-                &[("resources/foo.bin", &[1, 2, 3]), ("resources/bar.bin", &[])],
+                &[
+                    ("resources/foo.bin", &[1, 2, 3]),
+                    ("resources/bar.bin", &[])
+                ],
                 &[],
             )),
             "11 17 29 foo_found bar_empty baz_not_found"

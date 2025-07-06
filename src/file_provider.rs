@@ -6,6 +6,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
+/// An abstract file system interface that provides
+/// access to the user and system header files and binary resources.
 pub trait FileProvider {
     /// Resolves a user header file path relative to the user header search directories.
     ///
