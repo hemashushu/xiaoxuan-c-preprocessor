@@ -14,7 +14,7 @@ use chrono::Local;
 use crate::{
     PreprocessError, PreprocessFileError, TokenWithLocation, TokenWithRange,
     ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
-    context::{Context, ContextFile, FileOrigin, IncludeFile},
+    context::{Context, FileItem, FileLocation, FileOrigin},
     expression::evaluate_token_with_locations,
     file_provider::{FileProvider, ResolvedResult},
     header_file_cache::HeaderFileCache,
@@ -24,23 +24,26 @@ use crate::{
     peekable_iter::PeekableIter,
     prompt::{Prompt, PromptLevel},
     range::Range,
-    token::{IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token},
+    token::{IntegerNumber, IntegerNumberLength, Number, Punctuator, StringEncoding, Token},
 };
 
 const PEEK_BUFFER_LENGTH_PARSE_CODE: usize = 2;
 const PEEK_BUFFER_LENGTH_CONCATENATE_STRING: usize = 2;
 
-/// Preprocesses C source files.
+/// Preprocesses a C source file.
 ///
 /// see also:
 /// - https://en.cppreference.com/w/c/language.html
 /// - https://en.cppreference.com/w/c/preprocessor.html
 /// - https://en.cppreference.com/w/c/language/translation_phases.html
+#[allow(clippy::too_many_arguments)]
 pub fn process_source_file<T>(
     file_provider: &T,
     file_cache: &mut HeaderFileCache,
 
-    reserved_keywords: &[&str],
+    // Keywords which are used to prevent defining macros with these names.
+    // Such as `int`, `return`, `if`, `else`, etc.
+    reserved_identifiers: &[&str],
 
     // The predefined macros to be used during preprocessing.
     // Such as `__STDC__` and `__STDC_VERSION__`, they are provided by the compiler.
@@ -49,22 +52,43 @@ pub fn process_source_file<T>(
     // - https://en.cppreference.com/w/c/preprocessor/replace.html
     predefinitions: &HashMap<String, String>,
 
-    // If true, also search for headers in the directory where the source file resides.
-    // For example, if the source file is `src/foo/bar.c` and this flag is set,
-    // then `#include "header.h"` will look in `src/foo/`,
-    // and `#include "../hello/world.h"` will look in `src/hello`.
-    // otherwise, it will only search in the specified `user_directories`.
-    should_resolve_relative_path: bool,
+    // A flag to control whether to resolve relative paths within the current source file.
+    //
+    // Set to true to resolve relative paths to the source file,
+    // otherwise, preprocessor will only search in the specified including directories.
+    //
+    // For example, consider there are 3 defined include directories:
+    //
+    // - `./include`
+    // - `./src/headers`
+    // - `/usr/include`
+    //
+    // The statement `#include "foo.h"` in the source file `src/main.c` will try to
+    // match `foo.h` in the following order:
+    //
+    // - `./include/foo.h`
+    // - `./src/headers/foo.h`
+    // - `/usr/include/foo.h`
+    //
+    // If `resolve_relative_path_within_current_file` is true, then it will also
+    // try to match `src/foo.h`.
+    resolve_relative_path_within_current_file: bool,
 
     // The number of the source file, used for error reporting.
-    // It should begin with `FILE_NUMBER_SOURCE_FILE_BEGIN`.
+    // It should begin with `FILE_NUMBER_SOURCE_FILE_BEGIN` (which default to 65536)
+    // and incremented by 1 for each source file.
     //
-    // _Source file_ refer to the C source file (e.g. `main.c`)
+    // Note that the term "source file" refer only to the C source file (e.g. `main.c`),
+    // it does not include the header files (e.g. `header.h`).
     source_file_number: usize,
 
-    // The relative path of the source file, relative to the project root directory.
-    // It is used to generate the value of the `__FILE__` macro.
-    source_file_relative_path: &Path,
+    // The path name of the source file.
+    // It is used to generate the value of the `__FILE__` macro and the parser wouldn't use it to load the file.
+    // Usually, it's value is the relative path to the project root directory.
+    source_file_path_name: &Path,
+
+    // The canonical full path of the source file.
+    // This is used to load the source file content actually.
     source_file_canonical_full_path: &Path,
 ) -> Result<PreprocessResult, PreprocessFileError>
 where
@@ -73,19 +97,19 @@ where
     let mut processor = Processor::new(
         file_provider,
         file_cache,
-        reserved_keywords,
+        reserved_identifiers,
         predefinitions,
-        should_resolve_relative_path,
+        resolve_relative_path_within_current_file,
         source_file_number,
-        source_file_relative_path,
+        source_file_path_name,
         source_file_canonical_full_path,
     )?;
 
     // Add source file to the `included_files` list to
     // prevent recursive inclusion.
-    processor.context.included_files.push(IncludeFile::new(
+    processor.context.included_files.push(FileLocation::new(
         source_file_canonical_full_path,
-        FileOrigin::from_source_file(source_file_relative_path),
+        FileOrigin::from_source_file(source_file_path_name),
     ));
 
     // Load and parse the source file.
@@ -141,25 +165,26 @@ impl<'a, T> Processor<'a, T>
 where
     T: FileProvider,
 {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
-        reserved_keywords: &'a [&'a str],
+        reserved_identifiers: &'a [&'a str],
         predefinitions: &HashMap<String, String>,
-        should_resolve_relative_path: bool,
+        resolve_relative_path_within_current_file: bool,
 
         source_file_number: usize,
-        source_file_relative_path: &Path,
+        source_file_path_name: &Path,
         source_file_canonical_full_path: &Path,
     ) -> Result<Self, PreprocessFileError> {
         let context = Context::from_keyvalues(
             file_provider,
             file_cache,
-            reserved_keywords,
+            reserved_identifiers,
             predefinitions,
-            should_resolve_relative_path,
+            resolve_relative_path_within_current_file,
             source_file_number,
-            source_file_relative_path,
+            source_file_path_name,
             source_file_canonical_full_path,
         )
         .map_err(|error| PreprocessFileError {
@@ -221,7 +246,10 @@ where
             .map(|token_with_range| {
                 TokenWithLocation::new(
                     token_with_range.token.clone(),
-                    Location::new(self.context.current_file.number, &token_with_range.range),
+                    Location::new(
+                        self.context.current_file_item.number,
+                        &token_with_range.range,
+                    ),
                 )
             })
             .collect::<Vec<_>>();
@@ -245,7 +273,7 @@ where
             } => {
                 if name == "defined" {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             "The identifier 'defined' cannot be used as a macro name.".to_string(),
                             *range,
@@ -253,12 +281,12 @@ where
                     });
                 }
 
-                if self.context.reserved_keywords.contains(&name.as_str()) {
+                if self.context.reserved_identifiers.contains(&name.as_str()) {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             format!(
-                                "The identifier '{}' is a C keyword and cannot be used as a macro name.",
+                                "The identifier '{}' is reversed and cannot be used as a macro name.",
                                 name
                             ),
                             *range,
@@ -267,14 +295,14 @@ where
                 }
 
                 let add_result = self.context.macro_map.add_object_like(
-                    self.context.current_file.number,
+                    self.context.current_file_item.number,
                     name,
                     definition,
                 );
 
                 if add_result == MacroManipulationResult::Failure {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             format!("Macro '{}' is already defined.", name),
                             *range,
@@ -289,7 +317,7 @@ where
             } => {
                 if name == "defined" {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             "The identifier 'defined' cannot be used as a macro name.".to_string(),
                             *range,
@@ -297,8 +325,21 @@ where
                     });
                 }
 
+                if self.context.reserved_identifiers.contains(&name.as_str()) {
+                    return Err(PreprocessFileError {
+                        file_number: self.context.current_file_item.number,
+                        error: PreprocessError::MessageWithRange(
+                            format!(
+                                "The identifier '{}' is reversed and cannot be used as a macro name.",
+                                name
+                            ),
+                            *range,
+                        ),
+                    });
+                }
+
                 let result = self.context.macro_map.add_function_like(
-                    self.context.current_file.number,
+                    self.context.current_file_item.number,
                     name,
                     parameters,
                     definition,
@@ -306,7 +347,7 @@ where
 
                 if result == MacroManipulationResult::Failure {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             format!("Macro '{}' is already defined.", name),
                             *range,
@@ -324,34 +365,34 @@ where
         identifier: &str,
         range: &Range,
     ) -> Result<(), PreprocessFileError> {
-        if identifier == "defined" {
-            return Err(PreprocessFileError {
-                file_number: self.context.current_file.number,
-                error: PreprocessError::MessageWithRange(
-                    "The identifier 'defined' cannot be used as a macro name.".to_string(),
-                    *range,
-                ),
-            });
-        }
+        // if identifier == "defined" {
+        //     return Err(PreprocessFileError {
+        //         file_number: self.context.current_file_item.number,
+        //         error: PreprocessError::MessageWithRange(
+        //             "The identifier 'defined' cannot be used as a macro name.".to_string(),
+        //             *range,
+        //         ),
+        //     });
+        // }
 
-        if self.context.reserved_keywords.contains(&identifier) {
-            return Err(PreprocessFileError {
-                file_number: self.context.current_file.number,
-                error: PreprocessError::MessageWithRange(
-                    format!(
-                        "The identifier '{}' is a C keyword and cannot be undefined.",
-                        identifier
-                    ),
-                    *range,
-                ),
-            });
-        }
+        // if self.context.reserved_identifiers.contains(&identifier) {
+        //     return Err(PreprocessFileError {
+        //         file_number: self.context.current_file_item.number,
+        //         error: PreprocessError::MessageWithRange(
+        //             format!(
+        //                 "The identifier '{}' is a C keyword and cannot be undefined.",
+        //                 identifier
+        //             ),
+        //             *range,
+        //         ),
+        //     });
+        // }
 
         let result = self.context.macro_map.remove(identifier);
 
         if result == MacroManipulationResult::Failure {
             return Err(PreprocessFileError {
-                file_number: self.context.current_file.number,
+                file_number: self.context.current_file_item.number,
                 error: PreprocessError::MessageWithRange(
                     format!("Macro '{}' is not defined.", identifier),
                     *range,
@@ -371,7 +412,7 @@ where
                 let expended_tokens = self.expand_marco(
                     vec![TokenWithLocation::new(
                         Token::Identifier(id.to_owned()),
-                        Location::new(self.context.current_file.number, range),
+                        Location::new(self.context.current_file_item.number, range),
                     )],
                     &HashMap::new(),
                     ExpandContextType::Normal,
@@ -379,7 +420,7 @@ where
 
                 if expended_tokens.is_empty() {
                     return Err(PreprocessFileError {
-                    file_number: self.context.current_file.number,
+                    file_number: self.context.current_file_item.number,
                     error: PreprocessError::MessageWithRange(
                         "The macro expands to empty; expected a single string literal representing the file path.".to_owned(),
                         *range,
@@ -389,7 +430,7 @@ where
 
                 if expended_tokens.len() > 1 {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             "The macro expands to multiple tokens; expected a single string literal representing the file path."
                                 .to_owned(),
@@ -420,7 +461,7 @@ where
             } => (
                 PathBuf::from(relative_path),
                 *is_system_header,
-                Location::new(self.context.current_file.number, range),
+                Location::new(self.context.current_file_item.number, range),
             ),
         };
 
@@ -447,8 +488,12 @@ where
         } else {
             match self.context.file_provider.resolve_user_file_with_fallback(
                 &relative_path,
-                &self.context.current_file.source_file.canonical_full_path,
-                self.context.should_resolve_relative_path,
+                &self
+                    .context
+                    .current_file_item
+                    .file_location
+                    .canonical_full_path,
+                self.context.resolve_relative_path_within_current_file,
             ) {
                 Some(ResolvedResult {
                     canonical_full_path,
@@ -478,7 +523,7 @@ where
         // add the file to the included files to prevent multiple inclusions.
         // Note that ANCPP only includes header files once, even if the header file
         // has no include guards or `#pragma once`.
-        self.context.included_files.push(IncludeFile::new(
+        self.context.included_files.push(FileLocation::new(
             &canonical_path,
             if is_system_header {
                 FileOrigin::from_system_header_file(&relative_path)
@@ -488,10 +533,10 @@ where
         ));
 
         // Load the file content from the file cache.
-        if let Some(program) = self.context.file_cache.get_program(&canonical_path) {
+        if let Some(program) = self.context.header_file_cache.get_program(&canonical_path) {
             let file_number = self
                 .context
-                .file_cache
+                .header_file_cache
                 .get_file_number(&canonical_path)
                 .unwrap();
             let program_owned = program.clone();
@@ -520,7 +565,10 @@ where
                 })?;
 
             // add the file to the cache
-            let file_number = self.context.file_cache.add(&canonical_path, &file_content);
+            let file_number = self
+                .context
+                .header_file_cache
+                .add(&canonical_path, &file_content);
 
             // Parse the file content to get the program.
             let program = parse_from_str(&file_content)
@@ -528,7 +576,7 @@ where
 
             // update cache
             self.context
-                .file_cache
+                .header_file_cache
                 .set_program(&canonical_path, program.clone());
 
             // check header guard or `#pragma once`
@@ -558,12 +606,12 @@ where
         // This will handle any macros, directives, and other preprocessing tasks.
 
         // store the current context file as `last_context_file`
-        let last_context_file = self.context.current_file.clone();
+        let last_context_file = self.context.current_file_item.clone();
 
         // update the current context file to the included file
-        let current_context_file = ContextFile::new(
+        let current_context_file = FileItem::new(
             file_number,
-            IncludeFile::new(
+            FileLocation::new(
                 canonical_path,
                 if is_system_header {
                     FileOrigin::from_system_header_file(relative_path)
@@ -572,13 +620,13 @@ where
                 },
             ),
         );
-        self.context.current_file = current_context_file;
+        self.context.current_file_item = current_context_file;
 
         // process the program
         self.process_program(program)?;
 
         // restore the `last_context_file`
-        self.context.current_file = last_context_file;
+        self.context.current_file_item = last_context_file;
 
         Ok(())
     }
@@ -613,7 +661,7 @@ where
                 let expended_tokens = self.expand_marco(
                     vec![TokenWithLocation::new(
                         Token::Identifier(id.to_owned()),
-                        Location::new(self.context.current_file.number, range),
+                        Location::new(self.context.current_file_item.number, range),
                     )],
                     &HashMap::new(),
                     ExpandContextType::Normal,
@@ -621,7 +669,7 @@ where
 
                 if expended_tokens.is_empty() {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             "The macro expands to empty; expected a single string literal representing the file path.".to_owned(),
                             *range,
@@ -631,7 +679,7 @@ where
 
                 if expended_tokens.len() > 1 {
                     return Err(PreprocessFileError {
-                        file_number: self.context.current_file.number,
+                        file_number: self.context.current_file_item.number,
                         error: PreprocessError::MessageWithRange(
                             "The macro expands to multiple tokens; expected a single string literal representing the file path."
                                 .to_owned(),
@@ -674,7 +722,7 @@ where
             } => (
                 PathBuf::from(relative_path),
                 *is_system_header,
-                Location::new(self.context.current_file.number, range),
+                Location::new(self.context.current_file_item.number, range),
                 *limit,
                 suffix.to_vec(),
                 prefix.to_vec(),
@@ -705,8 +753,12 @@ where
         } else {
             match self.context.file_provider.resolve_user_file_with_fallback(
                 &relative_path,
-                &self.context.current_file.source_file.canonical_full_path,
-                self.context.should_resolve_relative_path,
+                &self
+                    .context
+                    .current_file_item
+                    .file_location
+                    .canonical_full_path,
+                self.context.resolve_relative_path_within_current_file,
             ) {
                 Some(ResolvedResult {
                     canonical_full_path,
@@ -748,7 +800,7 @@ where
                         Token::Number(Number::Integer(IntegerNumber::new(
                             format!("0x{:02x}", byte),
                             false,
-                            IntegerNumberType::Default,
+                            IntegerNumberLength::Default,
                         ))),
                         Location::default(),
                     )
@@ -835,7 +887,7 @@ where
                         .map(|item| {
                             TokenWithLocation::new(
                                 item.token.clone(),
-                                Location::new(self.context.current_file.number, &item.range),
+                                Location::new(self.context.current_file_item.number, &item.range),
                             )
                         })
                         .collect::<Vec<_>>();
@@ -848,7 +900,7 @@ where
 
                     evaluate_token_with_locations(
                         &expanded_tokens,
-                        self.context.current_file.number,
+                        self.context.current_file_item.number,
                     )?
                 }
             };
@@ -877,7 +929,7 @@ where
 
     fn process_error(&mut self, message: &str, range: &Range) -> Result<(), PreprocessFileError> {
         Err(PreprocessFileError {
-            file_number: self.context.current_file.number,
+            file_number: self.context.current_file_item.number,
             error: PreprocessError::MessageWithRange(
                 format!("User defined error: {}", message),
                 *range,
@@ -892,7 +944,7 @@ where
     ) -> Result<(), PreprocessFileError> {
         let prompt = Prompt::MessageWithRange(
             PromptLevel::Warning,
-            self.context.current_file.number,
+            self.context.current_file_item.number,
             format!("User defined warning: {}", message),
             *range,
         );
@@ -927,9 +979,9 @@ where
 
         if matches!(
             first_statement,
-            Statement::Pragma(Pragma { parts, .. })
+            Statement::Pragma(Pragma { components, .. })
             if matches!(
-                parts.first(),
+                components.first(),
                 Some(TokenWithRange { token: Token::Identifier(name), .. }) if name == "once"))
         {
             // The file has `#pragma once`, we can skip further checks.
@@ -1048,7 +1100,8 @@ where
 
         let mut iter = token_with_locations.into_iter();
         let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_PARSE_CODE);
-        let mut code_parser = CodeParser::new(&mut peekable_iter, self.context.current_file.number);
+        let mut code_parser =
+            CodeParser::new(&mut peekable_iter, self.context.current_file_item.number);
 
         while let Some(current_token_with_location) = code_parser.next_token_with_location() {
             match &current_token_with_location.token {
@@ -1138,17 +1191,17 @@ where
                             }
                         }
                         "__FILE__" => {
-                            let file_path = match &self.context.current_file.source_file.file_origin
-                            {
-                                FileOrigin::SourceFile(path_buf) => path_buf,
-                                FileOrigin::UserHeader(path_buf) => path_buf,
-                                FileOrigin::SystemHeader(path_buf) => path_buf,
-                            };
+                            let file_path =
+                                match &self.context.current_file_item.file_location.file_origin {
+                                    FileOrigin::SourceFile(path_buf) => path_buf,
+                                    FileOrigin::UserHeader(path_buf) => path_buf,
+                                    FileOrigin::SystemHeader(path_buf) => path_buf,
+                                };
 
                             // expands to the name of the current file, as a character string literal
                             let value = file_path.to_string_lossy().to_string();
                             let token = TokenWithLocation::new(
-                                Token::String(value, StringType::Default),
+                                Token::String(value, StringEncoding::Default),
                                 Location::default(),
                             );
                             output.push(token);
@@ -1160,7 +1213,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     value.to_string(),
                                     false,
-                                    IntegerNumberType::Default,
+                                    IntegerNumberLength::Default,
                                 ))),
                                 Location::default(),
                             );
@@ -1176,7 +1229,7 @@ where
                             // https://docs.rs/chrono/latest/chrono/format/strftime/index.html
                             let date_string = now.format("%b %e %Y").to_string();
                             let token = TokenWithLocation::new(
-                                Token::String(date_string, StringType::Default),
+                                Token::String(date_string, StringEncoding::Default),
                                 Location::default(),
                             );
                             output.push(token);
@@ -1190,7 +1243,7 @@ where
                             // https://docs.rs/chrono/latest/chrono/format/strftime/index.html
                             let time_string = now.format("%H:%M:%S").to_string();
                             let token = TokenWithLocation::new(
-                                Token::String(time_string, StringType::Default),
+                                Token::String(time_string, StringEncoding::Default),
                                 Location::default(),
                             );
                             output.push(token);
@@ -1211,7 +1264,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     value.to_string(),
                                     false,
-                                    IntegerNumberType::Default,
+                                    IntegerNumberLength::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1353,7 +1406,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     number.to_string(),
                                     false,
-                                    IntegerNumberType::Default,
+                                    IntegerNumberLength::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1439,7 +1492,7 @@ where
                                             }
                                         }
                                     }
-                                    Some(Token::FilePath(relative_path, is_system_header)) => {
+                                    Some(Token::HeaderFile(relative_path, is_system_header)) => {
                                         let relative_path_owned = relative_path.to_owned();
                                         let is_system_header_owned = *is_system_header;
                                         let location = *code_parser.peek_location(0).unwrap();
@@ -1492,8 +1545,12 @@ where
                                 .file_provider
                                 .resolve_user_file_with_fallback(
                                     &relative_path,
-                                    &self.context.current_file.source_file.canonical_full_path,
-                                    self.context.should_resolve_relative_path,
+                                    &self
+                                        .context
+                                        .current_file_item
+                                        .file_location
+                                        .canonical_full_path,
+                                    self.context.resolve_relative_path_within_current_file,
                                 )
                                 .is_some()
                             {
@@ -1506,7 +1563,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     result.to_string(),
                                     false,
-                                    IntegerNumberType::Default,
+                                    IntegerNumberLength::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1595,7 +1652,7 @@ where
                                             }
                                         }
                                     }
-                                    Some(Token::FilePath(relative_path, is_system_file)) => {
+                                    Some(Token::HeaderFile(relative_path, is_system_file)) => {
                                         let relative_path_owned = relative_path.to_owned();
                                         let is_system_file_owned = *is_system_file;
                                         let location = *code_parser.peek_location(0).unwrap();
@@ -1661,8 +1718,12 @@ where
                                     .file_provider
                                     .resolve_user_file_with_fallback(
                                         &relative_path,
-                                        &self.context.current_file.source_file.canonical_full_path,
-                                        self.context.should_resolve_relative_path,
+                                        &self
+                                            .context
+                                            .current_file_item
+                                            .file_location
+                                            .canonical_full_path,
+                                        self.context.resolve_relative_path_within_current_file,
                                     )
                                     .map_or(
                                         0,
@@ -1688,7 +1749,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     result.to_string(),
                                     false,
-                                    IntegerNumberType::Default,
+                                    IntegerNumberLength::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1782,7 +1843,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     value.to_string(),
                                     false,
-                                    IntegerNumberType::Long,
+                                    IntegerNumberLength::Long,
                                 ))),
                                 Location::default(),
                             ));
@@ -2260,7 +2321,10 @@ where
                                         // Convert the tokens to a string literal.
                                         let generated_string = stringify_arguments(tokens)?;
                                         let generated_token = TokenWithLocation::new(
-                                            Token::String(generated_string, StringType::Default),
+                                            Token::String(
+                                                generated_string,
+                                                StringEncoding::Default,
+                                            ),
                                             Location::default(),
                                         );
                                         output.push(generated_token);
@@ -2275,7 +2339,7 @@ where
                                             let generated_token = TokenWithLocation::new(
                                                 Token::String(
                                                     generated_string,
-                                                    StringType::Default,
+                                                    StringEncoding::Default,
                                                 ),
                                                 Location::default(),
                                             );
@@ -2608,10 +2672,10 @@ mod tests {
         processor::{PreprocessResult, process_source_file},
         prompt::{Prompt, PromptLevel},
         range::Range,
-        token::{C23_KEYWORDS, IntegerNumber, IntegerNumberType, Number, Punctuator, Token},
+        token::{C23_KEYWORDS, IntegerNumber, IntegerNumberLength, Number, Punctuator, Token},
     };
 
-    fn process_single_source(
+    fn process_single(
         src: &str,
         predefinitions: &HashMap<String, String>,
     ) -> Result<PreprocessResult, PreprocessFileError> {
@@ -2631,14 +2695,14 @@ mod tests {
         )
     }
 
-    fn process_single_source_tokens(
+    fn process_single_get_tokens(
         src: &str,
         predefinitions: &HashMap<String, String>,
     ) -> Vec<TokenWithLocation> {
-        process_single_source(src, predefinitions).unwrap().output
+        process_single(src, predefinitions).unwrap().output
     }
 
-    fn process_multiple_source(
+    fn process_multiple(
         main_src: &str,
         user_header_files: &[(&str, &str)],
         user_binary_files: &[(&str, &[u8])],
@@ -2675,13 +2739,13 @@ mod tests {
         )
     }
 
-    fn process_multiple_source_tokens(
+    fn process_multiple_get_tokens(
         main_src: &str,
         user_header_files: &[(&str, &str)],
         user_binary_files: &[(&str, &[u8])],
         system_header_files: &[(&str, &str)],
     ) -> Vec<TokenWithLocation> {
-        process_multiple_source(
+        process_multiple(
             main_src,
             user_header_files,
             user_binary_files,
@@ -2703,7 +2767,7 @@ mod tests {
     fn test_process_code_without_directive() {
         let filenum = FILE_NUMBER_SOURCE_FILE_BEGIN;
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 int main() {
     return 0;
@@ -2742,7 +2806,7 @@ int main() {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "0".to_string(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Location::from_detail(filenum, 24, 1, 11, 1),
                 ),
@@ -2763,7 +2827,7 @@ int main() {
     #[test]
     fn test_process_pragma() {
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 #pragma STDC FENV_ACCESS ON
 #pragma STDC FP_CONTRACT OFF
@@ -2780,7 +2844,7 @@ int main() {
         let predefinitions = HashMap::new();
 
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #error \"foobar\"",
                 &predefinitions,
@@ -2811,7 +2875,7 @@ int main() {
         let predefinitions = HashMap::new();
 
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #warning \"foobar\"",
                 &predefinitions,
@@ -2849,7 +2913,7 @@ int main() {
         predefinitions.insert("B".to_string(), "".to_string());
         predefinitions.insert("C".to_string(), "FOO".to_string()); // Reference to FOO
 
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 hello FOO BAR A B C world.",
             &predefinitions,
@@ -2863,7 +2927,7 @@ hello FOO BAR A B C world.",
     #[test]
     fn test_process_dynamic_macro() {
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 __FILE__
 __LINE__
@@ -2889,7 +2953,7 @@ __TIME__",
         predefinitions.insert("FOO".to_string(), "'🦛'".to_string());
         predefinitions.insert("BAR".to_string(), "\"✨ abc\"".to_string());
 
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 #define A 123
 #define B
@@ -2904,7 +2968,7 @@ hello FOO BAR A B C world.",
 
         // err: redefine FOO
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define FOO 'a'
 #define FOO 'b'",
@@ -2932,7 +2996,7 @@ hello FOO BAR A B C world.",
 
         // err: define 'defined' macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define defined 123",
                 &HashMap::new(),
@@ -2959,7 +3023,7 @@ hello FOO BAR A B C world.",
 
         // err: define a macro with the same name as C keyword `return`
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
         #define return break",
                 &HashMap::new(),
@@ -2977,7 +3041,7 @@ hello FOO BAR A B C world.",
 
     #[test]
     fn test_process_undefine() {
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 #define A 123
 #undef A
@@ -2989,7 +3053,7 @@ hello A world.",
 
         // err: undefine non-existing macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #undef NONE
 ",
@@ -3016,7 +3080,7 @@ hello A world.",
         ));
         // err: undefine 'defined' macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #undef defined
 ",
@@ -3044,7 +3108,7 @@ hello A world.",
 
         // err: undefine a macro with the same name as C keyword `return`
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
         #undef return",
                 &HashMap::new(),
@@ -3063,7 +3127,7 @@ hello A world.",
     #[test]
     fn test_process_define_function() {
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             r#"#define FOO(x) x
 #define BAR(x, y) x y
 #define A 'a'
@@ -3085,7 +3149,7 @@ BAR(A,B)"#,
 
         assert_eq!(print_tokens(&tokens), r#""foo" foo 123 '✨' 'a' 'a'"#);
 
-        let tokens_nested = process_single_source_tokens(
+        let tokens_nested = process_single_get_tokens(
             r#"#define FOO(a) 1 a
 #define BAR(x, y) 2 FOO(x) y
 #define BUZ(z) 3 BAR(z, spark)
@@ -3097,7 +3161,7 @@ BUZ(hippo)"#,
 
         // err: redefine function-like macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define FOO(x) x
 #define FOO(y) y + 1",
@@ -3125,7 +3189,7 @@ BUZ(hippo)"#,
 
         // err: not enough arguments for function-like macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define FOO(x,y) x y
 FOO(1)",
@@ -3153,7 +3217,7 @@ FOO(1)",
 
         // err: too many arguments for function-like macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define FOO(x,y) x y
 FOO(1, 2, 3)",
@@ -3181,7 +3245,7 @@ FOO(1, 2, 3)",
 
         // err: invalid argument type for function-like macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define FOO(x) x
 FOO(i++)",
@@ -3209,7 +3273,7 @@ FOO(i++)",
 
         // err: define 'defined' macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define defined(x) 123",
                 &predefinitions
@@ -3238,7 +3302,7 @@ FOO(i++)",
     #[test]
     fn test_process_define_function_variadic() {
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 // Outputs argument list as is
 #define FOO(...) __VA_ARGS__
@@ -3261,7 +3325,7 @@ BUZ(u,v,w)",
 
         // err: not enough arguments for variadic macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define FOO(x,y,...) __VA_ARGS__
 FOO(123)",
@@ -3291,7 +3355,7 @@ FOO(123)",
     #[test]
     fn test_process_stringizing() {
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             r#"
 #define FOO 3.14 "world" '🐘'
 #define STR(x) #x
@@ -3320,7 +3384,7 @@ STR3(1, '2', "3", id, FOO)"#,
 
         // err: stringizing in a not function-like macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define STR #123
 STR",
@@ -3348,7 +3412,7 @@ STR",
 
         // err: stringizing on punctuator
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define PLUS 1+2
 #define STR(x) #x
@@ -3379,7 +3443,7 @@ STR(PLUS)",
     #[test]
     fn test_process_token_concatenation() {
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_tokens(
+        let tokens = process_single_get_tokens(
             "\
 #define FOO a##1
 #define BAR sprite##2##b
@@ -3402,7 +3466,7 @@ CONCAT2(9, s)
 
         // err: concatenate a number and an identifier
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define CONCAT 1##hello
 CONCAT",
@@ -3430,7 +3494,7 @@ CONCAT",
 
         // err: concatenate a number and an identifier through a function-like macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define CONCAT(a, b) a##b
 CONCAT(1, hello)",
@@ -3448,7 +3512,7 @@ CONCAT(1, hello)",
 
         // err: concatenate an identifier and a string
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define CONCAT hello##\"world\"
 CONCAT",
@@ -3476,7 +3540,7 @@ CONCAT",
 
         // err: concatenate an identifier and a string through a function-like macro
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define CONCAT(a, b) a##b
 CONCAT(hello, \"world\")",
@@ -3504,7 +3568,7 @@ CONCAT(hello, \"world\")",
 
         // err: concatenate a argument which expands to multiple tokens
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define FOO 1 2
 #define CONCAT(a, b) a##b
@@ -3533,7 +3597,7 @@ CONCAT(hello, FOO)",
 
         // err: `##` followed by `__VA_ARGS__`
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define CONCAT(...) ##__VA_ARGS__
 CONCAT(hello, world)",
@@ -3561,7 +3625,7 @@ CONCAT(hello, world)",
 
         // err: `##` followed by nothing
         assert!(matches!(
-            process_single_source(
+            process_single(
                 "\
 #define CONCAT(a, b) a##
 CONCAT(hello, world)",
@@ -3590,7 +3654,7 @@ CONCAT(hello, world)",
 
     #[test]
     fn test_process_include() {
-        let tokens0 = process_multiple_source_tokens(
+        let tokens0 = process_multiple_get_tokens(
             r#"
 #include "foo.h"
 FOO
@@ -3603,7 +3667,7 @@ FOO
         assert_eq!(print_tokens(&tokens0), "42");
 
         // include the same header file multiple times
-        let tokens2 = process_multiple_source_tokens(
+        let tokens2 = process_multiple_get_tokens(
             r#"
 #include "foo.h"
 #include "foo.h"
@@ -3617,7 +3681,7 @@ FOO
         assert_eq!(print_tokens(&tokens2), "42");
 
         // nested include
-        let tokens3 = process_multiple_source_tokens(
+        let tokens3 = process_multiple_get_tokens(
             r#"
 #include "foo.h"
 FOO BAR
@@ -3639,7 +3703,7 @@ FOO BAR
         assert_eq!(print_tokens(&tokens3), "11 13");
 
         // include system header file
-        let tokens4 = process_multiple_source_tokens(
+        let tokens4 = process_multiple_get_tokens(
             r#"
 #include <std/io.h>
 FOO
@@ -3652,7 +3716,7 @@ FOO
         assert_eq!(print_tokens(&tokens4), "11");
 
         // include system header file with quoted include
-        let tokens5 = process_multiple_source_tokens(
+        let tokens5 = process_multiple_get_tokens(
             r#"
 #include "std/io.h"
 FOO
@@ -3665,7 +3729,7 @@ FOO
         assert_eq!(print_tokens(&tokens5), "11");
 
         // include header file with identifier
-        let tokens6 = process_multiple_source_tokens(
+        let tokens6 = process_multiple_get_tokens(
             r#"
 #include "foo.h"
 FOO BAR
@@ -3689,7 +3753,7 @@ FOO BAR
 
         // err: include non-existing file
         assert!(matches!(
-            process_multiple_source(r#"#include "non_existing.h""#, &[], &[], &[],),
+            process_multiple(r#"#include "non_existing.h""#, &[], &[], &[],),
             Err(PreprocessFileError {
                 file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
                 error: PreprocessError::MessageWithRange(
@@ -3712,7 +3776,7 @@ FOO BAR
 
         // err: include with identifier which expands to non-existing file
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"#define HEADER_FILE "non_existing.h"
 #include HEADER_FILE
 "#,
@@ -3742,7 +3806,7 @@ FOO BAR
 
         // err: include with identifier which expands to empty
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"#define HEADER_FILE
 #include HEADER_FILE
 "#,
@@ -3772,7 +3836,7 @@ FOO BAR
 
         // err: include with identifier which expands to a number
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"#define HEADER_FILE 123
 #include HEADER_FILE
 "#,
@@ -3792,7 +3856,7 @@ FOO BAR
 
         // err: include with identifier which expands to multiple tokens
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"#define HEADER_FILE foo bar
 #include HEADER_FILE
 "#,
@@ -3824,7 +3888,7 @@ FOO BAR
     #[test]
     fn test_process_embed() {
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #embed "foo.bin"
 "#,
@@ -3836,7 +3900,7 @@ FOO BAR
         );
 
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #embed "foo.bin" limit(100)
 "#,
@@ -3848,7 +3912,7 @@ FOO BAR
         );
 
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #embed "foo.bin" limit(3) prefix(0xaa, 11, 'a') suffix(0)
 "#,
@@ -3860,7 +3924,7 @@ FOO BAR
         );
 
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #embed "foo.bin" limit(3) if_empty(0x11,0x13,0x17,0x19) prefix(0x3,0x5,0x7) suffix(0x23, 0x29)
 "#,
@@ -3873,7 +3937,7 @@ FOO BAR
 
         // load binary multiple times
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #embed "foo.bin"
 #embed "foo.bin"
@@ -3887,7 +3951,7 @@ FOO BAR
 
         // Load binary with identifier
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #define FOO "foo.bin"
 #embed FOO
@@ -3901,7 +3965,7 @@ FOO BAR
 
         // err: include non-existing file
         assert!(matches!(
-            process_multiple_source(r#"#embed "non_existing.bin""#, &[], &[], &[],),
+            process_multiple(r#"#embed "non_existing.bin""#, &[], &[], &[],),
             Err(PreprocessFileError {
                 file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
                 error: PreprocessError::MessageWithRange(
@@ -3929,7 +3993,7 @@ FOO BAR
 
         // Test `ifdef`
         assert_eq!(
-            print_tokens(&process_single_source_tokens(
+            print_tokens(&process_single_get_tokens(
                 r#"
 #define FOO 'a'
 #define BAR
@@ -3959,7 +4023,7 @@ FOO BAR
 
         // Test `ifndef`
         assert_eq!(
-            print_tokens(&process_single_source_tokens(
+            print_tokens(&process_single_get_tokens(
                 r#"
 #define FOO 'a'
 #define BAR
@@ -3989,7 +4053,7 @@ FOO BAR
 
         // Test `if` and operator `defined`
         assert_eq!(
-            print_tokens(&process_single_source_tokens(
+            print_tokens(&process_single_get_tokens(
                 r#"
 #define FOO 'a'
 
@@ -4025,7 +4089,7 @@ FOO BAR
 
         // Test `if` and binary and unary operators
         assert_eq!(
-            print_tokens(&process_single_source_tokens(
+            print_tokens(&process_single_get_tokens(
                 r#"
 #define FOO 11
 #define BAR 3 + 7
@@ -4083,7 +4147,7 @@ FOO BAR
     fn test_process_operator_has_include() {
         // Test `#has_include`
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #if __has_include("foo.h")
     11
@@ -4109,7 +4173,7 @@ FOO BAR
     fn test_process_operator_has_embed() {
         // Test `#has_embed`
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #if __has_embed("foo.bin")
     11
@@ -4174,7 +4238,7 @@ FOO BAR
     fn test_process_operator_has_c_attribute() {
         // Test `#has_c_attribute`
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #if __has_c_attribute(deprecated)
     11
@@ -4197,7 +4261,7 @@ FOO BAR
 
         // Test `#has_c_attribute` with non-existing attribute
         assert_eq!(
-            print_tokens(&process_multiple_source_tokens(
+            print_tokens(&process_multiple_get_tokens(
                 r#"
 #if __has_c_attribute(__non_existing__)
     11
@@ -4217,7 +4281,7 @@ FOO BAR
     fn test_process_include_guard_check() {
         // Empty header file
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"
 #include "foo.h"
 "#,
@@ -4233,7 +4297,7 @@ FOO BAR
 
         // Header file without include guard or `#pragma once`
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"
 #include "foo.h"
 "#,
@@ -4254,7 +4318,7 @@ FOO BAR
 
         // Header file with `#pragma once`
         assert!(
-            process_multiple_source(
+            process_multiple(
                 r#"
 #include "foo.h"
 "#,
@@ -4275,7 +4339,7 @@ FOO BAR
 
         // Header file with include guard
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"
 #include "foo.h"
 "#,
@@ -4299,7 +4363,7 @@ FOO BAR
 
         // Header file with include guard and the macro name following the suggested convention
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"
 #include "foo.h"
 "#,
@@ -4323,7 +4387,7 @@ FOO BAR
 
         // Header file with include guard but the macro name does not follow the suggested one
         assert!(matches!(
-            process_multiple_source(
+            process_multiple(
                 r#"
 #include "foo.h"
 "#,
@@ -4367,7 +4431,7 @@ FOO BAR
         let predefinitions = HashMap::new();
 
         assert_eq!(
-            print_tokens(&process_single_source_tokens(
+            print_tokens(&process_single_get_tokens(
                 r#"
 "foo" "bar"
 "buz"
@@ -4387,7 +4451,7 @@ STR3
         );
 
         assert_eq!(
-            print_tokens(&process_single_source_tokens(
+            print_tokens(&process_single_get_tokens(
                 r#"
 #define FOO(x) x
 
@@ -4406,7 +4470,7 @@ FOO(
 
         // err: concatenates string literals with different encoding types.
         assert!(matches!(
-            process_single_source(r#""abc" u8"xyz""#, &predefinitions),
+            process_single(r#""abc" u8"xyz""#, &predefinitions),
             Err(
                 PreprocessFileError {
                     file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,

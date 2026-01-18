@@ -14,32 +14,32 @@ use crate::file_provider::FileProvider;
 
 pub struct NativeFileProvider {
     /// Directories to search for system headers.
-    system_directories: Vec<PathBuf>,
+    system_include_directories: Vec<PathBuf>,
 
     /// Directories to search for user headers and binary files.
-    user_directories: Vec<PathBuf>,
+    user_include_directories: Vec<PathBuf>,
 }
 
 impl NativeFileProvider {
     /// Creates a new `NativeFileProvider` with the specified directories for system and user headers.
     ///
-    /// - `system_directories`: Directories to search for system and external module headers.
+    /// - `system_include_directories`: Directories to search for system and external module headers.
     ///   These are used when resolving `#include` and `embed` directives with angle brackets,
     ///   e.g., `#include <stdio.h>`.
-    /// - `user_directories`: Directories to search for module-specific headers.
+    /// - `user_include_directories`: Directories to search for module-specific headers.
     ///   These are used when resolving `#include` and `embed` directives with double quotes,
     ///   e.g., `#include "header.h"`.
-    pub fn new(user_directories: &[PathBuf], system_directories: &[PathBuf]) -> Self {
+    pub fn new(user_include_directories: &[PathBuf], system_include_directories: &[PathBuf]) -> Self {
         Self {
-            system_directories: system_directories.to_vec(),
-            user_directories: user_directories.to_vec(),
+            system_include_directories: system_include_directories.to_vec(),
+            user_include_directories: user_include_directories.to_vec(),
         }
     }
 }
 
 impl FileProvider for NativeFileProvider {
     fn resolve_user_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
-        for dir in &self.user_directories {
+        for dir in &self.user_include_directories {
             let full_path = dir.join(relative_file_path);
             if let Ok(canonical_full_path) = full_path.canonicalize() {
                 // Check if the file exists and is a regular file
@@ -69,7 +69,7 @@ impl FileProvider for NativeFileProvider {
     }
 
     fn resolve_system_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
-        for dir in &self.system_directories {
+        for dir in &self.system_include_directories {
             let full_path = dir.join(relative_file_path);
             if let Ok(canonical_full_path) = full_path.canonicalize() {
                 // Check if the file exists and is a regular file
@@ -152,7 +152,7 @@ mod tests {
         let test_resources_path = get_test_resources_path();
 
         let project_root_path = test_resources_path.join("projects/test");
-        let user_dirs = vec![
+        let user_include_dirs = vec![
             project_root_path.join("include"),
             project_root_path.join("header"),
             project_root_path.join("resources"),
@@ -160,9 +160,9 @@ mod tests {
         ];
 
         let system_include_path = test_resources_path.join("usr/include");
-        let system_dirs = vec![system_include_path];
+        let system_include_dirs = vec![system_include_path];
 
-        NativeFileProvider::new(&user_dirs, &system_dirs)
+        NativeFileProvider::new(&user_include_dirs, &system_include_dirs)
     }
 
     fn resolve_source_file_canonical_path(relative_file_path: &Path) -> Result<PathBuf, io::Error> {
@@ -183,7 +183,7 @@ mod tests {
     }
 
     fn process<T>(
-        source_file_relative_path: &Path,
+        source_file_path_name: &Path,
         file_provider: &T,
         file_cache: &mut HeaderFileCache,
         predefinitions: &HashMap<String, String>,
@@ -200,8 +200,8 @@ mod tests {
             predefinitions,
             false,
             source_file_number,
-            source_file_relative_path,
-            &resolve_source_file_canonical_path(source_file_relative_path).unwrap(),
+            source_file_path_name,
+            &resolve_source_file_canonical_path(source_file_path_name).unwrap(),
         )
         .unwrap()
     }

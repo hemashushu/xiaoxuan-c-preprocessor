@@ -20,7 +20,7 @@ fn print_pragma<W: Write>(
     indent_level: usize,
 ) -> std::io::Result<()> {
     let pragma_text = pragma
-        .parts
+        .components
         .iter()
         .map(|TokenWithRange { token, .. }| token.to_string())
         .collect::<Vec<_>>()
@@ -303,13 +303,13 @@ mod tests {
             print_statement, print_to_string,
         },
         range::Range,
-        token::{IntegerNumber, IntegerNumberType, Number, Punctuator, StringType, Token},
+        token::{IntegerNumber, IntegerNumberLength, Number, Punctuator, StringEncoding, Token},
     };
 
     #[test]
     fn test_print_pragma() {
         let pragma = Pragma {
-            parts: vec![
+            components: vec![
                 TokenWithRange {
                     token: Token::Identifier("STDC".to_string()),
                     range: Range::default(),
@@ -343,7 +343,7 @@ mod tests {
                 token: Token::Number(Number::Integer(IntegerNumber::new(
                     "100".to_string(),
                     false,
-                    IntegerNumberType::Default,
+                    IntegerNumberLength::Default,
                 ))),
                 range: Range::default(),
             }],
@@ -523,7 +523,7 @@ mod tests {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "2025".to_string(),
                             false,
-                            IntegerNumberType::Default,
+                            IntegerNumberLength::Default,
                         ))),
                         range: Range::default(),
                     },
@@ -635,7 +635,7 @@ mod tests {
                             token: Token::Number(Number::Integer(IntegerNumber::new(
                                 "2025".to_string(),
                                 false,
-                                IntegerNumberType::Default,
+                                IntegerNumberLength::Default,
                             ))),
                             range: Range::default(),
                         },
@@ -738,7 +738,7 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Pragma(Pragma {
-                    parts: vec![
+                    components: vec![
                         TokenWithRange {
                             token: Token::Identifier("STDC".to_string()),
                             range: Range::default(),
@@ -759,7 +759,7 @@ mod tests {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "100".to_string(),
                             false,
-                            IntegerNumberType::Default,
+                            IntegerNumberLength::Default,
                         ))),
                         range: Range::default(),
                     }],
@@ -778,7 +778,7 @@ mod tests {
                         range: Range::default(),
                     },
                     TokenWithRange {
-                        token: Token::String("Hello, World!".to_string(), StringType::Default),
+                        token: Token::String("Hello, World!".to_string(), StringEncoding::Default),
                         range: Range::default(),
                     },
                     TokenWithRange {
@@ -806,7 +806,7 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Pragma(Pragma {
-                    parts: vec![TokenWithRange {
+                    components: vec![TokenWithRange {
                         token: Token::Identifier("once".to_string()),
                         range: Range::default(),
                     }],
@@ -817,7 +817,7 @@ mod tests {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "100".to_string(),
                             false,
-                            IntegerNumberType::Default,
+                            IntegerNumberLength::Default,
                         ))),
                         range: Range::default(),
                     }],

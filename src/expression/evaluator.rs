@@ -40,6 +40,16 @@ fn evaluate_binary_expression(
     right_exp: &Expression,
 ) -> Result<isize, PreprocessFileError> {
     let left = evaluate_expression(left_exp)?;
+
+    // Logical short-circuiting
+    if matches!(operator, BinaryOperator::And) && left == 0 {
+        return Ok(0);
+    }
+
+    if matches!(operator, BinaryOperator::Or) && left != 0 {
+        return Ok(1);
+    }
+
     let right = evaluate_expression(right_exp)?;
     let result = match operator {
         // Arithmetic operators

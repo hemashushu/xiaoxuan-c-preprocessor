@@ -28,10 +28,10 @@ pub struct MemoryFileProvider {
     file_content_map: HashMap<PathBuf, FileContent>,
 
     /// Directories to search for system headers.
-    system_directories: Vec<PathBuf>,
+    system_include_directories: Vec<PathBuf>,
 
     /// Directories to search for user headers.
-    user_directories: Vec<PathBuf>,
+    user_include_directories: Vec<PathBuf>,
 }
 
 enum FileContent {
@@ -41,27 +41,27 @@ enum FileContent {
 
 impl MemoryFileProvider {
     pub fn new() -> Self {
-        let user_directories: Vec<PathBuf> = vec![
+        let user_include_directories: Vec<PathBuf> = vec![
             PathBuf::from("/projects/test/header"),     // internal headers
             PathBuf::from("/projects/test/include"),    // public headers
             PathBuf::from("/projects/test/resources"),  // internal binary files
             PathBuf::from("/projects/test/src/common"), // internal shared code
         ];
 
-        let system_directories: Vec<PathBuf> = vec![PathBuf::from("/usr/include")];
+        let system_include_directories: Vec<PathBuf> = vec![PathBuf::from("/usr/include")];
 
         Self {
             file_content_map: HashMap::new(),
-            system_directories,
-            user_directories,
+            system_include_directories,
+            user_include_directories,
         }
     }
 
     /// Adds a file to the in-memory file provider.
     ///
-    /// `source_file_relative_path` is the path relative to the project root directory,
-    pub fn add_user_text_file(&mut self, source_file_relative_path: &Path, content: &str) {
-        let path = Path::new("/projects/test").join(source_file_relative_path);
+    /// `source_file_path_name` is the path relative to the project root directory,
+    pub fn add_user_text_file(&mut self, source_file_path_name: &Path, content: &str) {
+        let path = Path::new("/projects/test").join(source_file_path_name);
         let normalized_path = normalize_path(&path);
         self.file_content_map
             .insert(normalized_path, FileContent::Text(content.to_owned()));
@@ -69,9 +69,9 @@ impl MemoryFileProvider {
 
     /// Adds a binary file to the in-memory file provider.
     ///
-    /// `source_file_relative_path` is the path relative to the project root directory.
-    pub fn add_user_binary_file(&mut self, source_file_relative_path: &Path, content: Vec<u8>) {
-        let path = Path::new("/projects/test").join(source_file_relative_path);
+    /// `source_file_path_name` is the path relative to the project root directory.
+    pub fn add_user_binary_file(&mut self, source_file_path_name: &Path, content: Vec<u8>) {
+        let path = Path::new("/projects/test").join(source_file_path_name);
         let normalized_path = normalize_path(&path);
         self.file_content_map
             .insert(normalized_path, FileContent::Binary(content));
@@ -79,9 +79,9 @@ impl MemoryFileProvider {
 
     /// Adds a system file to the in-memory file provider.
     ///
-    /// `source_file_relative_path` is the path relative to the system headers directory (e.g. `/usr/include`).
-    pub fn add_system_file(&mut self, source_file_relative_path: &Path, content: &str) {
-        let path = Path::new("/usr/include").join(source_file_relative_path);
+    /// `source_file_path_name` is the path relative to the system headers directory (e.g. `/usr/include`).
+    pub fn add_system_file(&mut self, source_file_path_name: &Path, content: &str) {
+        let path = Path::new("/usr/include").join(source_file_path_name);
         let normalized_path = normalize_path(&path);
         self.file_content_map
             .insert(normalized_path, FileContent::Text(content.to_owned()));
@@ -96,7 +96,7 @@ impl Default for MemoryFileProvider {
 
 impl FileProvider for MemoryFileProvider {
     fn resolve_user_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
-        for dir in &self.user_directories {
+        for dir in &self.user_include_directories {
             let full_path = dir.join(relative_file_path);
             let canonical_full_path = normalize_path(&full_path);
 
@@ -108,7 +108,7 @@ impl FileProvider for MemoryFileProvider {
     }
 
     fn resolve_system_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
-        for dir in &self.system_directories {
+        for dir in &self.system_include_directories {
             let full_path = dir.join(relative_file_path);
             let canonical_full_path = normalize_path(&full_path);
 

@@ -45,15 +45,15 @@ pub trait FileProvider {
         &self,
         target_file_relative_path: &Path,
         source_file_canonical_full_path: &Path,
-        should_resolve_relative_path: bool,
+        resolve_relative_path_within_current_file: bool,
     ) -> Option<ResolvedResult> {
-        if should_resolve_relative_path {
-            if let Some(resolved_path) = self.resolve_user_file_relative_to_current_file(
+        if resolve_relative_path_within_current_file
+            && let Some(resolved_path) = self.resolve_user_file_relative_to_current_file(
                 target_file_relative_path,
                 source_file_canonical_full_path,
-            ) {
-                return Some(ResolvedResult::new(resolved_path, false));
-            }
+            )
+        {
+            return Some(ResolvedResult::new(resolved_path, false));
         }
 
         if let Some(resolved_path) = self.resolve_user_file(target_file_relative_path) {

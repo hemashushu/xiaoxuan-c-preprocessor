@@ -19,8 +19,10 @@ pub enum Statement {
     Include(Include),
     Embed(Embed),
     If(If),
-    Error(String, /* message range */ Range),
-    Warning(String, /* message range */ Range),
+    Error(String, /* message_range */ Range),
+    Warning(String, /* message_range */ Range),
+    
+    // Regular C code (non-directive)
     Code(Vec<TokenWithRange>),
 }
 
@@ -30,8 +32,8 @@ pub enum Statement {
 //
 // Syntax:
 //
-//  - `#pragma pragma_params` (1)
-//  - `_Pragma ( string-literal )` (2) (since C99)
+//  - `#pragma pragma_params`       (1)
+//  - `_Pragma ( string-literal )`  (2) (since C99)
 //
 // Standard pragmas:
 //
@@ -49,7 +51,7 @@ pub enum Statement {
 // https://en.cppreference.com/w/c/preprocessor/impl.html
 #[derive(Debug, PartialEq, Clone)]
 pub struct Pragma {
-    pub parts: Vec<TokenWithRange>,
+    pub components: Vec<TokenWithRange>,
 }
 
 // Macro replacement
@@ -58,11 +60,11 @@ pub struct Pragma {
 //
 // Syntax:
 //
-// - `#define identifier replacement-list (optional)` (1)
-// - `#define identifier ( parameters ) replacement-list` (2)
-// - `#define identifier ( parameters, ... ) replacement-list` (3) (since C99)
-// - `#define identifier ( ... ) replacement-list` (4) (since C99)
-// - `#undef identifier` (5)
+// - `#define identifier replacement-list (optional)`           (1)
+// - `#define identifier( parameters ) replacement-list`        (2)
+// - `#define identifier( parameters, ... ) replacement-list`   (3) (since C99)
+// - `#define identifier( ... ) replacement-list`               (4) (since C99)
+// - `#undef identifier`                                        (5)
 //
 // The definition must be a balanced token sequence. "Balanced" means that all
 // parentheses, brackets, and braces are properly matched. For example,
@@ -89,13 +91,13 @@ pub enum Define {
 //
 // Syntax:
 //
-// - `#include < h-char-sequence > new-line` (1)
-// - `#include " q-char-sequence " new-line` (2)
-// - `#include pp-tokens new-line` (3)
+// - `#include < h-char-sequence > new-line`    (1)
+// - `#include " q-char-sequence " new-line`    (2)
+// - `#include pp-tokens new-line`              (3)
 // - `__has_include ( " q-char-sequence " )`
-// - `__has_include ( < h-char-sequence > )` (4) (since C23)
+// - `__has_include ( < h-char-sequence > )`    (4) (since C23)
 // - `__has_include ( string-literal )`
-// - `__has_include ( < h-pp-tokens > )` (5) (since C23)
+// - `__has_include ( < h-pp-tokens > )`        (5) (since C23)
 //
 // ANCPP supports `#include MACRO_NAME`.
 //
@@ -117,13 +119,13 @@ pub enum Include {
 //
 // Syntax:
 //
-// - `#embed < h-char-sequence > embed-parameter-sequence (optional) new-line` (1)
-// - `#embed " q-char-sequence " embed-parameter-sequence (optional) new-line` (2)
-// - `#embed pp-tokens new-line` (3)
+// - `#embed < h-char-sequence > embed-parameter-sequence (optional) new-line`  (1)
+// - `#embed " q-char-sequence " embed-parameter-sequence (optional) new-line`  (2)
+// - `#embed pp-tokens new-line`                                                (3)
 // - `__has_embed ( " q-char-sequence " embed-parameter-sequence (optional) )`
-// - `__has_embed ( < h-char-sequence > embed-parameter-sequence (optional) )` (4)
+// - `__has_embed ( < h-char-sequence > embed-parameter-sequence (optional) )`  (4)
 // - `__has_embed ( string-literal pp-balanced-token-sequence (optional) )`
-// - `__has_embed ( < h-pp-tokens > pp-balanced-token-sequence (optional) )` (5)
+// - `__has_embed ( < h-pp-tokens > pp-balanced-token-sequence (optional) )`    (5)
 //
 // ANCPP supports `#embed MACRO_NAME`.
 //
@@ -179,7 +181,7 @@ pub enum Embed {
 // - `#ifdef identifier`
 // - `#ifndef identifier`
 // - `#elif expression`
-// - `#elifdef identifier` (since C23)
+// - `#elifdef identifier`  (since C23)
 // - `#elifndef identifier` (since C23)
 // - `#else`
 // - `#endif`
@@ -200,8 +202,13 @@ pub struct Branch {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Condition {
+    // `#if expression`
     // Expression never empty
-    Expression(Vec<TokenWithRange>),
-    Defined(/* id */ String, Range),
-    NotDefined(/* id */ String, Range),
+    Expression(/* expression */ Vec<TokenWithRange>),
+
+    // `#ifdef identifier`
+    Defined(/* identifier */ String, Range),
+
+    // `#ifndef identifier`
+    NotDefined(/* identifier */ String, Range),
 }

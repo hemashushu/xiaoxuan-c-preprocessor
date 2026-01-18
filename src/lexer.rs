@@ -13,8 +13,8 @@ use crate::{
     position::Position,
     range::Range,
     token::{
-        CharType, FloatingPointNumber, FloatingPointNumberType, IntegerNumber, IntegerNumberType,
-        Number, Punctuator, StringType, Token,
+        CharEncoding, FloatingPointNumber, FloatingPointNumberLength, IntegerNumber,
+        IntegerNumberLength, Number, Punctuator, StringEncoding, Token,
     },
 };
 
@@ -27,7 +27,7 @@ const PEEK_BUFFER_LENGTH_REMOVE_SHEBANG: usize = 3;
 const PEEK_BUFFER_LENGTH_LEX: usize = 4;
 
 pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
-    let chars = pre_lex(source_text)?;
+    let chars = initialize(source_text)?;
     let mut chars_iter = chars.into_iter();
     let mut peekable_char_iter = PeekableIter::new(&mut chars_iter, PEEK_BUFFER_LENGTH_LEX);
     let mut tokenizer = Lexer::new(&mut peekable_char_iter);
@@ -43,7 +43,8 @@ pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, Preprocess
 // 2. (not supported) Trigraph sequences are replaced with their corresponding single characters if enabled.
 // 3. Lines ending with a backslash ('\') are joined with the following line.
 // 4. All comments are replaced by a single space character.
-fn pre_lex(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessError> {
+// 5. (ANCPP new added) remove the shebang (`#!`) line.
+fn initialize(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessError> {
     let mut chars = source_text.chars();
     let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
     let mut peekable_char_position_iter = PeekableIter::new(
@@ -75,12 +76,13 @@ fn merge_continued_lines(
         match char_with_position.character {
             '\\' => {
                 // Consume any whitespace characters between '\' and the newline ('\n' or "\r\n").
-                let mut found_space = None;
+                // i.e. trim line tail spaces after '\'
+                let mut tail_spaces = vec![];
                 while let Some(next_char_with_position) = chars.peek(0) {
                     // Skip whitespace (space, tab, vertical tab, form feed).
                     match next_char_with_position.character {
                         ' ' | '\t' | '\u{0b}' | '\u{0c}' => {
-                            found_space = chars.next(); // Consume and store the space
+                            tail_spaces.push(chars.next().unwrap());
                         }
                         _ => {
                             break;
@@ -115,12 +117,9 @@ fn merge_continued_lines(
                     chars.next(); // Consume '\n'
                 } else {
                     // No line continuation found.
-                    // Restore the '\' character and the space (if any) to the output.
-                    output.push(char_with_position);
-
-                    if let Some(space) = found_space {
-                        output.push(space);
-                    }
+                    // Restore the '\' character and the tailing spaces.
+                    output.push(char_with_position); // Restore '\'
+                    output.extend(tail_spaces); // Restore tailing spaces
                 }
             }
             _ => {
@@ -247,8 +246,9 @@ struct Lexer<'a> {
 
     // Stack of positions.
     // Used to store the positions of characters when consuming them in sequence.
-    // Use `push_position_into_store` and `pop_position_from_store` to manipulate this stack.
-    stored_positions: Vec<Position>,
+    //
+    // Position stack is used to construct the `Range` of tokens.
+    position_stack: Vec<Position>,
 }
 
 impl<'a> Lexer<'a> {
@@ -258,7 +258,7 @@ impl<'a> Lexer<'a> {
             last_position: Position::default(),
             last_newline_position: 0, // to make the `#` as directive start token if it is the first token
             last_directive_line_index: None, // no directive line at initialization
-            stored_positions: vec![],
+            position_stack: vec![],
         }
     }
 
@@ -295,28 +295,40 @@ impl<'a> Lexer<'a> {
             Some(CharWithPosition { character, .. }) if character == &expected_char)
     }
 
+    fn peek_char_and_anyof(&self, offset: usize, expected_chars: &[char]) -> bool {
+        matches!(
+            self.upstream.peek(offset),
+            Some(CharWithPosition { character, .. }) if expected_chars.contains(character))
+    }
+
     /// Saves the last position to the stack.
-    fn push_last_position_into_store(&mut self) {
-        let last_position = self.last_position;
-        self.push_position_into_store(&last_position);
+    fn push_last_position_into_stack(&mut self) {
+        self.position_stack.push(self.last_position);
     }
 
     /// Saves the current position (i.e., the `self.peek_position(0)`) to the stack.
-    fn push_peek_position_into_store(&mut self) {
+    fn push_peek_position_into_stack(&mut self) {
         let position = *self.peek_position(0).unwrap();
-        self.push_position_into_store(&position);
+        self.position_stack.push(position);
     }
 
-    fn push_position_into_store(&mut self, position: &Position) {
-        self.stored_positions.push(*position);
-    }
-
-    fn pop_position_from_store(&mut self) -> Position {
-        self.stored_positions.pop().unwrap()
+    fn pop_position_from_stack(&mut self) -> Position {
+        self.position_stack.pop().unwrap()
     }
 }
 
 impl Lexer<'_> {
+    // Turn the input character stream into a token stream.
+    //
+    // Notes on some inconsistencies in C preprocessor syntax
+    // ------------------------------------------------------
+    //
+    // The C preprocessor is not a strictly defined language, and there are some inconsistencies in its syntax:
+    //
+    // - In the `#include` and `#embed` directives, the file path is not a string literal.
+    // - In the `has_include` and `has_embed` functions, the file path is not a string literal.
+    // - In function-like macro definitions, there cannot be whitespace between the macro identifier
+    //   and the opening parenthesis.
     fn lex(&mut self) -> Result<Vec<TokenWithRange>, PreprocessError> {
         let mut output = vec![];
 
@@ -324,11 +336,10 @@ impl Lexer<'_> {
             match current_char {
                 ' ' | '\t' | '\u{0b}' | '\u{0c}' => {
                     // Skip whitespace (space, tab, vertical tab, form feed).
+                    // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                     self.next_char();
                 }
                 '\r' if self.peek_char_and_equals(1, '\n') => {
-                    // self.push_peek_position_into_store();
-
                     // Convert Windows-style line ending "\r\n" to a single '\n'.
                     self.next_char(); // consume '\r'
                     self.next_char(); // consume '\n'
@@ -358,43 +369,43 @@ impl Lexer<'_> {
                 }
                 '\'' => {
                     // char
-                    output.push(self.lex_char(CharType::Default, 0)?);
+                    output.push(self.lex_char(CharEncoding::Default, 0)?);
                 }
                 '"' => {
-                    if is_directive_include(&output)
+                    if is_directive_of_include_or_embed(&output)
                         || (matches!(self.last_directive_line_index, Some(idx) if idx == self.last_position.line)
-                            && is_function_has_include(&output))
+                            && is_function_of_has_include_or_has_embed(&output))
                     {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
-                        output.push(self.lex_filepath()?);
+                        output.push(self.lex_quoted_headerfile()?);
                     } else {
                         // normal string
-                        output.push(self.lex_string(StringType::Default, 0)?);
+                        output.push(self.lex_string(StringEncoding::Default, 0)?);
                     }
                 }
                 '+' => {
                     if self.peek_char_and_equals(1, '+') {
                         // `++`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '+'
                         self.next_char(); // consume '+'
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Increase),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '=') {
                         // `+=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '+'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::AddAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `+`
@@ -409,36 +420,36 @@ impl Lexer<'_> {
                 '-' => {
                     if self.peek_char_and_equals(1, '-') {
                         // `--`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '-'
                         self.next_char(); // consume '-'
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Decrease),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '=') {
                         // `-=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '-'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::SubtractAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '>') {
                         // `->`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '-'
                         self.next_char(); // consume '>'
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Arrow),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `-`
@@ -453,14 +464,14 @@ impl Lexer<'_> {
                 '*' => {
                     if self.peek_char_and_equals(1, '=') {
                         // `*=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '*'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::MultiplyAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `*`
@@ -475,14 +486,14 @@ impl Lexer<'_> {
                 '/' => {
                     if self.peek_char_and_equals(1, '=') {
                         // `/=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '/'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::DivideAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `/`
@@ -495,16 +506,23 @@ impl Lexer<'_> {
                     }
                 }
                 '%' => {
-                    if self.peek_char_and_equals(1, '=') {
+                    if self.peek_char_and_equals(1, ':') || self.peek_char_and_equals(1, '>') {
+                        // `%:` or `%>`
+                        // Alternative tokens (digraphs) are not supported.
+                        return Err(PreprocessError::MessageWithRange(
+                            "Digraphs are not supported.".to_owned(),
+                            Range::from_position_and_length(self.peek_position(0).unwrap(), 2),
+                        ));
+                    } else if self.peek_char_and_equals(1, '=') {
                         // `%=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '%'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::ModulusAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `%`
@@ -519,14 +537,14 @@ impl Lexer<'_> {
                 '=' => {
                     if self.peek_char_and_equals(1, '=') {
                         // `==`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '='
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Equal),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `=`
@@ -541,14 +559,14 @@ impl Lexer<'_> {
                 '!' => {
                     if self.peek_char_and_equals(1, '=') {
                         // `!=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '!'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::NotEqual),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `!`
@@ -563,18 +581,18 @@ impl Lexer<'_> {
                 '>' => {
                     if self.peek_char_and_equals(1, '=') {
                         // `>=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '>'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::GreaterThanOrEqual),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '>') {
                         // `>>` or `>>=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '>'
                         self.next_char(); // consume '>'
@@ -585,13 +603,13 @@ impl Lexer<'_> {
 
                             output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftRightAssign),
-                                Range::new(&self.pop_position_from_store(), &self.last_position),
+                                Range::new(&self.pop_position_from_stack(), &self.last_position),
                             ));
                         } else {
                             // `>>`
                             output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftRight),
-                                Range::new(&self.pop_position_from_store(), &self.last_position),
+                                Range::new(&self.pop_position_from_stack(), &self.last_position),
                             ));
                         }
                     } else {
@@ -605,27 +623,34 @@ impl Lexer<'_> {
                     }
                 }
                 '<' => {
-                    if is_directive_include(&output)
+                    if self.peek_char_and_equals(1, '%') || self.peek_char_and_equals(1, ':') {
+                        // `<%` or `<:`
+                        // Alternative tokens (digraphs) are not supported.
+                        return Err(PreprocessError::MessageWithRange(
+                            "Digraphs are not supported.".to_owned(),
+                            Range::from_position_and_length(self.peek_position(0).unwrap(), 2),
+                        ));
+                    } else if is_directive_of_include_or_embed(&output)
                         || (matches!(self.last_directive_line_index, Some(idx) if idx == self.last_position.line)
-                            && is_function_has_include(&output))
+                            && is_function_of_has_include_or_has_embed(&output))
                     {
                         // file path in `#include` or `#embed` directive, or
                         // file path in `__has_include` or `__has_embed` function.
-                        output.push(self.lex_angle_filepath()?);
+                        output.push(self.lex_angle_headerfile()?);
                     } else if self.peek_char_and_equals(1, '=') {
                         // `<=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '<'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::LessThanOrEqual),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '<') {
                         // `<<` or `<<=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '<'
                         self.next_char(); // consume '<'
@@ -636,13 +661,13 @@ impl Lexer<'_> {
 
                             output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftLeftAssign),
-                                Range::new(&self.pop_position_from_store(), &self.last_position),
+                                Range::new(&self.pop_position_from_stack(), &self.last_position),
                             ));
                         } else {
                             // `<<`
                             output.push(TokenWithRange::new(
                                 Token::Punctuator(Punctuator::ShiftLeft),
-                                Range::new(&self.pop_position_from_store(), &self.last_position),
+                                Range::new(&self.pop_position_from_stack(), &self.last_position),
                             ));
                         }
                     } else {
@@ -658,25 +683,25 @@ impl Lexer<'_> {
                 '&' => {
                     if self.peek_char_and_equals(1, '&') {
                         // `&&`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '&'
                         self.next_char(); // consume '&'
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::And),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '=') {
                         // `&=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '&'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseAndAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `&`
@@ -691,25 +716,25 @@ impl Lexer<'_> {
                 '|' => {
                     if self.peek_char_and_equals(1, '|') {
                         // `||`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '|'
                         self.next_char(); // consume '|'
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Or),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else if self.peek_char_and_equals(1, '=') {
                         // `|=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '|'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseOrAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `|`
@@ -724,14 +749,14 @@ impl Lexer<'_> {
                 '^' => {
                     if self.peek_char_and_equals(1, '=') {
                         // `^=`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '^'
                         self.next_char(); // consume '='
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::BitwiseXorAssign),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `^`
@@ -753,13 +778,44 @@ impl Lexer<'_> {
                     ));
                 }
                 '?' => {
-                    // `?`
-                    self.next_char(); // consume '?'
+                    if self.peek_char_and_equals(1, '?') {
+                        // `??` Trigraphs (removed in C23)
+                        //
+                        // https://en.cppreference.com/w/c/language/operator_alternative.html
+                        //
+                        // | Primary | Trigraph |
+                        // |---------|-----------|
+                        // | `{` | `??<` |
+                        // | `}` | `??>` |
+                        // | `[` | `??(` |
+                        // | `]` | `??)` |
+                        // | `#` | `??=` |
+                        // | `\` | `??/` |
+                        // | `^` | `??'` |
+                        // | `|` | `??!` |
+                        // | `~` | `??-` |
+                        if self
+                            .peek_char_and_anyof(2, &['<', '>', '(', ')', '=', '/', '\'', '!', '-'])
+                        {
+                            return Err(PreprocessError::MessageWithRange(
+                                "Trigraphs are disabled".to_owned(),
+                                Range::from_position_and_length(self.peek_position(0).unwrap(), 3),
+                            ));
+                        } else {
+                            return Err(PreprocessError::MessageWithRange(
+                                "Unsupported token '??'".to_owned(),
+                                Range::from_position_and_length(self.peek_position(0).unwrap(), 2),
+                            ));
+                        }
+                    } else {
+                        // `?`
+                        self.next_char(); // consume '?'
 
-                    output.push(TokenWithRange::new(
-                        Token::Punctuator(Punctuator::QuestionMark),
-                        Range::from_single_position(&self.last_position),
-                    ));
+                        output.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::QuestionMark),
+                            Range::from_single_position(&self.last_position),
+                        ));
+                    }
                 }
                 ',' => {
                     // `,`
@@ -777,7 +833,7 @@ impl Lexer<'_> {
                     } else if self.peek_char_and_equals(1, '.') && self.peek_char_and_equals(2, '.')
                     {
                         // `...`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '.'
                         self.next_char(); // consume '.'
@@ -785,7 +841,7 @@ impl Lexer<'_> {
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::Ellipsis),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `.`
@@ -818,14 +874,14 @@ impl Lexer<'_> {
                 '[' => {
                     if self.peek_char_and_equals(1, '[') {
                         // `[[`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume '['
                         self.next_char(); // consume '['
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::AttributeOpen),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     } else {
                         // `[`
@@ -840,14 +896,14 @@ impl Lexer<'_> {
                 ']' => {
                     if self.peek_char_and_equals(1, ']') {
                         // `]]`
-                        self.push_peek_position_into_store();
+                        self.push_peek_position_into_stack();
 
                         self.next_char(); // consume ']'
                         self.next_char(); // consume ']'
 
                         output.push(TokenWithRange::new(
                             Token::Punctuator(Punctuator::AttributeClose),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                         continue; // skip the next token
                     } else {
@@ -888,24 +944,33 @@ impl Lexer<'_> {
                     ));
                 }
                 ':' => {
-                    // `:`
-                    self.next_char(); // consume ':'
+                    if self.peek_char_and_equals(1, '>') {
+                        // `:>`
+                        // Alternative tokens (digraphs) are not supported.
+                        return Err(PreprocessError::MessageWithRange(
+                            "Digraphs are not supported.".to_owned(),
+                            Range::from_position_and_length(self.peek_position(0).unwrap(), 2),
+                        ));
+                    } else {
+                        // `:`
+                        self.next_char(); // consume ':'
 
-                    output.push(TokenWithRange::new(
-                        Token::Punctuator(Punctuator::Colon),
-                        Range::from_single_position(&self.last_position),
-                    ));
+                        output.push(TokenWithRange::new(
+                            Token::Punctuator(Punctuator::Colon),
+                            Range::from_single_position(&self.last_position),
+                        ));
+                    }
                 }
                 '#' if self.peek_char_and_equals(1, '#') => {
                     // `##`
-                    self.push_peek_position_into_store();
+                    self.push_peek_position_into_stack();
 
                     self.next_char(); // consume '#'
                     self.next_char(); // consume '#'
 
                     output.push(TokenWithRange::new(
                         Token::PoundPound,
-                        Range::new(&self.pop_position_from_store(), &self.last_position),
+                        Range::new(&self.pop_position_from_stack(), &self.last_position),
                     ));
                 }
                 '#' if output.len() == self.last_newline_position => {
@@ -958,17 +1023,17 @@ impl Lexer<'_> {
 
                     let token_with_range = if literal_char {
                         let char_type = match prefix {
-                            'L' => CharType::Wide,
-                            'u' => CharType::UTF16,
-                            'U' => CharType::UTF32,
+                            'L' => CharEncoding::Wide,
+                            'u' => CharEncoding::UTF16,
+                            'U' => CharEncoding::UTF32,
                             _ => unreachable!(),
                         };
                         self.lex_char(char_type, 1)?
                     } else {
                         let string_type = match prefix {
-                            'L' => StringType::Wide,
-                            'u' => StringType::UTF16,
-                            'U' => StringType::UTF32,
+                            'L' => StringEncoding::Wide,
+                            'u' => StringEncoding::UTF16,
+                            'U' => StringEncoding::UTF32,
                             _ => unreachable!(),
                         };
                         self.lex_string(string_type, 1)?
@@ -986,9 +1051,9 @@ impl Lexer<'_> {
                     };
 
                     let token_with_range = if literal_char {
-                        self.lex_char(CharType::UTF8, 2)?
+                        self.lex_char(CharEncoding::UTF8, 2)?
                     } else {
-                        self.lex_string(StringType::UTF8, 2)?
+                        self.lex_string(StringEncoding::UTF8, 2)?
                     };
 
                     output.push(token_with_range);
@@ -997,7 +1062,7 @@ impl Lexer<'_> {
                     // identifier
                     let token_with_range = self.lex_identifier()?;
 
-                    if is_directive_define(&output) && self.peek_char_and_equals(0, '(') {
+                    if is_directive_of_define(&output) && self.peek_char_and_equals(0, '(') {
                         // If the last token is a `#define` directive, and the current identifier
                         // is followed by '(' immediately, it indicates that the identifier is a function-like macro.
                         // Convert the identifier to a function-like macro identifier.
@@ -1007,7 +1072,7 @@ impl Lexer<'_> {
                         } = token_with_range
                         {
                             let function_like_macro_identifier =
-                                Token::FunctionLikeMacroIdentifier(id);
+                                Token::DefinedMacroIdentifierFunctionLike(id);
                             output.push(TokenWithRange::new(function_like_macro_identifier, range));
                         } else {
                             unreachable!()
@@ -1039,7 +1104,7 @@ impl Lexer<'_> {
 
         let mut id_string = String::new();
 
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
@@ -1088,11 +1153,14 @@ impl Lexer<'_> {
                     id_string.push(*current_char);
                     self.next_char(); // consume char
                 }
+                // whitespaces
+                // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
+                // all ASCII punctuations
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1109,7 +1177,7 @@ impl Lexer<'_> {
             }
         }
 
-        let id_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let id_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         // unicode normalization
         let id_string_normalized: String = id_string.nfc().collect();
@@ -1141,12 +1209,12 @@ impl Lexer<'_> {
         let mut found_e = false; // to indicated whether char 'e' is found
 
         let mut is_unsigned = false;
-        let mut integer_number_type = IntegerNumberType::Default;
+        let mut integer_number_type = IntegerNumberLength::Default;
 
         let mut is_decimal = false; // suffix 'dd', 'df', and 'dl'.
-        let mut floating_point_number_type = FloatingPointNumberType::Default; // default floating-point number type is `double`
+        let mut floating_point_number_type = FloatingPointNumberLength::Default; // default floating-point number type is `double`
 
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
         if leading_dot {
             // if the number starts with a dot, e.g. `.5`, then we should add a leading zero
@@ -1215,11 +1283,14 @@ impl Lexer<'_> {
 
                     break;
                 }
+                // whitespaces
+                // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
+                // all ASCII punctuations
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1240,7 +1311,7 @@ impl Lexer<'_> {
         if num_string.ends_with('e') {
             return Err(PreprocessError::MessageWithRange(
                 "Decimal number can not ends with character \"e\".".to_owned(),
-                Range::new(&self.pop_position_from_store(), &self.last_position),
+                Range::new(&self.pop_position_from_stack(), &self.last_position),
             ));
         }
 
@@ -1250,7 +1321,7 @@ impl Lexer<'_> {
             num_string.push('0');
         }
 
-        let num_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let num_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         if found_e || found_point {
             Ok(TokenWithRange::new(
@@ -1296,13 +1367,13 @@ impl Lexer<'_> {
         let mut found_p: bool = false; // to indicated whether char 'p' is found
 
         let mut is_unsigned = false;
-        let mut integer_number_type = IntegerNumberType::Default;
+        let mut integer_number_type = IntegerNumberLength::Default;
 
         let mut is_decimal = false; // suffix 'dd', 'df', and 'dl'.
-        let mut floating_point_number_type = FloatingPointNumberType::Default; // default floating-point number type is `double`
+        let mut floating_point_number_type = FloatingPointNumberLength::Default; // default floating-point number type is `double`
 
         // Save the start position of the hexadecimal number (i.e. the first '0')
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
         num_string.push_str("0x");
         self.next_char(); // Consumes '0'
@@ -1399,11 +1470,14 @@ impl Lexer<'_> {
 
                     break;
                 }
+                // whitespaces
+                // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
+                // all ASCII punctuations
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1424,7 +1498,7 @@ impl Lexer<'_> {
         if num_string.len() <= 2 {
             return Err(PreprocessError::MessageWithRange(
                 "Hexadecimal number must have at least one digit after '0x'.".to_owned(),
-                Range::new(&self.pop_position_from_store(), &self.last_position),
+                Range::new(&self.pop_position_from_stack(), &self.last_position),
             ));
         }
 
@@ -1433,7 +1507,7 @@ impl Lexer<'_> {
         if found_point && !found_p {
             return Err(PreprocessError::MessageWithRange(
                 "Hexadecimal floating point number must have an exponent 'p'.".to_owned(),
-                Range::new(&self.pop_position_from_store(), &self.last_position),
+                Range::new(&self.pop_position_from_stack(), &self.last_position),
             ));
         }
 
@@ -1441,11 +1515,11 @@ impl Lexer<'_> {
         if num_string.ends_with('p') {
             return Err(PreprocessError::MessageWithRange(
                 "The exponent of a hexadecimal floating point number can not be empty.".to_owned(),
-                Range::new(&self.pop_position_from_store(), &self.last_position),
+                Range::new(&self.pop_position_from_stack(), &self.last_position),
             ));
         }
 
-        let num_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let num_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         if found_p {
             Ok(TokenWithRange::new(
@@ -1480,10 +1554,10 @@ impl Lexer<'_> {
 
         let mut num_string = String::new();
         let mut is_unsigned = false;
-        let mut integer_number_type = IntegerNumberType::Default;
+        let mut integer_number_type = IntegerNumberLength::Default;
 
         // Save the start position of the binary number (i.e. the first '0')
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
         num_string.push_str("0b");
         self.next_char(); // Consumes '0'
@@ -1512,11 +1586,14 @@ impl Lexer<'_> {
                         *self.peek_position(0).unwrap(),
                     ));
                 }
+                // whitespaces
+                // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
+                // all ASCII punctuations
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1536,11 +1613,11 @@ impl Lexer<'_> {
         if num_string.len() <= 2 {
             return Err(PreprocessError::MessageWithRange(
                 "Binary number must have at least one digit after \"0b\".".to_owned(),
-                Range::new(&self.pop_position_from_store(), &self.last_position),
+                Range::new(&self.pop_position_from_stack(), &self.last_position),
             ));
         }
 
-        let num_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let num_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         Ok(TokenWithRange::new(
             Token::Number(Number::Integer(IntegerNumber::new(
@@ -1563,11 +1640,11 @@ impl Lexer<'_> {
         // ```
 
         // Save the start position of the octal number (i.e. the first '0')
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
         let mut num_string = String::new();
         let mut is_unsigned = false;
-        let mut integer_number_type = IntegerNumberType::Default;
+        let mut integer_number_type = IntegerNumberLength::Default;
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
@@ -1592,11 +1669,14 @@ impl Lexer<'_> {
                         *self.peek_position(0).unwrap(),
                     ));
                 }
+                // whitespaces
+                // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
+                // all ASCII punctuations
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1613,7 +1693,7 @@ impl Lexer<'_> {
             }
         }
 
-        let num_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let num_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         Ok(TokenWithRange::new(
             Token::Number(Number::Integer(IntegerNumber::new(
@@ -1627,7 +1707,7 @@ impl Lexer<'_> {
 
     fn lex_integer_number_suffix(
         &mut self,
-    ) -> Result<(/* is_unsigned */ bool, IntegerNumberType), PreprocessError> {
+    ) -> Result<(/* is_unsigned */ bool, IntegerNumberLength), PreprocessError> {
         // integer number suffixes consist of the two groups:
         // - group 1: `u`, `U`
         // - group 2: `l`, `L`, `ll`, `LL`, `wb`, `WB`
@@ -1637,7 +1717,7 @@ impl Lexer<'_> {
         let mut is_unsigned = false;
 
         // to indicate the integer number type
-        let mut integer_number_type = IntegerNumberType::Default;
+        let mut integer_number_type = IntegerNumberLength::Default;
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
@@ -1648,30 +1728,30 @@ impl Lexer<'_> {
                 'l' if self.peek_char_and_equals(1, 'l') => {
                     self.next_char(); // consume char 'l'
                     self.next_char(); // consume char 'l'
-                    integer_number_type = IntegerNumberType::LongLong;
+                    integer_number_type = IntegerNumberLength::LongLong;
                 }
                 'L' if self.peek_char_and_equals(1, 'L') => {
                     self.next_char(); // consume char 'L'
                     self.next_char(); // consume char 'L'
-                    integer_number_type = IntegerNumberType::LongLong;
+                    integer_number_type = IntegerNumberLength::LongLong;
                 }
                 'l' => {
                     self.next_char(); // consume char 'l'
-                    integer_number_type = IntegerNumberType::Long;
+                    integer_number_type = IntegerNumberLength::Long;
                 }
                 'L' => {
                     self.next_char(); // consume char 'L'
-                    integer_number_type = IntegerNumberType::Long;
+                    integer_number_type = IntegerNumberLength::Long;
                 }
                 'w' if self.peek_char_and_equals(1, 'b') => {
                     self.next_char(); // consume char 'w'
                     self.next_char(); // consume char 'b'
-                    integer_number_type = IntegerNumberType::BitInt;
+                    integer_number_type = IntegerNumberLength::BitInt;
                 }
                 'W' if self.peek_char_and_equals(1, 'B') => {
                     self.next_char(); // consume char 'W'
                     self.next_char(); // consume char 'B'
-                    integer_number_type = IntegerNumberType::BitInt;
+                    integer_number_type = IntegerNumberLength::BitInt;
                 }
                 'd' | 'D' => {
                     return Err(PreprocessError::MessageWithPosition(
@@ -1696,7 +1776,7 @@ impl Lexer<'_> {
 
     fn lex_floating_point_number_suffix(
         &mut self,
-    ) -> Result<(/* is_decimal */ bool, FloatingPointNumberType), PreprocessError> {
+    ) -> Result<(/* is_decimal */ bool, FloatingPointNumberLength), PreprocessError> {
         // possible suffix for floating-point number:
         // `f`, `F`, `l`, `L`, `dd`, `df`, `dl`, `DD`, `DF`, `DL`
 
@@ -1704,7 +1784,7 @@ impl Lexer<'_> {
         let mut is_decimal = false;
 
         // to indicate the floating-point number type
-        let mut floating_point_number_type = FloatingPointNumberType::Default; // default floating-point number type is `double`
+        let mut floating_point_number_type = FloatingPointNumberLength::Default; // default floating-point number type is `double`
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
@@ -1712,41 +1792,41 @@ impl Lexer<'_> {
                     self.next_char(); // consume char 'd'
                     self.next_char(); // consume char 'd'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::Default;
+                    floating_point_number_type = FloatingPointNumberLength::Default;
                 }
                 'D' if self.peek_char_and_equals(1, 'D') => {
                     self.next_char(); // consume char 'D'
                     self.next_char(); // consume char 'D'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::Default;
+                    floating_point_number_type = FloatingPointNumberLength::Default;
                 }
                 'd' if self.peek_char_and_equals(1, 'f') => {
                     self.next_char(); // consume char 'd'
                     self.next_char(); // consume char 'f'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::Float;
+                    floating_point_number_type = FloatingPointNumberLength::Float;
                 }
                 'D' if self.peek_char_and_equals(1, 'F') => {
                     self.next_char(); // consume char 'D'
                     self.next_char(); // consume char 'F'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::Float;
+                    floating_point_number_type = FloatingPointNumberLength::Float;
                 }
                 'd' if self.peek_char_and_equals(1, 'l') => {
                     self.next_char(); // consume char 'd'
                     self.next_char(); // consume char 'l'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::LongDouble;
+                    floating_point_number_type = FloatingPointNumberLength::LongDouble;
                 }
                 'D' if self.peek_char_and_equals(1, 'L') => {
                     self.next_char(); // consume char 'd'
                     self.next_char(); // consume char 'l'
                     is_decimal = true;
-                    floating_point_number_type = FloatingPointNumberType::LongDouble;
+                    floating_point_number_type = FloatingPointNumberLength::LongDouble;
                 }
                 'f' | 'F' => {
                     self.next_char(); // consumes char 'f' or 'F'
-                    floating_point_number_type = FloatingPointNumberType::Float;
+                    floating_point_number_type = FloatingPointNumberLength::Float;
                 }
                 'u' | 'U' => {
                     return Err(PreprocessError::MessageWithPosition(
@@ -1768,7 +1848,7 @@ impl Lexer<'_> {
                 }
                 'l' | 'L' => {
                     self.next_char(); // consumes char 'l' or 'L'
-                    floating_point_number_type = FloatingPointNumberType::LongDouble;
+                    floating_point_number_type = FloatingPointNumberLength::LongDouble;
                 }
                 'w' | 'W' => {
                     return Err(PreprocessError::MessageWithPosition(
@@ -1787,7 +1867,7 @@ impl Lexer<'_> {
 
     fn lex_char(
         &mut self,
-        char_type: CharType,
+        char_type: CharEncoding,
         prefix_length: usize,
     ) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
@@ -1797,7 +1877,7 @@ impl Lexer<'_> {
         // ```
 
         // save the start position of the char literal (i.e. the first "'")
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
         // consume the prefix characters, e.g. 'L', 'u', 'U', "u8"
         for _ in 0..prefix_length {
@@ -1811,7 +1891,7 @@ impl Lexer<'_> {
                 match current_char {
                     '\\' => {
                         // save the start position of the escape sequence (i.e. the "\" char)
-                        self.push_last_position_into_store();
+                        self.push_last_position_into_stack();
 
                         // escape chars.
                         // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
@@ -1829,16 +1909,7 @@ impl Lexer<'_> {
                                     '\\' => '\\',  // backslash
                                     '\'' => '\'',  // single quote
                                     '"' => '"',    // double quote
-                                    '?' => {
-                                        // question mark (?)
-                                        return Err(PreprocessError::MessageWithRange(
-                                                "Escape character '\\?' is not supported since trigraphs are not supported.".to_owned(),
-                                                Range::new(
-                                                    &self.pop_position_from_store(),
-                                                    &self.last_position,
-                                                ),
-                                            ));
-                                    }
+                                    '?' => '?',    // question mark (?), used to avoid trigraphs
                                     '0'..='7' => {
                                         // Octal escape sequence.
                                         // format: `\o`, `\oo`, and `\ooo`.
@@ -1868,7 +1939,7 @@ impl Lexer<'_> {
                                                             buffer
                                                         ),
                                                         Range::new(
-                                                            &self.pop_position_from_store(),
+                                                            &self.pop_position_from_stack(),
                                                             &self.last_position,
                                                         ),
                                                     ));
@@ -1892,7 +1963,7 @@ impl Lexer<'_> {
                                                         buffer
                                                     ),
                                                     Range::new(
-                                                        &self.pop_position_from_store(),
+                                                        &self.pop_position_from_stack(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -1935,7 +2006,7 @@ impl Lexer<'_> {
                                                     current_char2, buffer, length
                                                 ),
                                                 Range::new(
-                                                    &self.pop_position_from_store(),
+                                                    &self.pop_position_from_stack(),
                                                     &self.last_position,
                                                 ),
                                             ));
@@ -1953,7 +2024,7 @@ impl Lexer<'_> {
                                                             current_char2, buffer
                                                         ),
                                                         Range::new(
-                                                            &self.pop_position_from_store(),
+                                                            &self.pop_position_from_stack(),
                                                             &self.last_position,
                                                         ),
                                                     ));
@@ -1966,7 +2037,7 @@ impl Lexer<'_> {
                                                         current_char2, buffer
                                                     ),
                                                     Range::new(
-                                                        &self.pop_position_from_store(),
+                                                        &self.pop_position_from_stack(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -2003,7 +2074,7 @@ impl Lexer<'_> {
                                                     buffer, HEX_DIGITS
                                                 ),
                                                 Range::new(
-                                                    &self.pop_position_from_store(),
+                                                    &self.pop_position_from_stack(),
                                                     &self.last_position,
                                                 ),
                                             ));
@@ -2019,7 +2090,7 @@ impl Lexer<'_> {
                                                         buffer
                                                     ),
                                                     Range::new(
-                                                        &self.pop_position_from_store(),
+                                                        &self.pop_position_from_stack(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -2047,7 +2118,7 @@ impl Lexer<'_> {
                         };
 
                         // discard the saved position of the escape sequence
-                        self.pop_position_from_store();
+                        self.pop_position_from_stack();
 
                         // return the escaped character
                         escaped_char
@@ -2056,7 +2127,7 @@ impl Lexer<'_> {
                         // Empty char (`''`).
                         return Err(PreprocessError::MessageWithRange(
                             "Empty character is not allowed.".to_owned(),
-                            Range::new(&self.pop_position_from_store(), &self.last_position),
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     }
                     _ => {
@@ -2093,7 +2164,7 @@ impl Lexer<'_> {
             }
         }
 
-        let character_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let character_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
         Ok(TokenWithRange::new(
             Token::Char(character, char_type),
             character_range,
@@ -2102,7 +2173,7 @@ impl Lexer<'_> {
 
     fn lex_string(
         &mut self,
-        string_type: StringType,
+        string_type: StringEncoding,
         prefix_length: usize,
     ) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
@@ -2112,7 +2183,7 @@ impl Lexer<'_> {
         // ```
 
         // save the start position of the string literal (i.e. the first '"')
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
         // consume the prefix characters, e.g. 'L', 'u', 'U', "u8"
         for _ in 0..prefix_length {
@@ -2129,7 +2200,7 @@ impl Lexer<'_> {
                     match current_char {
                         '\\' => {
                             // save the start position of the escape sequence (i.e. the "\" char)
-                            self.push_last_position_into_store();
+                            self.push_last_position_into_stack();
 
                             // escape chars.
                             // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
@@ -2147,16 +2218,7 @@ impl Lexer<'_> {
                                         '\\' => '\\', // backslash
                                         '\'' => '\'', // single quote
                                         '"' => '"',  // double quote
-                                        '?' => {
-                                            // question mark (?)
-                                            return Err(PreprocessError::MessageWithRange(
-                                                    "Escape character '\\?' is not supported since trigraphs are not supported.".to_owned(),
-                                                    Range::new(
-                                                    &self.pop_position_from_store(),
-                                                    &self.last_position,
-                                                ),
-                                                ));
-                                        }
+                                        '?' => '?',  // question mark (?), used to avoid trigraphs
                                         '0'..='7' => {
                                             // Octal escape sequence.
                                             // format: `\o`, `\oo`, and `\ooo`.
@@ -2187,7 +2249,7 @@ impl Lexer<'_> {
                                                                     buffer
                                                                 ),
                                                                 Range::new(
-                                                                    &self.pop_position_from_store(),
+                                                                    &self.pop_position_from_stack(),
                                                                     &self.last_position,
                                                                 ),
                                                             ),
@@ -2212,7 +2274,7 @@ impl Lexer<'_> {
                                                             buffer
                                                         ),
                                                         Range::new(
-                                                            &self.pop_position_from_store(),
+                                                            &self.pop_position_from_stack(),
                                                             &self.last_position,
                                                         ),
                                                     ));
@@ -2255,7 +2317,7 @@ impl Lexer<'_> {
                                                         current_char2, buffer, length
                                                     ),
                                                     Range::new(
-                                                        &self.pop_position_from_store(),
+                                                        &self.pop_position_from_stack(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -2274,7 +2336,7 @@ impl Lexer<'_> {
                                                                     current_char2, buffer
                                                                 ),
                                                                 Range::new(
-                                                                    &self.pop_position_from_store(),
+                                                                    &self.pop_position_from_stack(),
                                                                     &self.last_position,
                                                                 ),
                                                             ),
@@ -2288,7 +2350,7 @@ impl Lexer<'_> {
                                                             current_char2, buffer
                                                         ),
                                                         Range::new(
-                                                            &self.pop_position_from_store(),
+                                                            &self.pop_position_from_stack(),
                                                             &self.last_position,
                                                         ),
                                                     ));
@@ -2325,7 +2387,7 @@ impl Lexer<'_> {
                                                         buffer, HEX_DIGITS
                                                     ),
                                                     Range::new(
-                                                        &self.pop_position_from_store(),
+                                                        &self.pop_position_from_stack(),
                                                         &self.last_position,
                                                     ),
                                                 ));
@@ -2341,7 +2403,7 @@ impl Lexer<'_> {
                                                             buffer
                                                         ),
                                                         Range::new(
-                                                            &self.pop_position_from_store(),
+                                                            &self.pop_position_from_stack(),
                                                             &self.last_position,
                                                         ),
                                                     ));
@@ -2369,7 +2431,7 @@ impl Lexer<'_> {
                             };
 
                             // discard the saved position of the escape sequence
-                            self.pop_position_from_store();
+                            self.pop_position_from_stack();
 
                             final_string.push(escaped_char);
                         }
@@ -2393,7 +2455,7 @@ impl Lexer<'_> {
             }
         }
 
-        let final_string_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let final_string_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         Ok(TokenWithRange::new(
             Token::String(final_string, string_type),
@@ -2401,7 +2463,7 @@ impl Lexer<'_> {
         ))
     }
 
-    fn lex_filepath(&mut self) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_quoted_headerfile(&mut self) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // "path"?  //
         // ^    ^___// to here
@@ -2409,9 +2471,9 @@ impl Lexer<'_> {
         // ```
 
         // save the start position of the file path (i.e. the first '"')
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
-        let mut final_path = String::new();
+        let mut file_path = String::new();
 
         self.next_char(); // Consumes '"'
 
@@ -2447,7 +2509,7 @@ impl Lexer<'_> {
                         ));
                     }
                     _ => {
-                        final_path.push(current_char);
+                        file_path.push(current_char);
                     }
                 }
             } else {
@@ -2458,15 +2520,15 @@ impl Lexer<'_> {
             }
         }
 
-        let final_path_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let final_path_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         Ok(TokenWithRange::new(
-            Token::FilePath(final_path, false),
+            Token::HeaderFile(file_path, false),
             final_path_range,
         ))
     }
 
-    fn lex_angle_filepath(&mut self) -> Result<TokenWithRange, PreprocessError> {
+    fn lex_angle_headerfile(&mut self) -> Result<TokenWithRange, PreprocessError> {
         // ```diagram
         // <path>?  //
         // ^    ^___// to here
@@ -2474,9 +2536,9 @@ impl Lexer<'_> {
         // ```
 
         // save the start position of the file path (i.e. the first '<')
-        self.push_peek_position_into_store();
+        self.push_peek_position_into_stack();
 
-        let mut final_path = String::new();
+        let mut file_path = String::new();
 
         self.next_char(); // Consumes '<'
 
@@ -2518,7 +2580,7 @@ impl Lexer<'_> {
                         ));
                     }
                     _ => {
-                        final_path.push(current_char);
+                        file_path.push(current_char);
                     }
                 }
             } else {
@@ -2529,25 +2591,24 @@ impl Lexer<'_> {
             }
         }
 
-        let final_path_range = Range::new(&self.pop_position_from_store(), &self.last_position);
+        let final_path_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         Ok(TokenWithRange::new(
-            Token::FilePath(final_path, true),
+            Token::HeaderFile(file_path, true),
             final_path_range,
         ))
     }
 }
 
-/*
- * Checks whether the last token in the provided token list is a directive macro, specifically `include` or `embed`.
- *
- * The C preprocessor is not a strictly defined language, and there are some inconsistencies in its syntax:
- * - In the `#include` and `#embed` directives, the file path is not a string literal.
- * - In the `has_include` and `has_embed` functions, the file path is not a string literal.
- * - In function-like macro definitions, there cannot be whitespace between the macro identifier and the opening parenthesis.
- */
-
-fn is_directive_include(token_with_ranges: &[TokenWithRange]) -> bool {
+/// Checks whether the last token in the provided token list is a directive `include` or `embed`.
+///
+/// e.g.
+///
+/// ```c
+/// #include ...
+/// #embed ...
+/// ```
+fn is_directive_of_include_or_embed(token_with_ranges: &[TokenWithRange]) -> bool {
     let length = token_with_ranges.len();
     length >= 2
         && matches!(
@@ -2557,11 +2618,21 @@ fn is_directive_include(token_with_ranges: &[TokenWithRange]) -> bool {
                 ..
             })
         )
-        && matches!(token_with_ranges.last(),
-        Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "include" || id == "embed")
+        && matches!(
+            token_with_ranges.last(),
+            Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "include" || id == "embed"
+        )
 }
 
-fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
+/// Checks whether the last token in the provided token list is a function `__has_include` or `__has_embed`.
+///
+/// e.g.
+///
+/// ```c
+/// ... __has_include( ...
+/// ... __has_embed( ...
+/// ```
+fn is_function_of_has_include_or_has_embed(token_with_ranges: &[TokenWithRange]) -> bool {
     let length = token_with_ranges.len();
     length >= 2
         && matches!(
@@ -2577,14 +2648,30 @@ fn is_function_has_include(token_with_ranges: &[TokenWithRange]) -> bool {
         )
 }
 
-/// Checks whether the last token in the provided token list is the `define` directive macro.
+/// Checks whether the last token in the provided token list is a directive `define`.
 ///
 /// This is used to identify function-like macro definitions, which require the macro name to be
 /// immediately followed by an opening parenthesis with no intervening whitespace.
-fn is_directive_define(token_with_ranges: &[TokenWithRange]) -> bool {
-    matches!(
-        token_with_ranges.last(),
-        Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "define")
+///
+/// e.g.
+///     
+/// ```c
+/// #define ...
+/// ```
+fn is_directive_of_define(token_with_ranges: &[TokenWithRange]) -> bool {
+    let length = token_with_ranges.len();
+    length >= 2
+        && matches!(
+            token_with_ranges.get(length - 2),
+            Some(TokenWithRange {
+                token: Token::DirectiveStart,
+                ..
+            })
+        )
+        && matches!(
+            token_with_ranges.last(),
+            Some(TokenWithRange { token: Token::Identifier(id), ..}) if id == "define"
+        )
 }
 
 #[cfg(test)]
@@ -2596,14 +2683,14 @@ mod tests {
         char_with_position::{CharWithPosition, CharsWithPositionIter},
         lexer::{
             PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS,
-            PEEK_BUFFER_LENGTH_REMOVE_SHEBANG, pre_lex,
+            PEEK_BUFFER_LENGTH_REMOVE_SHEBANG, initialize,
         },
         peekable_iter::PeekableIter,
         position::Position,
         range::Range,
         token::{
-            CharType, FloatingPointNumber, FloatingPointNumberType, IntegerNumber,
-            IntegerNumberType, Number, Punctuator, StringType, Token,
+            CharEncoding, FloatingPointNumber, FloatingPointNumberLength, IntegerNumber,
+            IntegerNumberLength, Number, Punctuator, StringEncoding, Token,
         },
     };
 
@@ -2618,16 +2705,16 @@ mod tests {
             Token::Number(Number::Integer(IntegerNumber::new(
                 i.to_string(),
                 false,
-                IntegerNumberType::Default,
+                IntegerNumberLength::Default,
             )))
         }
 
         fn new_char(c: char) -> Self {
-            Token::Char(c, CharType::Default)
+            Token::Char(c, CharEncoding::Default)
         }
 
         fn new_string(s: &str) -> Self {
-            Token::String(s.to_owned(), StringType::Default)
+            Token::String(s.to_owned(), StringEncoding::Default)
         }
     }
 
@@ -2642,7 +2729,7 @@ mod tests {
     #[test]
     fn test_merge_continued_lines() {
         let source_text = "012\n456\\\n901\\    \n890\\\r\n456\n890";
-        // chars index: 0123 4567 8 9012 34567 8901 2 3 4567 890
+        // chars index:          0123 4567 8 9012 34567 8901 2 3 4567 890
 
         let mut chars = source_text.chars();
         let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
@@ -2689,7 +2776,7 @@ mod tests {
     #[test]
     fn test_remove_comments() {
         let source_text = "012 // foo\n123 /* bar \n buzz */ 234";
-        // chars index: 01234567890 123456789012 345678901234
+        // chars index:          01234567890 123456789012 345678901234
 
         let mut chars = source_text.chars();
         let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
@@ -2725,7 +2812,7 @@ mod tests {
     #[test]
     fn test_remove_shebang() {
         let source_text = "//foo\n#!/usr/bin/env bar\n567";
-        // chars index: 012345 6789012345678901234 567
+        // chars index:          012345 6789012345678901234 567
 
         let mut chars = source_text.chars();
         let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
@@ -2750,11 +2837,11 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_lex() {
+    fn test_initialize() {
         let source_text = "0/\\\n/foo\n1/\\\n*bar*/2";
-        // chars index: 012 3 45678 901 2 3456789
+        // chars index:          012 3 45678 901 2 3456789
 
-        let clean = pre_lex(source_text).unwrap();
+        let clean = initialize(source_text).unwrap();
 
         assert_eq!(
             clean,
@@ -2769,6 +2856,99 @@ mod tests {
                 CharWithPosition::new('2', Position::new(19, 3, 6)),
             ]
         );
+    }
+
+    #[test]
+    // https://en.cppreference.com/w/c/language/operator_alternative.html
+    fn test_trigraphs() {
+        let source_text0 = "do ??< 123";
+        // chars index:           0123456789
+
+        let result0 = lex_from_str(source_text0);
+        assert!(matches!(
+            result0,
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 3,
+                        line: 0,
+                        column: 3
+                    },
+                    end_included: Position {
+                        index: 5,
+                        line: 0,
+                        column: 5
+                    },
+                }
+            ))
+        ));
+
+        let source_text1 = "val ?? 123";
+        // chars index:           0123456789
+
+        let result1 = lex_from_str(source_text1);
+        assert!(matches!(
+            result1,
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 4,
+                        line: 0,
+                        column: 4
+                    },
+                    end_included: Position {
+                        index: 5,
+                        line: 0,
+                        column: 5
+                    },
+                }
+            ))
+        ));
+
+        let trigraphs = vec![
+            "??<", "??>", "??(", "??)", "??=", "??/", "??'", "??!", "??-",
+        ];
+
+        for trigraph in trigraphs {
+            let result = lex_from_str(trigraph);
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    // https://en.cppreference.com/w/c/language/operator_alternative.html
+    fn test_digraphs() {
+        let source = "if 1 <% return";
+        // chars index:     01234567890123
+
+        let result = lex_from_str_with_range_strip(source);
+        assert!(matches!(
+            result,
+            Err(PreprocessError::MessageWithRange(
+                _,
+                Range {
+                    start: Position {
+                        index: 5,
+                        line: 0,
+                        column: 5
+                    },
+                    end_included: Position {
+                        index: 6,
+                        line: 0,
+                        column: 6
+                    },
+                }
+            ))
+        ));
+
+        let digraphs = vec!["<%", "%>", "<:", ":>", "%:", "%:%:"];
+
+        for digraph in digraphs {
+            let result = lex_from_str(digraph);
+            assert!(result.is_err());
+        }
     }
 
     #[test]
@@ -2983,7 +3163,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 211.to_string(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -2992,7 +3172,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 2025.to_string(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3005,7 +3185,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         223.to_string(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(0, 0, 0, 3)
                 ),
@@ -3013,7 +3193,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         211.to_string(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(4, 0, 4, 3)
                 ),
@@ -3042,12 +3222,12 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "2".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 )))
             ]
         );
@@ -3058,32 +3238,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "2".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "3".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "4".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "5".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "6".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3094,32 +3274,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "2".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "3".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "4".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "5".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "6".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3132,32 +3312,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "1".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "2".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "3".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "4".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "5".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "6".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3184,7 +3364,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "3.14".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -3195,7 +3375,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "1.414".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -3207,7 +3387,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "2.998e8".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -3219,7 +3399,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "2.998e+8".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -3231,7 +3411,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "6.626e-34".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -3241,7 +3421,11 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip(".5").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
-                FloatingPointNumber::new("0.5".to_owned(), false, FloatingPointNumberType::Default)
+                FloatingPointNumber::new(
+                    "0.5".to_owned(),
+                    false,
+                    FloatingPointNumberLength::Default
+                )
             ))]
         );
 
@@ -3250,7 +3434,11 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip("5.").unwrap(),
             vec![Token::Number(Number::FloatingPoint(
-                FloatingPointNumber::new("5.0".to_owned(), false, FloatingPointNumberType::Default)
+                FloatingPointNumber::new(
+                    "5.0".to_owned(),
+                    false,
+                    FloatingPointNumberLength::Default
+                )
             ))]
         );
 
@@ -3263,7 +3451,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "3.14".to_owned(),
                         false,
-                        FloatingPointNumberType::Default
+                        FloatingPointNumberLength::Default
                     ))),
                     Range::from_detail(0, 0, 0, 4)
                 ),
@@ -3271,7 +3459,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "6.022e23".to_owned(),
                         false,
-                        FloatingPointNumberType::Default
+                        FloatingPointNumberLength::Default
                     ))),
                     Range::from_detail(5, 0, 5, 8)
                 ),
@@ -3347,22 +3535,22 @@ mod tests {
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "1.0".to_owned(),
                     false,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "2.0".to_owned(),
                     false,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "3.0".to_owned(),
                     false,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "4.0".to_owned(),
                     false,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 )))
             ]
         );
@@ -3373,32 +3561,32 @@ mod tests {
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "1.0".to_owned(),
                     true,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "2.0".to_owned(),
                     true,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "3.0".to_owned(),
                     true,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "4.0".to_owned(),
                     true,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "5.0".to_owned(),
                     true,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "6.0".to_owned(),
                     true,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 )))
             ]
         );
@@ -3424,7 +3612,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0b0100".to_owned(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3433,7 +3621,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0b01101001".to_owned(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3446,7 +3634,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "0b0110".to_owned(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(0, 0, 0, 6)
                 ),
@@ -3454,7 +3642,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "0b1000".to_owned(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(7, 0, 7, 6)
                 ),
@@ -3529,12 +3717,12 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b01".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b10".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 )))
             ]
         );
@@ -3545,32 +3733,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b001".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b010".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b011".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b100".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b101".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b110".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3582,32 +3770,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b001".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b010".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b011".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b100".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b101".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0b110".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3633,7 +3821,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0".to_owned(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3642,7 +3830,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "01100".to_owned(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3651,7 +3839,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0775".to_owned(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3664,7 +3852,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "01".to_owned(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(0, 0, 0, 2)
                 ),
@@ -3672,7 +3860,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "0600".to_owned(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(3, 0, 3, 4)
                 ),
@@ -3727,12 +3915,12 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "01".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "02".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 )))
             ]
         );
@@ -3743,32 +3931,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "01".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "02".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "03".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "04".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "05".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "06".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3779,32 +3967,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "01".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "02".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "03".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "04".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "05".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "06".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3830,7 +4018,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0xabcdef".to_owned(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3839,7 +4027,7 @@ mod tests {
             vec![Token::Number(Number::Integer(IntegerNumber::new(
                 "0x12345678".to_owned(),
                 false,
-                IntegerNumberType::Default
+                IntegerNumberLength::Default
             )))]
         );
 
@@ -3852,7 +4040,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "0x90ab".to_string(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(0, 0, 0, 6)
                 ),
@@ -3860,7 +4048,7 @@ mod tests {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "0xcd12".to_string(),
                         false,
-                        IntegerNumberType::Default
+                        IntegerNumberLength::Default
                     ))),
                     Range::from_detail(7, 0, 7, 6)
                 ),
@@ -3909,12 +4097,12 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x1a".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x2b".to_owned(),
                     true,
-                    IntegerNumberType::Default
+                    IntegerNumberLength::Default
                 )))
             ]
         );
@@ -3926,32 +4114,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x12ab".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x34cd".to_owned(),
                     false,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x56ef".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x78aa".to_owned(),
                     false,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x90bb".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0xffff".to_owned(),
                     false,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -3965,32 +4153,32 @@ mod tests {
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x12ab".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x34cd".to_owned(),
                     true,
-                    IntegerNumberType::Long
+                    IntegerNumberLength::Long
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x56ef".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x78aa".to_owned(),
                     true,
-                    IntegerNumberType::LongLong
+                    IntegerNumberLength::LongLong
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0x90bb".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
                 Token::Number(Number::Integer(IntegerNumber::new(
                     "0xffff".to_owned(),
                     true,
-                    IntegerNumberType::BitInt
+                    IntegerNumberLength::BitInt
                 ))),
             ]
         );
@@ -4004,7 +4192,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.4p3".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -4017,7 +4205,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.921fb6p1".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -4030,7 +4218,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.5bf0a8b145769p+1".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -4044,7 +4232,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x1.62e42fefa39efp-1".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -4057,7 +4245,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x0.1234p5".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -4070,7 +4258,7 @@ mod tests {
                 FloatingPointNumber::new(
                     "0x123.0p4".to_owned(),
                     false,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 )
             ))]
         );
@@ -4084,7 +4272,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "0x1.2p3".to_owned(),
                         false,
-                        FloatingPointNumberType::Default
+                        FloatingPointNumberLength::Default
                     ))),
                     Range::from_detail(0, 0, 0, 7)
                 ),
@@ -4092,7 +4280,7 @@ mod tests {
                     Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                         "0xa.bp+12".to_owned(),
                         false,
-                        FloatingPointNumberType::Default
+                        FloatingPointNumberLength::Default
                     ))),
                     Range::from_detail(8, 0, 8, 9)
                 ),
@@ -4187,22 +4375,22 @@ mod tests {
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x1.2p3".to_owned(),
                     false,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x2.3p4".to_owned(),
                     false,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x3.4p5".to_owned(),
                     false,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x4.5p6".to_owned(),
                     false,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 )))
             ]
         );
@@ -4216,32 +4404,32 @@ mod tests {
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x1.2p3".to_owned(),
                     true,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x2.3p4".to_owned(),
                     true,
-                    FloatingPointNumberType::Default
+                    FloatingPointNumberLength::Default
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x3.4p5".to_owned(),
                     true,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x4.5p6".to_owned(),
                     true,
-                    FloatingPointNumberType::Float
+                    FloatingPointNumberLength::Float
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x5.6p7".to_owned(),
                     true,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 ))),
                 Token::Number(Number::FloatingPoint(FloatingPointNumber::new(
                     "0x6.7p8".to_owned(),
                     true,
-                    FloatingPointNumberType::LongDouble
+                    FloatingPointNumberLength::LongDouble
                 )))
             ]
         );
@@ -4320,6 +4508,12 @@ mod tests {
             vec![Token::new_char('\n')]
         );
 
+        // escape char `\?`
+        assert_eq!(
+            lex_from_str_with_range_strip("'\\?'").unwrap(),
+            vec![Token::new_char('?')]
+        );
+
         // escape char `\0`
         assert_eq!(
             lex_from_str_with_range_strip("'\\0'").unwrap(),
@@ -4360,6 +4554,12 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip("'\\U00006587'").unwrap(),
             vec![Token::new_char('文')]
+        );
+
+        // continue lines
+        assert_eq!(
+            lex_from_str_with_range_strip("'\\\\\nx41'").unwrap(),
+            vec![Token::new_char('A')]
         );
 
         // location
@@ -4442,26 +4642,6 @@ mod tests {
                     index: 2,
                     line: 0,
                     column: 2,
-                }
-            ))
-        ));
-
-        // err: unsupported escape char `'\?'`
-        assert!(matches!(
-            lex_from_str_with_range_strip(r#"'\?'"#),
-            Err(PreprocessError::MessageWithRange(
-                _,
-                Range {
-                    start: Position {
-                        index: 1,
-                        line: 0,
-                        column: 1,
-                    },
-                    end_included: Position {
-                        index: 2,
-                        line: 0,
-                        column: 2,
-                    }
                 }
             ))
         ));
@@ -4594,15 +4774,15 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_char_with_types() {
+    fn test_lex_char_with_encoding() {
         assert_eq!(
             lex_from_str_with_range_strip("'a' L'b' u'c' U'文' u8'😊'",).unwrap(),
             vec![
-                Token::Char('a', CharType::Default),
-                Token::Char('b', CharType::Wide),
-                Token::Char('c', CharType::UTF16),
-                Token::Char('文', CharType::UTF32),
-                Token::Char('😊', CharType::UTF8),
+                Token::Char('a', CharEncoding::Default),
+                Token::Char('b', CharEncoding::Wide),
+                Token::Char('c', CharEncoding::UTF16),
+                Token::Char('文', CharEncoding::UTF32),
+                Token::Char('😊', CharEncoding::UTF8),
             ]
         );
     }
@@ -4645,11 +4825,17 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip(
                 r#"
-                "\\\'\"\t\r\n\0\x2d\u6587"
+                "\\\'\"\t\r\n\?\0\x2d\u6587"
                 "#
             )
             .unwrap(),
-            vec![Token::new_string("\\\'\"\t\r\n\0-文")]
+            vec![Token::new_string("\\\'\"\t\r\n?\0-文")]
+        );
+
+        // continue lines
+        assert_eq!(
+            lex_from_str_with_range_strip("\"abc\\\\\n0xyz\"").unwrap(),
+            vec![Token::new_string("abc\0xyz")]
         );
 
         // location
@@ -4693,26 +4879,6 @@ mod tests {
         assert!(matches!(
             lex_from_str_with_range_strip("\"abc\n   "),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
-        ));
-
-        // err: unsupported escape char `'\?'`.
-        assert!(matches!(
-            lex_from_str_with_range_strip(r#""abc\?xyz""#),
-            Err(PreprocessError::MessageWithRange(
-                _,
-                Range {
-                    start: Position {
-                        index: 4,
-                        line: 0,
-                        column: 4,
-                    },
-                    end_included: Position {
-                        index: 5,
-                        line: 0,
-                        column: 5,
-                    }
-                }
-            ))
         ));
 
         // err: incorrect hex escape `'\x3'`
@@ -4858,15 +5024,15 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_string_with_types() {
+    fn test_lex_string_with_encoding() {
         assert_eq!(
             lex_from_str_with_range_strip(r#""abc" L"def" u"xyz" U"文字" u8"😊""#,).unwrap(),
             vec![
-                Token::String("abc".to_owned(), StringType::Default),
-                Token::String("def".to_owned(), StringType::Wide),
-                Token::String("xyz".to_owned(), StringType::UTF16),
-                Token::String("文字".to_owned(), StringType::UTF32),
-                Token::String("😊".to_owned(), StringType::UTF8),
+                Token::String("abc".to_owned(), StringEncoding::Default),
+                Token::String("def".to_owned(), StringEncoding::Wide),
+                Token::String("xyz".to_owned(), StringEncoding::UTF16),
+                Token::String("文字".to_owned(), StringEncoding::UTF32),
+                Token::String("😊".to_owned(), StringEncoding::UTF8),
             ]
         );
     }
@@ -4971,7 +5137,7 @@ xyz
             vec![
                 Token::DirectiveStart,
                 Token::new_identifier("define"),
-                Token::FunctionLikeMacroIdentifier("FOO".to_owned()),
+                Token::DefinedMacroIdentifierFunctionLike("FOO".to_owned()),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::new_identifier("x"),
                 Token::Punctuator(Punctuator::ParenthesisClose),
@@ -4983,7 +5149,7 @@ xyz
                 //
                 Token::DirectiveStart,
                 Token::new_identifier("define"),
-                Token::FunctionLikeMacroIdentifier("BAR".to_owned()),
+                Token::DefinedMacroIdentifierFunctionLike("BAR".to_owned()),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::new_identifier("y"),
                 Token::Punctuator(Punctuator::ParenthesisClose),
@@ -5017,7 +5183,7 @@ xyz
     }
 
     #[test]
-    fn test_lex_filepath() {
+    fn test_lex_header_file() {
         assert_eq!(
             lex_from_str_with_range_strip(r#"<foo.h>"#).unwrap(),
             vec![
@@ -5046,7 +5212,7 @@ xyz
             vec![
                 Token::DirectiveStart,
                 Token::new_identifier("include"),
-                Token::FilePath("foo.h".to_owned(), true),
+                Token::HeaderFile("foo.h".to_owned(), true),
             ]
         );
 
@@ -5055,7 +5221,7 @@ xyz
             vec![
                 Token::DirectiveStart,
                 Token::new_identifier("embed"),
-                Token::FilePath("hippo.png".to_owned(), true),
+                Token::HeaderFile("hippo.png".to_owned(), true),
             ]
         );
 
@@ -5080,7 +5246,7 @@ xyz
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_include"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("foo.h".to_owned(), true),
+                Token::HeaderFile("foo.h".to_owned(), true),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -5106,7 +5272,7 @@ xyz
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_embed"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("hippo.png".to_owned(), true),
+                Token::HeaderFile("hippo.png".to_owned(), true),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -5126,7 +5292,7 @@ xyz
             vec![
                 Token::DirectiveStart,
                 Token::new_identifier("include"),
-                Token::FilePath("bar.h".to_owned(), false),
+                Token::HeaderFile("bar.h".to_owned(), false),
             ]
         );
 
@@ -5135,7 +5301,7 @@ xyz
             vec![
                 Token::DirectiveStart,
                 Token::new_identifier("embed"),
-                Token::FilePath("spark.png".to_owned(), false),
+                Token::HeaderFile("spark.png".to_owned(), false),
             ]
         );
 
@@ -5156,7 +5322,7 @@ xyz
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_include"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("spark.png".to_owned(), false),
+                Token::HeaderFile("spark.png".to_owned(), false),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -5178,7 +5344,7 @@ xyz
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_embed"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("spark.png".to_owned(), false),
+                Token::HeaderFile("spark.png".to_owned(), false),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -5193,7 +5359,7 @@ xyz
                     Range::from_detail(1, 0, 1, 7)
                 ),
                 TokenWithRange::new(
-                    Token::FilePath("path/to/header.h".to_owned(), true),
+                    Token::HeaderFile("path/to/header.h".to_owned(), true),
                     Range::from_detail(9, 0, 9, 18)
                 )
             ]
@@ -5264,7 +5430,7 @@ xyz
             vec![
                 Token::DirectiveStart,
                 Token::new_identifier("define"),
-                Token::FunctionLikeMacroIdentifier("foo".to_owned()),
+                Token::DefinedMacroIdentifierFunctionLike("foo".to_owned()),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::new_identifier("a"),
                 Token::Punctuator(Punctuator::ParenthesisClose),
@@ -5344,6 +5510,20 @@ xyz
             ]
         );
 
+        // continue lines within line comments
+        assert_eq!(
+            lex_from_str_with_range_strip(
+                r#"
+                7 // 11 \
+                13 17 \
+                19
+                23
+                "#
+            )
+            .unwrap(),
+            vec![Token::new_integer_number(7), Token::new_integer_number(23),]
+        );
+
         // location
 
         assert_eq!(
@@ -5396,6 +5576,30 @@ xyz
                 Token::new_integer_number(11),
                 Token::new_integer_number(13),
             ]
+        );
+
+        // continue lines within block comments
+        assert_eq!(
+            lex_from_str_with_range_strip(
+                r#"
+                7 /* 11 \
+                13 */ 19
+                "#
+            )
+            .unwrap(),
+            vec![Token::new_integer_number(7), Token::new_integer_number(19),]
+        );
+
+        assert_eq!(
+            lex_from_str_with_range_strip(
+                r#"
+                7 /\
+* 11
+*\
+/ 19"#
+            )
+            .unwrap(),
+            vec![Token::new_integer_number(7), Token::new_integer_number(19),]
         );
 
         // location

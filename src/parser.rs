@@ -10,7 +10,7 @@ use crate::{
     lexer::lex_from_str,
     peekable_iter::PeekableIter,
     range::Range,
-    token::{CharType, Number, Punctuator, StringType, Token},
+    token::{CharEncoding, Number, Punctuator, StringEncoding, Token},
 };
 
 const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
@@ -36,7 +36,7 @@ pub struct Parser<'a> {
 impl<'a> Parser<'a> {
     fn new(upstream: &'a mut PeekableIter<'a, TokenWithRange>) -> Self {
         let last_range = if let Some(first_token) = upstream.peek(0) {
-            // Initialize last_range with the first token's range.
+            // Initialize `last_range` with the first token's range.
             first_token.range
         } else {
             Range::default()
@@ -118,7 +118,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_and_consume_string(&mut self) -> Result<(String, StringType), PreprocessError> {
+    fn expect_and_consume_string(&mut self) -> Result<(String, StringEncoding), PreprocessError> {
         match self.next_token() {
             Some(Token::String(s, t)) => Ok((s, t)),
             Some(_) => Err(PreprocessError::MessageWithPosition(
@@ -222,7 +222,7 @@ impl Parser<'_> {
         // ```diagram
         // token ...
         // ^
-        // |__ current token, validated (not NONE)
+        // |__ current token, validated (wouldn't be NONE)
         // ```
 
         let statement = match self.peek_token(0).unwrap() {
@@ -268,6 +268,7 @@ impl Parser<'_> {
                                     Statement::If(if_)
                                 }
                                 "elif" | "elifdef" | "elifndef" | "else" | "endif" => {
+                                    // Branches without preceding `if` are invalid.
                                     return Err(PreprocessError::MessageWithRange(
                                         format!(
                                             "Missing `if` (or `ifdef`, `ifndef`) directive before `{}`.",
@@ -296,7 +297,6 @@ impl Parser<'_> {
 
                                     Statement::Warning(warning_message, range)
                                 }
-
                                 "line" | "ident" | "sccs" | "assert" | "unassert"
                                 | "include_next" => {
                                     return Err(PreprocessError::MessageWithRange(
@@ -362,7 +362,7 @@ impl Parser<'_> {
 
         self.next_token(); // consumes "pragma"
 
-        let mut parts = vec![];
+        let mut components = vec![];
 
         // Move all tokens to `parts` until we hit a newline or EOF.
         while let Some(token) = self.peek_token(0) {
@@ -372,13 +372,13 @@ impl Parser<'_> {
                 }
                 _ => {
                     let token_with_range = self.next_token_with_range().unwrap();
-                    parts.push(token_with_range);
+                    components.push(token_with_range);
                 }
             }
         }
 
         // Empty pragma parameters are not allowed.
-        if parts.is_empty() {
+        if components.is_empty() {
             if self.peek_range(0).is_some() {
                 return Err(PreprocessError::MessageWithPosition(
                     "Expect pragma parameters after `#pragma`.".to_owned(),
@@ -393,7 +393,7 @@ impl Parser<'_> {
 
         self.expect_and_consume_directive_end_or_eof()?;
 
-        Ok(Pragma { parts })
+        Ok(Pragma { components })
     }
 
     fn parse_define(&mut self) -> Result<Define, PreprocessError> {
@@ -557,7 +557,7 @@ impl Parser<'_> {
                     definition,
                 }
             }
-            Some(Token::FunctionLikeMacroIdentifier(id)) => {
+            Some(Token::DefinedMacroIdentifierFunctionLike(id)) => {
                 // Handle function-like macro definition
                 let name = id.clone();
                 let range = *self.peek_range(0).unwrap();
@@ -602,7 +602,7 @@ impl Parser<'_> {
         self.next_token(); // consumes "include"
 
         let include = match self.peek_token(0) {
-            Some(Token::FilePath(file_path, is_system_header)) => {
+            Some(Token::HeaderFile(file_path, is_system_header)) => {
                 // Handle include with file path
                 let range = *self.peek_range(0).unwrap();
                 let include = Include::FilePath {
@@ -669,7 +669,7 @@ impl Parser<'_> {
                     Token::Char(ch, char_type) => {
                         if matches!(
                             char_type,
-                            CharType::Wide | CharType::UTF16 | CharType::UTF32
+                            CharEncoding::Wide | CharEncoding::UTF16 | CharEncoding::UTF32
                         ) {
                             return Err(PreprocessError::MessageWithPosition(
                                 "Wide character literals are not supported in embed directive."
@@ -745,7 +745,7 @@ impl Parser<'_> {
         };
 
         let embed = match self.peek_token(0) {
-            Some(Token::FilePath(file_path, is_system_file)) => {
+            Some(Token::HeaderFile(file_path, is_system_file)) => {
                 // Handle embed with file path
 
                 let range = *self.peek_range(0).unwrap();

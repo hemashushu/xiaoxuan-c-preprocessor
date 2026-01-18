@@ -23,15 +23,25 @@ mod processor;
 mod range;
 
 pub const FILE_NUMBER_PREDEFINED: usize = 0;
-pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2_usize.pow(16);
 
-pub mod token;
+// ANCPP automatically assigns file numbers to header files, starting from 1
+// (file number 0 is reserved for predefined macros).
+//
+// The source file number should be specified manually using
+// the `source_file_number` parameter of function `process_source_file`.
+//
+// To avoid conflicts with header files,
+// the source file number should be greater than or equal to
+// `FILE_NUMBER_SOURCE_FILE_BEGIN`, which is defined as 65536 in ANCPP.
+pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2 ^ 16;
+
 pub mod error_printer;
 pub mod file_provider;
 pub mod header_file_cache;
 pub mod memory_file_provider;
 pub mod native_file_provider;
 pub mod prompt;
+pub mod token;
 
 pub use processor::process_source_file;
 

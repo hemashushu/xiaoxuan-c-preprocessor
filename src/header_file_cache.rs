@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use crate::ast::Program;
 
-/// A cache for files, typically header files (`*.h`) that have been included.
-/// Stores the canonical path, source code, and the parsed program for each file.
+/// A cache for the processed header files.
+/// 
+/// Stores the canonical path, source code, and the parsed AST for each file.
 /// This cache prevents redundant parsing of the same file multiple times.
 ///
 /// The souce code file (`*.c`) should not be cached.

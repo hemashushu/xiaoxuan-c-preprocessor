@@ -24,23 +24,22 @@ where
     pub file_provider: &'a T,
 
     /// Mutable reference to the file cache.
-    pub file_cache: &'a mut HeaderFileCache,
+    pub header_file_cache: &'a mut HeaderFileCache,
 
-    pub reserved_keywords: &'a [&'a str],
+    pub reserved_identifiers: &'a [&'a str],
 
     /// Macro definitions and related state.
     pub macro_map: MacroMap,
 
-    /// Whether to resolve relative file paths.
-    /// For example, `#include "../../folder/header.h"` will be resolved to the actual file path
-    /// using the current source or header file as the base directory.
-    pub should_resolve_relative_path: bool,
+    /// Whether to resolve relative file paths base on the current file.
+    /// Set to false to only search in the specified including directories.
+    pub resolve_relative_path_within_current_file: bool,
 
     /// The file number currently being processed.
-    pub current_file: ContextFile,
+    pub current_file_item: FileItem,
 
     /// List of included files to prevent redundant inclusions.
-    pub included_files: Vec<IncludeFile>,
+    pub included_files: Vec<FileLocation>,
 
     /// User-facing messages, warnings, or notifications.
     pub prompts: Vec<Prompt>,
@@ -57,20 +56,20 @@ where
     pub fn new(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
-        reserved_keywords: &'a [&'a str],
-        should_resolve_relative_path: bool,
+        reserved_identifiers: &'a [&'a str],
+        resolve_relative_path_within_current_file: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
     ) -> Self {
         Self {
             file_provider,
-            file_cache,
-            reserved_keywords,
-            should_resolve_relative_path,
-            current_file: ContextFile::new(
+            header_file_cache: file_cache,
+            reserved_identifiers,
+            resolve_relative_path_within_current_file,
+            current_file_item: FileItem::new(
                 current_file_number,
-                IncludeFile::new(
+                FileLocation::new(
                     current_file_canonical_full_path,
                     FileOrigin::from_source_file(current_file_relative_path),
                 ),
@@ -82,25 +81,26 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_keyvalues(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
-        reserved_keywords: &'a [&'a str],
+        reserved_identifiers: &'a [&'a str],
         predefinitions: &HashMap<String, String>,
-        should_resolve_relative_path: bool,
+        resolve_relative_path_within_current_file: bool,
         current_file_number: usize,
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
     ) -> Result<Self, PreprocessError> {
         Ok(Self {
             file_provider,
-            file_cache,
-            reserved_keywords,
+            header_file_cache: file_cache,
+            reserved_identifiers,
             macro_map: MacroMap::from_key_values(predefinitions)?,
-            should_resolve_relative_path,
-            current_file: ContextFile::new(
+            resolve_relative_path_within_current_file,
+            current_file_item: FileItem::new(
                 current_file_number,
-                IncludeFile::new(
+                FileLocation::new(
                     current_file_canonical_full_path,
                     FileOrigin::from_source_file(current_file_relative_path),
                 ),
@@ -119,22 +119,22 @@ where
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct ContextFile {
+pub struct FileItem {
     pub number: usize,
-    pub source_file: IncludeFile,
+    pub file_location: FileLocation,
 }
 
-impl ContextFile {
-    pub fn new(number: usize, source_file: IncludeFile) -> Self {
+impl FileItem {
+    pub fn new(number: usize, file_location: FileLocation) -> Self {
         Self {
             number,
-            source_file,
+            file_location,
         }
     }
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct IncludeFile {
+pub struct FileLocation {
     pub canonical_full_path: PathBuf,
     pub file_origin: FileOrigin,
 }
@@ -157,7 +157,7 @@ pub enum FileOrigin {
     SystemHeader(/* external_file_path */ PathBuf),
 }
 
-impl IncludeFile {
+impl FileLocation {
     pub fn new(canonical_full_path: &Path, file_origin: FileOrigin) -> Self {
         Self {
             canonical_full_path: canonical_full_path.to_path_buf(),
