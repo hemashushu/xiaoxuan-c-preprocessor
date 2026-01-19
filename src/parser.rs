@@ -557,7 +557,7 @@ impl Parser<'_> {
                     definition,
                 }
             }
-            Some(Token::DefinedMacroIdentifierFunctionLike(id)) => {
+            Some(Token::FunctionLikeMacroIdentifier(id)) => {
                 // Handle function-like macro definition
                 let name = id.clone();
                 let range = *self.peek_range(0).unwrap();
@@ -602,7 +602,7 @@ impl Parser<'_> {
         self.next_token(); // consumes "include"
 
         let include = match self.peek_token(0) {
-            Some(Token::HeaderFile(file_path, is_system_header)) => {
+            Some(Token::FilePath(file_path, is_system_header)) => {
                 // Handle include with file path
                 let range = *self.peek_range(0).unwrap();
                 let include = Include::FilePath {
@@ -745,7 +745,7 @@ impl Parser<'_> {
         };
 
         let embed = match self.peek_token(0) {
-            Some(Token::HeaderFile(file_path, is_system_file)) => {
+            Some(Token::FilePath(file_path, is_system_file)) => {
                 // Handle embed with file path
 
                 let range = *self.peek_range(0).unwrap();

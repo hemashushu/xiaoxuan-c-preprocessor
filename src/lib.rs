@@ -6,20 +6,21 @@
 
 use std::fmt::Display;
 
-use crate::{location::Location, position::Position, range::Range, token::Token};
+use crate::{position::Position, range::Range};
 
-mod ast;
-mod ast_printer;
+// mod ast;
+// mod ast_printer;
 mod char_with_position;
-mod context;
-mod expression;
+// mod context;
+// mod expression;
+mod initializer;
 mod lexer;
 mod location;
-mod macro_map;
-mod parser;
+// mod macro_map;
+// mod parser;
 mod peekable_iter;
 mod position;
-mod processor;
+// mod processor;
 mod range;
 
 pub const FILE_NUMBER_PREDEFINED: usize = 0;
@@ -35,39 +36,15 @@ pub const FILE_NUMBER_PREDEFINED: usize = 0;
 // `FILE_NUMBER_SOURCE_FILE_BEGIN`, which is defined as 65536 in ANCPP.
 pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2 ^ 16;
 
-pub mod error_printer;
-pub mod file_provider;
-pub mod header_file_cache;
-pub mod memory_file_provider;
-pub mod native_file_provider;
-pub mod prompt;
+// pub mod error_printer;
+// pub mod file_provider;
+// pub mod header_file_cache;
+// pub mod memory_file_provider;
+// pub mod native_file_provider;
+// pub mod prompt;
 pub mod token;
 
-pub use processor::process_source_file;
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct TokenWithRange {
-    pub token: Token,
-    pub range: Range,
-}
-
-impl TokenWithRange {
-    pub fn new(token: Token, range: Range) -> Self {
-        Self { token, range }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct TokenWithLocation {
-    pub token: Token,
-    pub location: Location,
-}
-
-impl TokenWithLocation {
-    pub fn new(token: Token, location: Location) -> Self {
-        Self { token, location }
-    }
-}
+// pub use processor::process_source_file;
 
 #[derive(Debug, PartialEq)]
 pub enum PreprocessError {

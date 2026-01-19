@@ -24,7 +24,7 @@ use crate::{
     peekable_iter::PeekableIter,
     prompt::{Prompt, PromptLevel},
     range::Range,
-    token::{IntegerNumber, IntegerNumberLength, Number, Punctuator, StringEncoding, Token},
+    token::{IntegerNumber, IntegerNumberWidth, Number, Punctuator, StringEncoding, Token},
 };
 
 const PEEK_BUFFER_LENGTH_PARSE_CODE: usize = 2;
@@ -800,7 +800,7 @@ where
                         Token::Number(Number::Integer(IntegerNumber::new(
                             format!("0x{:02x}", byte),
                             false,
-                            IntegerNumberLength::Default,
+                            IntegerNumberWidth::Default,
                         ))),
                         Location::default(),
                     )
@@ -1213,7 +1213,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     value.to_string(),
                                     false,
-                                    IntegerNumberLength::Default,
+                                    IntegerNumberWidth::Default,
                                 ))),
                                 Location::default(),
                             );
@@ -1264,7 +1264,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     value.to_string(),
                                     false,
-                                    IntegerNumberLength::Default,
+                                    IntegerNumberWidth::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1406,7 +1406,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     number.to_string(),
                                     false,
-                                    IntegerNumberLength::Default,
+                                    IntegerNumberWidth::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1492,7 +1492,7 @@ where
                                             }
                                         }
                                     }
-                                    Some(Token::HeaderFile(relative_path, is_system_header)) => {
+                                    Some(Token::FilePath(relative_path, is_system_header)) => {
                                         let relative_path_owned = relative_path.to_owned();
                                         let is_system_header_owned = *is_system_header;
                                         let location = *code_parser.peek_location(0).unwrap();
@@ -1563,7 +1563,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     result.to_string(),
                                     false,
-                                    IntegerNumberLength::Default,
+                                    IntegerNumberWidth::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1652,7 +1652,7 @@ where
                                             }
                                         }
                                     }
-                                    Some(Token::HeaderFile(relative_path, is_system_file)) => {
+                                    Some(Token::FilePath(relative_path, is_system_file)) => {
                                         let relative_path_owned = relative_path.to_owned();
                                         let is_system_file_owned = *is_system_file;
                                         let location = *code_parser.peek_location(0).unwrap();
@@ -1749,7 +1749,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     result.to_string(),
                                     false,
-                                    IntegerNumberLength::Default,
+                                    IntegerNumberWidth::Default,
                                 ))),
                                 Location::default(),
                             ));
@@ -1843,7 +1843,7 @@ where
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     value.to_string(),
                                     false,
-                                    IntegerNumberLength::Long,
+                                    IntegerNumberWidth::Long,
                                 ))),
                                 Location::default(),
                             ));
@@ -2672,7 +2672,7 @@ mod tests {
         processor::{PreprocessResult, process_source_file},
         prompt::{Prompt, PromptLevel},
         range::Range,
-        token::{C23_KEYWORDS, IntegerNumber, IntegerNumberLength, Number, Punctuator, Token},
+        token::{C23_KEYWORDS, IntegerNumber, IntegerNumberWidth, Number, Punctuator, Token},
     };
 
     fn process_single(
@@ -2806,7 +2806,7 @@ int main() {
                     Token::Number(Number::Integer(IntegerNumber::new(
                         "0".to_string(),
                         false,
-                        IntegerNumberLength::Default
+                        IntegerNumberWidth::Default
                     ))),
                     Location::from_detail(filenum, 24, 1, 11, 1),
                 ),

@@ -303,7 +303,7 @@ mod tests {
             print_statement, print_to_string,
         },
         range::Range,
-        token::{IntegerNumber, IntegerNumberLength, Number, Punctuator, StringEncoding, Token},
+        token::{IntegerNumber, IntegerNumberWidth, Number, Punctuator, StringEncoding, Token},
     };
 
     #[test]
@@ -343,7 +343,7 @@ mod tests {
                 token: Token::Number(Number::Integer(IntegerNumber::new(
                     "100".to_string(),
                     false,
-                    IntegerNumberLength::Default,
+                    IntegerNumberWidth::Default,
                 ))),
                 range: Range::default(),
             }],
@@ -523,7 +523,7 @@ mod tests {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "2025".to_string(),
                             false,
-                            IntegerNumberLength::Default,
+                            IntegerNumberWidth::Default,
                         ))),
                         range: Range::default(),
                     },
@@ -635,7 +635,7 @@ mod tests {
                             token: Token::Number(Number::Integer(IntegerNumber::new(
                                 "2025".to_string(),
                                 false,
-                                IntegerNumberLength::Default,
+                                IntegerNumberWidth::Default,
                             ))),
                             range: Range::default(),
                         },
@@ -759,7 +759,7 @@ mod tests {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "100".to_string(),
                             false,
-                            IntegerNumberLength::Default,
+                            IntegerNumberWidth::Default,
                         ))),
                         range: Range::default(),
                     }],
@@ -817,7 +817,7 @@ mod tests {
                         token: Token::Number(Number::Integer(IntegerNumber::new(
                             "100".to_string(),
                             false,
-                            IntegerNumberLength::Default,
+                            IntegerNumberWidth::Default,
                         ))),
                         range: Range::default(),
                     }],

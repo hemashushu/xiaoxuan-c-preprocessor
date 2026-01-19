@@ -6,17 +6,32 @@
 
 use std::fmt::Display;
 
-/// Represents a token type for the C preprocessor.
+/// Represents a token for the C preprocessor.
 ///
-/// After preprocessing, the tokens `Newline`, `FilePath`, `FunctionLikeMacroIdentifier`
-/// `Pound` and `PoundPound` will not be present in the final token stream.
+/// In general, C language tokens are lexed after preprocessing, but
+/// since this ANCPP library is designed to be a part of ANCC (a C compiler),
+/// it is reasonable to lex tokens further as close as possible to the C language,
+/// This design simplifies the integration between the preprocessor and the compiler,
+/// and improves the overall efficiency.
 ///
-/// See: 
+/// The following tokens are only used during preprocessing and
+/// will not appear in the final token stream:
+///
+/// - `DirectiveStart`
+/// - `DirectiveEnd`
+/// - `FilePath`
+/// - `FunctionLikeMacroIdentifier`
+/// - `Pound`
+/// - `PoundPound`
+///
+/// The C language parser should filter out these tokens before parsing.
+///
+/// References:
 /// - https://gcc.gnu.org/onlinedocs/cpp/Tokenization.html
 /// - https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
-    // An identifier, includes:
+    // A preprocessing identifier, includes:
     //
     // - C Keywords
     // - C Type names
@@ -25,26 +40,27 @@ pub enum Token {
     // - Directive names
     // - Object-like macro names
     //
-    // In C, any sequence of letters (including non-Latin letters such as Chinese ideograms),
+    // Identifiers consist of a sequence of letters (including non-Latin letters such as Chinese ideograms),
     // digits, or underscores, starting with a letter or underscore.
     //
-    // C type names and keywords are not treated specially by the preprocessor, so they are also represented as identifiers here.
-    //
-    // Identifiers may contain namespace separators (`::`) in attribute names,
-    // e.g., `[[foo::bar]]`, `[[some::attribute(123)]]`.
+    // Identifiers may contain namespace separators (`::`) in attribute names, e.g.
+    // - `[[foo::bar]]`
+    // - `[[some::attribute(123)]]`
     Identifier(String),
 
     // A preprocessing number, which includes all standard integer and floating-point constants in C.
-    // Such numbers may start with an optional period, must have at least one decimal digit,
+    // Such numbers may start with an optional period (`.`), must have at least one decimal digit (`0`-`9`),
     // and can contain letters, digits, underscores, periods, and exponent markers.
+    // Integer constants may have suffixes like `u`, `U`, `l`, `L`, `ll`, `LL`, `wb`, or `WB`.
+    // Floating-point constants may have suffixes like `f`, `F`, `l`, `L`, `dd`, `DD`, `df`, `DF`, `dl`, or `DL`.
+    // A number also may have prefixes like `0x` (hexadecimal), `0b` (binary), or `0o` (octal).
     // Exponents are two-character sequences like 'e+', 'e-', 'E+', 'E-', 'p+', 'p-', 'P+', or 'P-'.
     // Exponents beginning with 'p' or 'P' are used for hexadecimal floating-point constants.
     // See: https://en.cppreference.com/w/c/language/floating_constant
     Number(Number),
 
-    // A string literal, character constant, or header file name (as used in #include).
-    // String and character constants are written as "..." or '...'.
-    // Embedded quotes must be escaped with a backslash, e.g., '\'' represents the character constant for a single quote.
+    // A string literal.
+    // String are enclosed in double quotes (`"`), embedded quotes must be escaped with a backslash.
     //
     // See: https://en.cppreference.com/w/c/language/string_literal.html
     String(String, StringEncoding),
@@ -61,42 +77,42 @@ pub enum Token {
     // except for '@', '$', and '`', which are not considered C punctuators.
     Punctuator(Punctuator),
 
-    // The following tokens are used in the C preprocessor.
-    // They are not present in the final token stream after preprocessing.
-    // -------------------------------------------------------------
-
-    // Pound sign (`#`) at the beginning of a line indicates a preprocessing directive.
+    // Directive start token.
+    // It is the pound sign (`#`) at the beginning of a line indicates a preprocessing directive.
     DirectiveStart,
 
-    // The `newline` (representing either '\n' or '\r\n') in the directive line.
+    // Directive end token.
+    // It is literally the `newline` (representing either '\n' or '\r\n') in the directive line.
     //
-    // Newlines in genernal C code are ignored (treated as whitespace), while newlines in
-    // preprocessing directives are special tokens in the C preprocessor,
-    // they are used to separate preprocessing directives and other tokens in the token stream.
+    // Newlines in C code are treated as whitespace, while newlines in
+    // directive lines are special tokens.
+    // They are used to separate preprocessing directives and other tokens in the token stream.
     //
     // Each directive occupies one line and has the following format:
     //
+    // - (optional leading whitespace)
     // - '#' character.
+    // - (optional whitespace)
     // - preprocessing instruction (e.g. `define`, `include`).
     // - arguments (depends on the instruction).
-    // - line break (newline).
+    // - line break (newline) or end of file.
     //
     // The null directive (# followed by a line break) is allowed and has no effect.
+    // But ANCPP disallows empty directive lines to avoid confusion.
     // See: https://en.cppreference.com/w/c/preprocessor.html
     DirectiveEnd,
 
-    // Pound (`#`)
-    //
-    // _Stringizing_ (the `#` operator).
+    // The stringizing operator.
+    // It is pound (`#`) used in macro definitions.
     //
     // Stringizing is used to produce a string literal and can only be applied to
     // macro parameters (includes `__VA_ARGS__`).
     // For example, `#define FOO(x) #x` will expand `FOO(abc)` to `"abc"` and `FOO(123)` to `"123"`.
     Pound,
 
-    // PoundPound (`##`)
+    // The token concatenation operator.
     //
-    // _Token concatenation_ (the `##` operator).
+    // It is pound-pound (`##`) used in macro definitions.
     //
     // Token concatenation joins two or more tokens into a single identifier.
     // The tokens are concatenated without any whitespace in between, and the tokens
@@ -105,15 +121,16 @@ pub enum Token {
     //
     // The result of _Token concatenation_ operator (`##`) must be a valid C identifier:
     // the first token must be an identifier, and the remaining tokens must be either
-    // identifiers or integer numbers. For example, `foo##bar` and `sprite##2##b` are valid,
-    // while `9##s` and `+##=` are invalid.
+    // identifiers or integer numbers. For example, `foo ## bar` and `sprite ## 2 ## b` are valid,
+    // while `9 ## s` and `+ ## =` are invalid.
     PoundPound,
 
-    // The file path of the directive `#include <...>` and `#include "..."` (and the `#embed`).
+    // The file path of the directive `#include` and `#embed`,
+    // and the operator `__has_include` and `__has_embed`.
     //
-    // Although the file path is also a string, it is not a string literal
-    // because it does not support escape sequences like `\x40`, `\"`, etc.
-    HeaderFile(String, /* stick_to_system */ bool),
+    // Note that file path is not a string literal,
+    // because it does not support escape sequences like `\x40` and `\"`.
+    FilePath(String, /* angle-bracket */ bool),
 
     // The identifier of a function-like macro definition.
     //
@@ -123,17 +140,25 @@ pub enum Token {
     // #define foo(x, y) ((x) + (y))
     // ```
     //
-    // An identifier in the `#define` directive that is immediately followed by 
-    // a parenthesis `(` represents a function-like macro identifier,
-    // while an identifier in the `#include` directive followed by a space represents
-    // an object-like macro identifier, which is a `Token::Identifier`.
+    // An identifier in the `#define` directive that is immediately followed by
+    // a parenthesis `(` represents a function-like macro identifier.
+    //
+    // Note that an identifier in the `#define` directive followed by a space
+    // and parenthesis `(` represents an object-like macro identifier,
+    // which is a `Token::Identifier`.
     //
     // This special type of token is needed because whitespaces between the function name
     // and the opening parenthesis `(` are typically ignored in the C language, e.g.
     //
-    // - `int foo (...)` is equivalent to `int foo(...)`,
-    // - `int a = foo (...)` is equivalent to `int a = foo(...)`, etc.
-    DefinedMacroIdentifierFunctionLike(String),
+    // - `int foo (...) {...}` is equivalent to `int foo(...) {...}`.
+    // - `int a = foo (...)` is equivalent to `int a = foo(...)`.
+    //
+    // But in macro definitions, whitespaces are significant:
+    // - `#define foo(...) ...` defines a function-like macro.
+    // - `#define foo (...) ...` defines an object-like macro.
+    //
+    // This is an inconsistency in the preprocessor design of C/C++ languages.
+    FunctionLikeMacroIdentifier(String),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -244,11 +269,11 @@ pub struct IntegerNumber {
     // Possible suffix are: `u`, `U`, `ul`, `UL`, `ull`, `ULL`, `uwb`, `UWB`
     pub unsigned: bool,
 
-    pub length: IntegerNumberLength,
+    pub length: IntegerNumberWidth,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub enum IntegerNumberLength {
+pub enum IntegerNumberWidth {
     Default, // no suffix, e.g., 123, the type of the integer constant is the first type in which the value can fit.
     Long,    // suffix "l", "L", e.g., 123l, 123L
     LongLong, // suffix "ll", "LL", e.g., 123ll, 123LL
@@ -263,18 +288,18 @@ pub struct FloatingPointNumber {
     /// Suffix `d` or `D` indicates a decimal floating-point number, e.g., `1.23dd`, `4.56DF`.
     /// Possible suffix are: `dd`, `DD`, `df`, `DF`, `dl`, `DL`
     pub decimal: bool,
-    pub length: FloatingPointNumberLength,
+    pub length: FloatingPointNumberWidth,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub enum FloatingPointNumberLength {
+pub enum FloatingPointNumberWidth {
     Default,    // no suffix, e.g., 1.23, an unsuffixed floating constant has type `double`.
     Float,      // suffix "f", "F", e.g., 1.23f, 1.23F
     LongDouble, // suffix "l", "L", e.g., 1.23l, 1.23L
 }
 
 impl IntegerNumber {
-    pub fn new(value: String, unsigned: bool, length: IntegerNumberLength) -> Self {
+    pub fn new(value: String, unsigned: bool, length: IntegerNumberWidth) -> Self {
         Self {
             value,
             unsigned,
@@ -302,7 +327,7 @@ impl IntegerNumber {
 }
 
 impl FloatingPointNumber {
-    pub fn new(value: String, decimal: bool, length: FloatingPointNumberLength) -> Self {
+    pub fn new(value: String, decimal: bool, length: FloatingPointNumberWidth) -> Self {
         Self {
             value,
             decimal,
@@ -383,17 +408,17 @@ impl Display for IntegerNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let suffix = if self.unsigned {
             match self.length {
-                IntegerNumberLength::Default => "u",
-                IntegerNumberLength::Long => "ul",
-                IntegerNumberLength::LongLong => "ull",
-                IntegerNumberLength::BitInt => "uwb",
+                IntegerNumberWidth::Default => "u",
+                IntegerNumberWidth::Long => "ul",
+                IntegerNumberWidth::LongLong => "ull",
+                IntegerNumberWidth::BitInt => "uwb",
             }
         } else {
             match self.length {
-                IntegerNumberLength::Default => "",
-                IntegerNumberLength::Long => "l",
-                IntegerNumberLength::LongLong => "ll",
-                IntegerNumberLength::BitInt => "wb",
+                IntegerNumberWidth::Default => "",
+                IntegerNumberWidth::Long => "l",
+                IntegerNumberWidth::LongLong => "ll",
+                IntegerNumberWidth::BitInt => "wb",
             }
         };
         write!(f, "{}{}", self.value, suffix)
@@ -404,15 +429,15 @@ impl Display for FloatingPointNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let suffix = if self.decimal {
             match self.length {
-                FloatingPointNumberLength::Default => "dd",
-                FloatingPointNumberLength::Float => "df",
-                FloatingPointNumberLength::LongDouble => "dl",
+                FloatingPointNumberWidth::Default => "dd",
+                FloatingPointNumberWidth::Float => "df",
+                FloatingPointNumberWidth::LongDouble => "dl",
             }
         } else {
             match self.length {
-                FloatingPointNumberLength::Default => "",
-                FloatingPointNumberLength::Float => "f",
-                FloatingPointNumberLength::LongDouble => "l",
+                FloatingPointNumberWidth::Default => "",
+                FloatingPointNumberWidth::Float => "f",
+                FloatingPointNumberWidth::LongDouble => "l",
             }
         };
         write!(f, "{}{}", self.value, suffix)
@@ -553,7 +578,10 @@ pub const C23_KEYWORDS: [&str; 53] = [
 
 #[cfg(test)]
 mod tests {
-    use crate::token::{CharEncoding, StringEncoding, Token};
+    use crate::token::{
+        CharEncoding, FloatingPointNumber, FloatingPointNumberWidth, IntegerNumber,
+        IntegerNumberWidth, StringEncoding, Token,
+    };
 
     #[test]
     fn test_char_display() {
@@ -568,42 +596,52 @@ mod tests {
             Token::Char('\t', CharEncoding::Default).to_string(),
             "'\\t'"
         );
+
         assert_eq!(
             Token::Char('\n', CharEncoding::Default).to_string(),
             "'\\n'"
         );
+
         assert_eq!(
             Token::Char('\r', CharEncoding::Default).to_string(),
             "'\\r'"
         );
+
         assert_eq!(
             Token::Char('\\', CharEncoding::Default).to_string(),
             "'\\\\'"
         );
+
         assert_eq!(
             Token::Char('"', CharEncoding::Default).to_string(),
             "'\\\"'"
         );
+
         assert_eq!(
             Token::Char('\'', CharEncoding::Default).to_string(),
             "'\\''"
         );
+
         assert_eq!(
             Token::Char('\0', CharEncoding::Default).to_string(),
             "'\\0'"
         );
+
         assert_eq!(
             Token::Char('\x01', CharEncoding::Default).to_string(),
             "'\\x01'"
         );
+
         assert_eq!(
             Token::Char('\x1f', CharEncoding::Default).to_string(),
             "'\\x1f'"
         );
+
         assert_eq!(
             Token::Char('\u{80}', CharEncoding::Default).to_string(),
             "'\\x80'"
         );
+
         assert_eq!(
             Token::Char('\u{FF}', CharEncoding::Default).to_string(),
             "'\\xff'"
@@ -616,18 +654,22 @@ mod tests {
             Token::String("hello".to_string(), StringEncoding::Default).to_string(),
             "\"hello\""
         );
+
         assert_eq!(
             Token::String("文✨".to_string(), StringEncoding::Wide).to_string(),
             "L\"文✨\""
         );
+
         assert_eq!(
             Token::String("文✨".to_string(), StringEncoding::UTF16).to_string(),
             "u\"文✨\""
         );
+
         assert_eq!(
             Token::String("文✨".to_string(), StringEncoding::UTF32).to_string(),
             "U\"文✨\""
         );
+
         assert_eq!(
             Token::String("文✨".to_string(), StringEncoding::UTF8).to_string(),
             "u8\"文✨\""
@@ -642,6 +684,7 @@ mod tests {
             .to_string(),
             "\"hello\\t\\n\\r\\\\\\\'\\\"\\0world\""
         );
+
         assert_eq!(
             Token::String(
                 "文✨\x01\x1f\u{80}\u{ff}world".to_string(),
@@ -649,6 +692,91 @@ mod tests {
             )
             .to_string(),
             "\"文✨\\x01\\x1f\\x80\\xffworld\""
+        );
+    }
+
+    #[test]
+    fn test_integer_number_display() {
+        assert_eq!(
+            IntegerNumber::new("123".to_string(), false, IntegerNumberWidth::Default).to_string(),
+            "123"
+        );
+
+        assert_eq!(
+            IntegerNumber::new("123".to_string(), true, IntegerNumberWidth::Default).to_string(),
+            "123u"
+        );
+
+        assert_eq!(
+            IntegerNumber::new("123".to_string(), false, IntegerNumberWidth::Long).to_string(),
+            "123l"
+        );
+
+        assert_eq!(
+            IntegerNumber::new("123".to_string(), true, IntegerNumberWidth::Long).to_string(),
+            "123ul"
+        );
+
+        assert_eq!(
+            IntegerNumber::new("123".to_string(), true, IntegerNumberWidth::LongLong).to_string(),
+            "123ull"
+        );
+
+        assert_eq!(
+            IntegerNumber::new("123".to_string(), false, IntegerNumberWidth::BitInt).to_string(),
+            "123wb"
+        );
+
+        assert_eq!(
+            IntegerNumber::new("123".to_string(), true, IntegerNumberWidth::BitInt).to_string(),
+            "123uwb"
+        );
+    }
+
+    #[test]
+    fn test_floating_point_number_display() {
+        assert_eq!(
+            FloatingPointNumber::new("1.23".to_string(), false, FloatingPointNumberWidth::Default)
+                .to_string(),
+            "1.23"
+        );
+
+        assert_eq!(
+            FloatingPointNumber::new("1.23".to_string(), true, FloatingPointNumberWidth::Default)
+                .to_string(),
+            "1.23dd"
+        );
+
+        assert_eq!(
+            FloatingPointNumber::new("1.23".to_string(), false, FloatingPointNumberWidth::Float)
+                .to_string(),
+            "1.23f"
+        );
+
+        assert_eq!(
+            FloatingPointNumber::new("1.23".to_string(), true, FloatingPointNumberWidth::Float)
+                .to_string(),
+            "1.23df"
+        );
+
+        assert_eq!(
+            FloatingPointNumber::new(
+                "1.23".to_string(),
+                false,
+                FloatingPointNumberWidth::LongDouble
+            )
+            .to_string(),
+            "1.23l"
+        );
+
+        assert_eq!(
+            FloatingPointNumber::new(
+                "1.23".to_string(),
+                true,
+                FloatingPointNumberWidth::LongDouble
+            )
+            .to_string(),
+            "1.23dl"
         );
     }
 }

@@ -2,7 +2,7 @@
 
 **ANCPP** (XiaoXuan C Preprocessor) is a C preprocessor implemented in Rust. It is compliant with the C23 standard and implements standard preprocessing features — macro expansion, conditional compilation, file and resource inclusion, predefined macros, and diagnostics.
 
-ANCPP is provided primarily as a library for the ANCC project (XiaoXuan C Compiler). It processes C source files and emits a stream of tokens (with locations) that can be consumed directly by a C AST parser.
+ANCPP is provided primarily as a library for the ANCC project (XiaoXuan C Compiler). It processes C source files and emits a stream of tokens (with locations) that can be consumed by a C AST parser.
 
 <!-- @import "[TOC]" {cmd="toc" depthFrom=2 depthTo=4 orderedList=false} -->
 
@@ -738,7 +738,7 @@ Note that `__VA_ARGS__` and `__VA_OPT__(...)` can only be used in the replacemen
 #define FOO(args...)            // Disabled: Ellipsis with name is not allowed.
 ```
 
-`[ANCPP RESTRICTION]`: Apply token concatenation operator (`##`) to `__VA_ARGS__` is not supported.
+`[ANCPP RESTRICTION]`: Apply `##` to `__VA_ARGS__` is not supported.
 
 Some preprocessors support the `##` operator with `__VA_ARGS__` to remove the preceding comma when no additional arguments are provided. For example, the statement `#define LOG printf(fmt, ##__VA_ARGS__)` is effectively equivalent to `#define LOG printf(fmt __VA_OPT__(,) __VA_ARGS__)`. ANCPP does not support this feature to keep the preprocessor simple and avoid confusion.
 
@@ -1114,6 +1114,13 @@ The `FILE_PATH` is more restricted than regular string literals since it does no
 #include <my>header.h>              // Error: Greater-than sign terminates the angle-bracketed file path
 ```
 
+Note that if you define a string literal macro and then use it in `#include`, the string literal rules apply:
+
+```c
+#define HEADER_FILE "include\\my_header.h"
+#include HEADER_FILE                // Correct: Backslash is escaped in string literal
+```
+
 **Include guards**
 
 If a header file is included multiple times in a source file (directly or indirectly), it may cause redefinition errors.
@@ -1248,6 +1255,13 @@ Directive `#embed` also supports using a macro that expands to a file path:
 ```c
 #define BINARY_FILE "data.bin"
 #embed BINARY_FILE
+```
+
+Note that the escape sequences are allowed in the file path when a string literal macro is used:
+
+```c#
+#define BINARY_FILE "data\\data.bin"
+#embed BINARY_FILE              // Backslash is escaped in string literal
 ```
 
 **Parameters of `#embed`**
