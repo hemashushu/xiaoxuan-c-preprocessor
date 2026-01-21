@@ -5,21 +5,26 @@
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
 use crate::{
-    PreprocessError, TokenWithRange,
-    ast::{Branch, Condition, Define, Embed, If, Include, Pragma, Program, Statement},
+    ast::{
+        BinaryOperator, Branch, Condition, Define, Expression, If, Pragma, Program, Statement,
+        TokenWithLocation, UnaryOperator,
+    },
+    error::{PreprocessError, PreprocessFileError},
     lexer::lex_from_str,
+    location::Location,
     peekable_iter::PeekableIter,
     range::Range,
-    token::{CharEncoding, Number, Punctuator, StringEncoding, Token},
+    token::{CharEncoding, Number, Punctuator, StringEncoding, Token, TokenWithRange},
 };
 
-const PEEK_BUFFER_LENGTH_PARSER: usize = 4;
-const PEEK_BUFFER_LENGTH_EXPRESSION_PARSER: usize = 3;
+// Buffer sizes for lookahead in `PeekableIter`.
+const PEEK_BUFFER_LENGTH_PARSE: usize = 4;
+const PEEK_BUFFER_LENGTH_EXPRESSION_PARSE: usize = 3;
 
 pub fn parse_from_str(source_text: &str) -> Result<Program, PreprocessError> {
     let tokens = lex_from_str(source_text)?;
     let mut token_iter = tokens.into_iter();
-    let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_PARSER);
+    let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_PARSE);
     let mut parser = Parser::new(&mut peekable_token_iter);
     parser.parse_program()
 }
@@ -255,13 +260,15 @@ impl Parser<'_> {
                                 }
                                 "include" => {
                                     // Handle `include` directive.
-                                    let include = self.parse_include()?;
-                                    Statement::Include(include)
+                                    // let include = self.parse_include()?;
+                                    // Statement::Include(include)
+                                    todo!()
                                 }
                                 "embed" => {
                                     // Handle `embed` directive.
-                                    let embed = self.parse_embed()?;
-                                    Statement::Embed(embed)
+                                    // let embed = self.parse_embed()?;
+                                    // Statement::Embed(embed)
+                                    todo!()
                                 }
                                 "if" | "ifdef" | "ifndef" => {
                                     // Handle `if` directive.
@@ -590,271 +597,271 @@ impl Parser<'_> {
         Ok(define)
     }
 
-    fn parse_include(&mut self) -> Result<Include, PreprocessError> {
-        // ```diagram
-        // include "FILE_PATH" \n //
-        // ^                   ^__// to here
-        // |______________________// current token, validated
-        //
-        // variants:
-        // - include <FILE_PATH> \n
-        // - include MACRO_NAME \n
-        // ```
-        self.next_token(); // consumes "include"
+    // fn parse_include(&mut self) -> Result<Include, PreprocessError> {
+    //     // ```diagram
+    //     // include "FILE_PATH" \n //
+    //     // ^                   ^__// to here
+    //     // |______________________// current token, validated
+    //     //
+    //     // variants:
+    //     // - include <FILE_PATH> \n
+    //     // - include MACRO_NAME \n
+    //     // ```
+    //     self.next_token(); // consumes "include"
 
-        let include = match self.peek_token(0) {
-            Some(Token::FilePath(file_path, is_system_header)) => {
-                // Handle include with file path
-                let range = *self.peek_range(0).unwrap();
-                let include = Include::FilePath {
-                    file_path: (file_path.to_owned(), range),
-                    is_system_header: *is_system_header,
-                };
+    //     let include = match self.peek_token(0) {
+    //         Some(Token::FilePath(file_path, is_system_header)) => {
+    //             // Handle include with file path
+    //             let range = *self.peek_range(0).unwrap();
+    //             let include = Include::FilePath {
+    //                 file_path: (file_path.to_owned(), range),
+    //                 is_system_header: *is_system_header,
+    //             };
 
-                self.next_token(); // consume the file path token
+    //             self.next_token(); // consume the file path token
 
-                include
-            }
-            Some(Token::Identifier(identifier)) => {
-                // Handle include with macro name
-                let range = *self.peek_range(0).unwrap();
-                let include = Include::Identifier(identifier.to_owned(), range);
+    //             include
+    //         }
+    //         Some(Token::Identifier(identifier)) => {
+    //             // Handle include with macro name
+    //             let range = *self.peek_range(0).unwrap();
+    //             let include = Include::Identifier(identifier.to_owned(), range);
 
-                self.next_token(); // consume the identifier token
+    //             self.next_token(); // consume the identifier token
 
-                include
-            }
-            Some(_) => {
-                return Err(PreprocessError::MessageWithPosition(
-                    "Expect a file path or macro name after directive `#include`.".to_owned(),
-                    self.peek_range(0).unwrap().start,
-                ));
-            }
-            None => {
-                return Err(PreprocessError::UnexpectedEndOfDocument(
-                    "Expect a file path or macro name after directive `#include`.".to_owned(),
-                ));
-            }
-        };
+    //             include
+    //         }
+    //         Some(_) => {
+    //             return Err(PreprocessError::MessageWithPosition(
+    //                 "Expect a file path or macro name after directive `#include`.".to_owned(),
+    //                 self.peek_range(0).unwrap().start,
+    //             ));
+    //         }
+    //         None => {
+    //             return Err(PreprocessError::UnexpectedEndOfDocument(
+    //                 "Expect a file path or macro name after directive `#include`.".to_owned(),
+    //             ));
+    //         }
+    //     };
 
-        self.expect_and_consume_directive_end_or_eof()?;
+    //     self.expect_and_consume_directive_end_or_eof()?;
 
-        Ok(include)
-    }
+    //     Ok(include)
+    // }
 
-    fn parse_embed(&mut self) -> Result<Embed, PreprocessError> {
-        // ```diagram
-        // embed "FILE_PATH" OPTIONAL_PARAMETERS \n //
-        // ^                                     ^__// to here
-        // |_______________________________________-// current token, validated
-        //
-        // Variants:
-        // - embed <FILE_PATH> OPTIONAL_PARAMETERS \n
-        // - embed MACRO_NAME OPTIONAL_PARAMETERS \n
-        //
-        //
-        // ```
-        self.next_token(); // consumes "embed"
+    // fn parse_embed(&mut self) -> Result<Embed, PreprocessError> {
+    //     // ```diagram
+    //     // embed "FILE_PATH" OPTIONAL_PARAMETERS \n //
+    //     // ^                                     ^__// to here
+    //     // |_______________________________________-// current token, validated
+    //     //
+    //     // Variants:
+    //     // - embed <FILE_PATH> OPTIONAL_PARAMETERS \n
+    //     // - embed MACRO_NAME OPTIONAL_PARAMETERS \n
+    //     //
+    //     //
+    //     // ```
+    //     self.next_token(); // consumes "embed"
 
-        let collect_data = |parser: &mut Parser| -> Result<Vec<u8>, PreprocessError> {
-            parser.expect_and_consume_opening_paren()?;
+    //     let collect_data = |parser: &mut Parser| -> Result<Vec<u8>, PreprocessError> {
+    //         parser.expect_and_consume_opening_paren()?;
 
-            // Collect all data to `data` until we hit a closing parenthesis.
-            let mut data = vec![];
+    //         // Collect all data to `data` until we hit a closing parenthesis.
+    //         let mut data = vec![];
 
-            while let Some(token) = parser.peek_token(0) {
-                match token {
-                    Token::Punctuator(Punctuator::ParenthesisClose) => {
-                        break;
-                    }
-                    Token::Char(ch, char_type) => {
-                        if matches!(
-                            char_type,
-                            CharEncoding::Wide | CharEncoding::UTF16 | CharEncoding::UTF32
-                        ) {
-                            return Err(PreprocessError::MessageWithPosition(
-                                "Wide character literals are not supported in embed directive."
-                                    .to_owned(),
-                                parser.peek_range(0).unwrap().start,
-                            ));
-                        }
+    //         while let Some(token) = parser.peek_token(0) {
+    //             match token {
+    //                 Token::Punctuator(Punctuator::ParenthesisClose) => {
+    //                     break;
+    //                 }
+    //                 Token::Char(ch, char_type) => {
+    //                     if matches!(
+    //                         char_type,
+    //                         CharEncoding::Wide | CharEncoding::UTF16 | CharEncoding::UTF32
+    //                     ) {
+    //                         return Err(PreprocessError::MessageWithPosition(
+    //                             "Wide character literals are not supported in embed directive."
+    //                                 .to_owned(),
+    //                             parser.peek_range(0).unwrap().start,
+    //                         ));
+    //                     }
 
-                        let char_value = *ch as usize;
-                        if char_value > 0xFF {
-                            return Err(PreprocessError::MessageWithRange(
-                                "Character literal value exceeds the maximum value of byte (0xFF)."
-                                    .to_owned(),
-                                *parser.peek_range(0).unwrap(),
-                            ));
-                        }
+    //                     let char_value = *ch as usize;
+    //                     if char_value > 0xFF {
+    //                         return Err(PreprocessError::MessageWithRange(
+    //                             "Character literal value exceeds the maximum value of byte (0xFF)."
+    //                                 .to_owned(),
+    //                             *parser.peek_range(0).unwrap(),
+    //                         ));
+    //                     }
 
-                        data.push(char_value as u8);
+    //                     data.push(char_value as u8);
 
-                        // Consumes the character token
-                        parser.next_token();
-                    }
-                    Token::Number(Number::Integer(n)) => {
-                        let number_value = n.as_usize().map_err(|_| {
-                            PreprocessError::MessageWithRange(
-                                "Invalid integer number.".to_owned(),
-                                *parser.peek_range(0).unwrap(),
-                            )
-                        })?;
+    //                     // Consumes the character token
+    //                     parser.next_token();
+    //                 }
+    //                 Token::Number(Number::Integer(n)) => {
+    //                     let number_value = n.as_usize().map_err(|_| {
+    //                         PreprocessError::MessageWithRange(
+    //                             "Invalid integer number.".to_owned(),
+    //                             *parser.peek_range(0).unwrap(),
+    //                         )
+    //                     })?;
 
-                        if number_value > 0xFF {
-                            return Err(PreprocessError::MessageWithRange(
-                                "Integer number exceeds the maximum value of byte (0xFF)."
-                                    .to_owned(),
-                                *parser.peek_range(0).unwrap(),
-                            ));
-                        }
+    //                     if number_value > 0xFF {
+    //                         return Err(PreprocessError::MessageWithRange(
+    //                             "Integer number exceeds the maximum value of byte (0xFF)."
+    //                                 .to_owned(),
+    //                             *parser.peek_range(0).unwrap(),
+    //                         ));
+    //                     }
 
-                        data.push(number_value as u8);
+    //                     data.push(number_value as u8);
 
-                        // Consumes the number token
-                        parser.next_token();
-                    }
-                    _ => {
-                        return Err(PreprocessError::MessageWithRange(
-                            "Expect a character literal or integer number in embed data."
-                                .to_owned(),
-                            *parser.peek_range(0).unwrap(),
-                        ));
-                    }
-                }
+    //                     // Consumes the number token
+    //                     parser.next_token();
+    //                 }
+    //                 _ => {
+    //                     return Err(PreprocessError::MessageWithRange(
+    //                         "Expect a character literal or integer number in embed data."
+    //                             .to_owned(),
+    //                         *parser.peek_range(0).unwrap(),
+    //                     ));
+    //                 }
+    //             }
 
-                if !parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::Comma)) {
-                    break;
-                }
+    //             if !parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::Comma)) {
+    //                 break;
+    //             }
 
-                parser.next_token(); // consumes comma
+    //             parser.next_token(); // consumes comma
 
-                // If we have a comma, we expect another character literal or integer number next.
-                if parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::ParenthesisClose))
-                {
-                    return Err(PreprocessError::MessageWithPosition(
-                        "Expect a character literal or integer number after comma in embed data."
-                            .to_owned(),
-                        parser.peek_range(0).unwrap().start,
-                    ));
-                }
-            }
+    //             // If we have a comma, we expect another character literal or integer number next.
+    //             if parser.peek_token_and_equals(0, &Token::Punctuator(Punctuator::ParenthesisClose))
+    //             {
+    //                 return Err(PreprocessError::MessageWithPosition(
+    //                     "Expect a character literal or integer number after comma in embed data."
+    //                         .to_owned(),
+    //                     parser.peek_range(0).unwrap().start,
+    //                 ));
+    //             }
+    //         }
 
-            parser.expect_and_consume_closing_paren()?; // consumes ')'
+    //         parser.expect_and_consume_closing_paren()?; // consumes ')'
 
-            Ok(data)
-        };
+    //         Ok(data)
+    //     };
 
-        let embed = match self.peek_token(0) {
-            Some(Token::FilePath(file_path, is_system_file)) => {
-                // Handle embed with file path
+    //     let embed = match self.peek_token(0) {
+    //         Some(Token::FilePath(file_path, is_system_file)) => {
+    //             // Handle embed with file path
 
-                let range = *self.peek_range(0).unwrap();
-                let file_path_owned = file_path.to_owned();
-                let is_system_file_owned = *is_system_file;
+    //             let range = *self.peek_range(0).unwrap();
+    //             let file_path_owned = file_path.to_owned();
+    //             let is_system_file_owned = *is_system_file;
 
-                self.next_token(); // consumes the file path token
+    //             self.next_token(); // consumes the file path token
 
-                let mut limit: Option<usize> = None;
-                let mut suffix: Vec<u8> = vec![];
-                let mut prefix: Vec<u8> = vec![];
-                let mut if_empty: Option<Vec<u8>> = None;
+    //             let mut limit: Option<usize> = None;
+    //             let mut suffix: Vec<u8> = vec![];
+    //             let mut prefix: Vec<u8> = vec![];
+    //             let mut if_empty: Option<Vec<u8>> = None;
 
-                while let Some(Token::Identifier(param_name)) = self.peek_token(0) {
-                    match param_name.as_str() {
-                        "limit" => {
-                            self.next_token(); // consumes "limit"
-                            self.expect_and_consume_opening_paren()?;
+    //             while let Some(Token::Identifier(param_name)) = self.peek_token(0) {
+    //                 match param_name.as_str() {
+    //                     "limit" => {
+    //                         self.next_token(); // consumes "limit"
+    //                         self.expect_and_consume_opening_paren()?;
 
-                            match self.expect_and_consume_number()? {
-                                Number::Integer(number) => {
-                                    let number_value = number.as_usize().map_err(|_| {
-                                        PreprocessError::MessageWithRange(
-                                            "Invalid integer number.".to_owned(),
-                                            self.last_range,
-                                        )
-                                    })?;
+    //                         match self.expect_and_consume_number()? {
+    //                             Number::Integer(number) => {
+    //                                 let number_value = number.as_usize().map_err(|_| {
+    //                                     PreprocessError::MessageWithRange(
+    //                                         "Invalid integer number.".to_owned(),
+    //                                         self.last_range,
+    //                                     )
+    //                                 })?;
 
-                                    limit = Some(number_value);
-                                }
-                                _ => {
-                                    return Err(PreprocessError::MessageWithRange(
-                                        "Embed parameter `limit` must be an integer.".to_owned(),
-                                        self.last_range,
-                                    ));
-                                }
-                            }
+    //                                 limit = Some(number_value);
+    //                             }
+    //                             _ => {
+    //                                 return Err(PreprocessError::MessageWithRange(
+    //                                     "Embed parameter `limit` must be an integer.".to_owned(),
+    //                                     self.last_range,
+    //                                 ));
+    //                             }
+    //                         }
 
-                            self.expect_and_consume_closing_paren()?;
-                        }
-                        "prefix" => {
-                            self.next_token(); // consumes "prefix"
-                            prefix = collect_data(self)?;
-                        }
-                        "suffix" => {
-                            self.next_token(); // consumes "suffix"
-                            suffix = collect_data(self)?;
-                        }
-                        "if_empty" => {
-                            self.next_token(); // consumes "if_empty"
-                            if_empty = Some(collect_data(self)?);
-                        }
-                        "__limit__" | "__prefix__" | "__suffix__" | "__if_empty__" => {
-                            let standard_param_name =
-                                param_name.trim_start_matches("__").trim_end_matches("__");
-                            return Err(PreprocessError::MessageWithRange(
-                                format!(
-                                    "Embed parameter `{}` is not supported, use `{}` instead.",
-                                    param_name, standard_param_name
-                                ),
-                                *self.peek_range(0).unwrap(),
-                            ));
-                        }
-                        _ => {
-                            return Err(PreprocessError::MessageWithRange(
-                                format!("Unsupported embed parameter: `{}`.", param_name),
-                                *self.peek_range(0).unwrap(),
-                            ));
-                        }
-                    }
-                }
+    //                         self.expect_and_consume_closing_paren()?;
+    //                     }
+    //                     "prefix" => {
+    //                         self.next_token(); // consumes "prefix"
+    //                         prefix = collect_data(self)?;
+    //                     }
+    //                     "suffix" => {
+    //                         self.next_token(); // consumes "suffix"
+    //                         suffix = collect_data(self)?;
+    //                     }
+    //                     "if_empty" => {
+    //                         self.next_token(); // consumes "if_empty"
+    //                         if_empty = Some(collect_data(self)?);
+    //                     }
+    //                     "__limit__" | "__prefix__" | "__suffix__" | "__if_empty__" => {
+    //                         let standard_param_name =
+    //                             param_name.trim_start_matches("__").trim_end_matches("__");
+    //                         return Err(PreprocessError::MessageWithRange(
+    //                             format!(
+    //                                 "Embed parameter `{}` is not supported, use `{}` instead.",
+    //                                 param_name, standard_param_name
+    //                             ),
+    //                             *self.peek_range(0).unwrap(),
+    //                         ));
+    //                     }
+    //                     _ => {
+    //                         return Err(PreprocessError::MessageWithRange(
+    //                             format!("Unsupported embed parameter: `{}`.", param_name),
+    //                             *self.peek_range(0).unwrap(),
+    //                         ));
+    //                     }
+    //                 }
+    //             }
 
-                self.expect_and_consume_directive_end_or_eof()?;
+    //             self.expect_and_consume_directive_end_or_eof()?;
 
-                Embed::FilePath {
-                    file_path: (file_path_owned, range),
-                    is_system_file: is_system_file_owned,
-                    limit,
-                    prefix,
-                    suffix,
-                    if_empty,
-                }
-            }
-            Some(Token::Identifier(identifier)) => {
-                // Handle embed with macro name
-                let range = *self.peek_range(0).unwrap();
-                let embed = Embed::Identifier(identifier.to_owned(), range);
+    //             Embed::FilePath {
+    //                 file_path: (file_path_owned, range),
+    //                 is_system_file: is_system_file_owned,
+    //                 limit,
+    //                 prefix,
+    //                 suffix,
+    //                 if_empty,
+    //             }
+    //         }
+    //         Some(Token::Identifier(identifier)) => {
+    //             // Handle embed with macro name
+    //             let range = *self.peek_range(0).unwrap();
+    //             let embed = Embed::Identifier(identifier.to_owned(), range);
 
-                self.next_token(); // consumes the identifier token
-                self.expect_and_consume_directive_end_or_eof()?;
+    //             self.next_token(); // consumes the identifier token
+    //             self.expect_and_consume_directive_end_or_eof()?;
 
-                embed
-            }
-            Some(_) => {
-                return Err(PreprocessError::MessageWithPosition(
-                    "Expect a file path or macro name after directive `#embed`.".to_owned(),
-                    self.peek_range(0).unwrap().start,
-                ));
-            }
-            None => {
-                return Err(PreprocessError::UnexpectedEndOfDocument(
-                    "Expect a file path or macro name after directive `#embed`.".to_owned(),
-                ));
-            }
-        };
+    //             embed
+    //         }
+    //         Some(_) => {
+    //             return Err(PreprocessError::MessageWithPosition(
+    //                 "Expect a file path or macro name after directive `#embed`.".to_owned(),
+    //                 self.peek_range(0).unwrap().start,
+    //             ));
+    //         }
+    //         None => {
+    //             return Err(PreprocessError::UnexpectedEndOfDocument(
+    //                 "Expect a file path or macro name after directive `#embed`.".to_owned(),
+    //             ));
+    //         }
+    //     };
 
-        Ok(embed)
-    }
+    //     Ok(embed)
+    // }
 
     fn parse_if(&mut self) -> Result<If, PreprocessError> {
         // ```diagram
@@ -1055,7 +1062,8 @@ pub fn parse_expression(
     );
 
     let mut token_iter = token_with_locations.iter().cloned();
-    let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_EXPRESSION_PARSER);
+    let mut peekable_token_iter =
+        PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_EXPRESSION_PARSE);
     let mut parser = ExpressionParser::new(&mut peekable_token_iter, file_number);
 
     let expression = parser.parse_expression()?;
@@ -1328,7 +1336,7 @@ impl ExpressionParser<'_> {
                 // Handle numeric literals.
                 Token::Number(Number::Integer(number)) => {
                     let location = *self.peek_location(0).unwrap();
-                    let number_value = number.as_usize().map_err(|_| {
+                    let number_value = number.as_u64().map_err(|_| {
                         PreprocessFileError::new(
                             location.file_number,
                             PreprocessError::MessageWithRange(
@@ -1380,17 +1388,19 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        PreprocessError,
-        ast::{Program, Statement},
-        ast_printer::print_to_string,
-        parser::parse_from_str,
+        ast::{Expression, Program, Statement, TokenWithLocation},
+        ast_printer::{print_expression_to_string, print_program_to_string},
+        error::{PreprocessError, PreprocessFileError},
+        lexer::lex_from_str,
+        location::Location,
+        parser::{parse_expression, parse_from_str},
         position::Position,
         range::Range,
     };
 
     fn format(s: &str) -> String {
         match parse_from_str(s) {
-            Ok(program) => print_to_string(&program),
+            Ok(program) => print_program_to_string(&program),
             Err(err) => panic!("{}", err.with_source(s)),
         }
     }
@@ -2190,7 +2200,6 @@ int main ( ) { printf ( \"Number is %d\\n\" , FOO ) ; return 0 ; }\n"
         );
     }
 
-
     fn generate_expresson(s: &str) -> Result<Expression, PreprocessFileError> {
         let tokens = lex_from_str(s)
             .unwrap()
@@ -2205,7 +2214,7 @@ int main ( ) { printf ( \"Number is %d\\n\" , FOO ) ; return 0 ; }\n"
 
     fn format_expression(s: &str) -> String {
         let expression = generate_expresson(s).unwrap();
-        print_to_string(&expression)
+        print_expression_to_string(&expression)
     }
 
     #[test]
@@ -2307,11 +2316,20 @@ int main ( ) { printf ( \"Number is %d\\n\" , FOO ) ; return 0 ; }\n"
         assert_eq!(format_expression("11 | 13 ^ 17"), "(11 | (13 ^ 17))");
         assert_eq!(format_expression("11 ^ 13 & 17"), "(11 ^ (13 & 17))");
 
-        assert_eq!(format_expression("11 == 13 && 17 != 19"), "((11 == 13) && (17 != 19))");
-        assert_eq!(format_expression("11 < 13 || 17 > 19"), "((11 < 13) || (17 > 19))");
+        assert_eq!(
+            format_expression("11 == 13 && 17 != 19"),
+            "((11 == 13) && (17 != 19))"
+        );
+        assert_eq!(
+            format_expression("11 < 13 || 17 > 19"),
+            "((11 < 13) || (17 > 19))"
+        );
 
         // Test changing precedence with parentheses.
-        assert_eq!(format_expression("(11 + 13) * (17 - 19)"), "((11 + 13) * (17 - 19))");
+        assert_eq!(
+            format_expression("(11 + 13) * (17 - 19)"),
+            "((11 + 13) * (17 - 19))"
+        );
         assert_eq!(
             format_expression("((11 == 13) * (17 & 19))"),
             "((11 == 13) * (17 & 19))"

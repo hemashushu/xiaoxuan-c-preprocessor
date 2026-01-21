@@ -6,7 +6,7 @@
 
 use std::fmt::Display;
 
-use crate::{PreprocessError, range::Range};
+use crate::{error::PreprocessError, range::Range};
 
 /// Represents a token for the C preprocessor.
 ///

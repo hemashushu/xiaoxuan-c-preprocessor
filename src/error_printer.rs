@@ -4,7 +4,7 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use crate::PreprocessError;
+use crate::error::PreprocessError;
 
 // A struct representing a range of a snippet in the source text.
 //
@@ -191,7 +191,7 @@ impl PreprocessError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Position, PreprocessError, Range};
+    use crate::{Position, Range, error::PreprocessError};
     use pretty_assertions::assert_eq;
 
     #[test]

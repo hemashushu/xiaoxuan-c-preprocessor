@@ -7,10 +7,9 @@
 use std::char;
 
 use crate::{
-    PreprocessError,
     char_with_position::CharWithPosition,
+    error::PreprocessError,
     initializer::initialize,
-    location::Location,
     peekable_iter::PeekableIter,
     position::Position,
     range::Range,
@@ -2466,7 +2465,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        PreprocessError,
+        error::PreprocessError,
         lexer::{TokenWithRange, lex_from_str},
         position::Position,
         range::Range,

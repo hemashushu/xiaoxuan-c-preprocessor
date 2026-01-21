@@ -239,7 +239,7 @@ impl TokenWithLocation {
 /// Expressions used in `#if` and `#elif` directives
 #[derive(Debug, PartialEq)]
 pub enum Expression {
-    Number(usize, Location),
+    Number(u64, Location),
     Binary(BinaryOperator, Location, Box<Expression>, Box<Expression>),
     Unary(UnaryOperator, Location, Box<Expression>),
 }

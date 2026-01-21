@@ -5,8 +5,8 @@
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
 use crate::{
-    PreprocessError,
     char_with_position::{CharWithPosition, CharsWithPositionIter},
+    error::PreprocessError,
     peekable_iter::PeekableIter,
 };
 
