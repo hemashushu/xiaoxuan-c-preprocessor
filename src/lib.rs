@@ -8,11 +8,10 @@ use std::fmt::Display;
 
 use crate::{position::Position, range::Range};
 
-// mod ast;
-// mod ast_printer;
+mod ast;
+mod ast_printer;
 mod char_with_position;
 // mod context;
-// mod expression;
 mod initializer;
 mod lexer;
 mod location;

@@ -6,6 +6,8 @@
 
 use std::fmt::Display;
 
+use crate::{PreprocessError, range::Range};
+
 /// Represents a token for the C preprocessor.
 ///
 /// In general, C language tokens are lexed after preprocessing, but
@@ -34,7 +36,7 @@ pub enum Token {
     // A preprocessing identifier, includes:
     //
     // - C Keywords
-    // - C Type names
+    // - C Type, Struct, Union and Enum names
     // - C Variable names
     // - C Function names
     // - Directive names
@@ -62,7 +64,16 @@ pub enum Token {
     // A string literal.
     // String are enclosed in double quotes (`"`), embedded quotes must be escaped with a backslash.
     //
-    // See: https://en.cppreference.com/w/c/language/string_literal.html
+    // Escape sequences supported in string literals include:
+    // - Simple escape sequences: `\'`, `\"`, `\?`, `\\`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`
+    // - Octal escape sequences: `\nnn` (1 to 3 octal digits)
+    // - Hexadecimal escape sequences: `\xn...`, `\Xn...` (1 or more hexadecimal digits, however,
+    //   only two hexadecimal digits are allowed in ANCPP, e.g., `\x41` for 'A', `\x7A` for 'z')
+    // - Universal character names: `\unnnn`, `\Unnnnnnnn` (4 or 8 hexadecimal digits)
+    //
+    // See:
+    // https://en.cppreference.com/w/c/language/escape.html
+    // https://en.cppreference.com/w/c/language/string_literal.html
     String(String, StringEncoding),
 
     // A (single) character constant, e.g., 'a', '\t', '文', '\u6587', and '\U2005E'.
@@ -211,16 +222,6 @@ pub enum Punctuator {
     ShiftLeftAssign,  // '<<='
     ShiftRightAssign, // '>>='
 
-    // Conditional Operator
-    // --------------------
-    QuestionMark, // '?'
-
-    // Miscellaneous Operators
-    // --------------------
-    Comma, // ','
-    Dot,   // '.', member access operator
-    Arrow, // '->', pointer member access operator
-
     // Brackets and Delimiters
     // --------------------
     BraceOpen,        // '{'
@@ -229,11 +230,18 @@ pub enum Punctuator {
     BracketClose,     // ']'
     ParenthesisOpen,  // '('
     ParenthesisClose, // ')'
-    Semicolon,        // ';'
-    Colon,            // ':'
-    Ellipsis,         // '...', Variadic arguments in function definitions
     AttributeOpen,    // '[[' for attributes in C23, e.g., [[nodiscard]]
     AttributeClose,   // ']]' for attributes in C23, e.g., [[nodiscard]]
+    Semicolon,        // ';'
+    Comma,            // ','
+
+    // Other Operators
+    // --------------------
+    Dot,          // '.', member access operator
+    Arrow,        // '->', pointer member access operator
+    QuestionMark, // '?'
+    Colon,        // ':'
+    Ellipsis,     // '...', Variadic arguments in function definitions
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -286,6 +294,9 @@ pub struct FloatingPointNumber {
 
     /// true for decimal floating-point numbers (`_Decimal{32|64|128}`), false for binary floating-point numbers.
     /// Suffix `d` or `D` indicates a decimal floating-point number, e.g., `1.23dd`, `4.56DF`.
+    /// When it is use alone without combining with `f`, `F`, `l`, or `L`,
+    /// it must be `dd` or `DD`, indicating a decimal double-precision.
+    ///
     /// Possible suffix are: `dd`, `DD`, `df`, `DF`, `dl`, `DL`
     pub decimal: bool,
     pub length: FloatingPointNumberWidth,
@@ -298,6 +309,18 @@ pub enum FloatingPointNumberWidth {
     LongDouble, // suffix "l", "L", e.g., 1.23l, 1.23L
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct TokenWithRange {
+    pub token: Token,
+    pub range: Range,
+}
+
+impl TokenWithRange {
+    pub fn new(token: Token, range: Range) -> Self {
+        Self { token, range }
+    }
+}
+
 impl IntegerNumber {
     pub fn new(value: String, unsigned: bool, length: IntegerNumberWidth) -> Self {
         Self {
@@ -307,7 +330,7 @@ impl IntegerNumber {
         }
     }
 
-    pub fn as_usize(&self) -> Result<usize, std::num::ParseIntError> {
+    pub fn as_u64(&self) -> Result<u64, PreprocessError> {
         let (src, radix) = if self.value.starts_with("0x") {
             // Hexadecimal number
             (&self.value[2..], 16)
@@ -322,7 +345,9 @@ impl IntegerNumber {
             (&self.value[..], 10)
         };
 
-        usize::from_str_radix(src, radix)
+        u64::from_str_radix(src, radix).map_err(|_| {
+            PreprocessError::Message(format!("Can not parse integer number: {}", self))
+        })
     }
 }
 
@@ -332,6 +357,32 @@ impl FloatingPointNumber {
             value,
             decimal,
             length,
+        }
+    }
+
+    pub fn as_f64(&self) -> Result<f64, PreprocessError> {
+        if self.value.starts_with("0x") {
+            // Hexadecimal floating-point number
+            hexfloat2::parse::<f64>(&self.value).map_err(|_| {
+                PreprocessError::Message(format!("Can not parse floating-point number: {}", self))
+            })
+        } else {
+            self.value.parse::<f64>().map_err(|_| {
+                PreprocessError::Message(format!("Can not parse floating-point number: {}", self))
+            })
+        }
+    }
+
+    pub fn as_f32(&self) -> Result<f32, PreprocessError> {
+        if self.value.starts_with("0x") {
+            // Hexadecimal floating-point number
+            hexfloat2::parse::<f32>(&self.value).map_err(|_| {
+                PreprocessError::Message(format!("Can not parse floating-point number: {}", self))
+            })
+        } else {
+            self.value.parse::<f32>().map_err(|_| {
+                PreprocessError::Message(format!("Can not parse floating-point number: {}", self))
+            })
         }
     }
 }
@@ -368,7 +419,18 @@ impl Display for Token {
                 write!(f, "{}{}'", prefix, escaped)
             }
             Token::Punctuator(p) => write!(f, "{}", p),
-            _ => unreachable!("Preprocessor tokens should not be displayed: {}", self),
+            Token::DirectiveStart => write!(f, "#"),
+            Token::DirectiveEnd => write!(f, "\n"),
+            Token::Pound => write!(f, "#"),
+            Token::PoundPound => write!(f, "##"),
+            Token::FilePath(s, angle_bracket) => {
+                if *angle_bracket {
+                    write!(f, "<{}>", s)
+                } else {
+                    write!(f, "\"{}\"", s)
+                }
+            }
+            Token::FunctionLikeMacroIdentifier(s) => write!(f, "{}", s),
         }
     }
 }
@@ -490,14 +552,6 @@ impl Display for Punctuator {
             Punctuator::ShiftLeftAssign => "<<=",
             Punctuator::ShiftRightAssign => ">>=",
 
-            // Conditional Operator
-            Punctuator::QuestionMark => "?",
-
-            // Miscellaneous Operators
-            Punctuator::Comma => ",",
-            Punctuator::Dot => ".",
-            Punctuator::Arrow => "->",
-
             // Brackets and Delimiters
             Punctuator::BraceOpen => "{",
             Punctuator::BraceClose => "}",
@@ -505,11 +559,17 @@ impl Display for Punctuator {
             Punctuator::BracketClose => "]",
             Punctuator::ParenthesisOpen => "(",
             Punctuator::ParenthesisClose => ")",
-            Punctuator::Semicolon => ";",
-            Punctuator::Colon => ":",
-            Punctuator::Ellipsis => "...",
             Punctuator::AttributeOpen => "[[",
             Punctuator::AttributeClose => "]]",
+            Punctuator::Semicolon => ";",
+            Punctuator::Comma => ",",
+
+            // Other Operators
+            Punctuator::Dot => ".",
+            Punctuator::Arrow => "->",
+            Punctuator::Colon => ":",
+            Punctuator::QuestionMark => "?",
+            Punctuator::Ellipsis => "...",
         };
         write!(f, "{}", symbol)
     }

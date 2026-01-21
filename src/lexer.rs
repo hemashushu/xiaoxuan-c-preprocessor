@@ -16,7 +16,7 @@ use crate::{
     range::Range,
     token::{
         CharEncoding, FloatingPointNumber, FloatingPointNumberWidth, IntegerNumber,
-        IntegerNumberWidth, Number, Punctuator, StringEncoding, Token,
+        IntegerNumberWidth, Number, Punctuator, StringEncoding, Token, TokenWithRange,
     },
 };
 
@@ -24,30 +24,6 @@ use unicode_normalization::UnicodeNormalization;
 
 // Buffer sizes for lookahead in `PeekableIter`.
 const PEEK_BUFFER_LENGTH_LEX: usize = 4;
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct TokenWithRange {
-    pub token: Token,
-    pub range: Range,
-}
-
-impl TokenWithRange {
-    pub fn new(token: Token, range: Range) -> Self {
-        Self { token, range }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct TokenWithLocation {
-    pub token: Token,
-    pub location: Location,
-}
-
-impl TokenWithLocation {
-    pub fn new(token: Token, location: Location) -> Self {
-        Self { token, location }
-    }
-}
 
 pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
     let chars = initialize(source_text)?;
@@ -1892,9 +1868,9 @@ impl Lexer<'_> {
                                             }
                                         }
                                     }
-                                    'x' => {
+                                    'x' | 'X' => {
                                         // Hexadecimal escape sequence,
-                                        // format: `\xhh`.
+                                        // format: `\xh...`.
                                         // e.g. `\x38` (`'8'`), `\x41` (`'A'`)
                                         // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Hex
 
@@ -2207,9 +2183,9 @@ impl Lexer<'_> {
                                                 }
                                             }
                                         }
-                                        'x' => {
+                                        'x' | 'X' => {
                                             // Hexadecimal escape sequence,
-                                            // format: `\xhh`.
+                                            // format: `\xh...`.
                                             // e.g. `\x38` (`'8'`), `\x41` (`'A'`)
                                             // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Hex
 
@@ -2334,24 +2310,6 @@ impl Lexer<'_> {
                     '"' => {
                         break;
                     }
-                    // '\\' | '\'' => {
-                    //     return Err(PreprocessError::MessageWithPosition(
-                    //         "Invalid character in file path.".to_owned(),
-                    //         self.last_position,
-                    //     ));
-                    // }
-                    // '/' if self.peek_char_and_equals(0, '/') => {
-                    //     return Err(PreprocessError::MessageWithPosition(
-                    //         "Line comments are not allowed in file paths.".to_owned(),
-                    //         self.last_position,
-                    //     ));
-                    // }
-                    // '/' if self.peek_char_and_equals(0, '*') => {
-                    //     return Err(PreprocessError::MessageWithPosition(
-                    //         "Block comments are not allowed in file paths.".to_owned(),
-                    //         self.last_position,
-                    //     ));
-                    // }
                     '\n' | '\r' => {
                         return Err(PreprocessError::MessageWithPosition(
                             "Incomplete file path, expected a closing double quote '\"' but found a newline character."
@@ -2399,30 +2357,6 @@ impl Lexer<'_> {
                     '>' => {
                         break;
                     }
-                    // '\\' | '\'' => {
-                    //     return Err(PreprocessError::MessageWithPosition(
-                    //         "Invalid character in file path.".to_owned(),
-                    //         self.last_position,
-                    //     ));
-                    // }
-                    // '"' => {
-                    //     return Err(PreprocessError::MessageWithPosition(
-                    //         "Double quotes are not allowed in angle-bracket file paths.".to_owned(),
-                    //         self.last_position,
-                    //     ));
-                    // }
-                    // '/' if self.peek_char_and_equals(0, '/') => {
-                    //     return Err(PreprocessError::MessageWithPosition(
-                    //         "Line comments are not allowed in file paths.".to_owned(),
-                    //         self.last_position,
-                    //     ));
-                    // }
-                    // '/' if self.peek_char_and_equals(0, '*') => {
-                    //     return Err(PreprocessError::MessageWithPosition(
-                    //         "Block comments are not allowed in file paths.".to_owned(),
-                    //         self.last_position,
-                    //     ));
-                    // }
                     '\n' | '\r' => {
                         return Err(PreprocessError::MessageWithPosition(
                             "Incomplete file path, expected a closing angle bracket '>' but found a newline character."
@@ -2542,17 +2476,10 @@ mod tests {
         },
     };
 
+    // Helper functions to create tokens for testing
     impl Token {
         fn new_identifier(s: &str) -> Self {
             Token::Identifier(s.to_owned())
-        }
-
-        fn new_integer_number(i: i32) -> Self {
-            Token::Number(Number::Integer(IntegerNumber::new(
-                i.to_string(),
-                false,
-                IntegerNumberWidth::Default,
-            )))
         }
 
         fn new_char(c: char) -> Self {
@@ -2561,6 +2488,14 @@ mod tests {
 
         fn new_string(s: &str) -> Self {
             Token::String(s.to_owned(), StringEncoding::Default)
+        }
+
+        fn new_integer_number(i: i32) -> Self {
+            Token::Number(Number::Integer(IntegerNumber::new(
+                i.to_string(),
+                false,
+                IntegerNumberWidth::Default,
+            )))
         }
     }
 
@@ -2576,7 +2511,8 @@ mod tests {
     // https://en.cppreference.com/w/c/language/operator_alternative.html
     fn test_trigraphs() {
         let source_text0 = "do ??< 123";
-        // index:                 0123456789
+        // "do ??< 123"
+        //  0123456789  // index
 
         let result0 = lex_from_str(source_text0);
         assert!(matches!(
@@ -2635,7 +2571,9 @@ mod tests {
     // https://en.cppreference.com/w/c/language/operator_alternative.html
     fn test_digraphs() {
         let source = "if 1 <% return";
-        // index:           01234567890123
+
+        // "if 1 <% return"
+        //  01234567890123  // index
 
         let result = lex_from_str_with_range_strip(source);
         assert!(matches!(
@@ -2670,6 +2608,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip("+-*/%++--==!=><>=<=&&||!&|^~<<>>").unwrap(),
             vec![
+                // Arithmetic Operators
                 Token::Punctuator(Punctuator::Add),
                 Token::Punctuator(Punctuator::Subtract),
                 Token::Punctuator(Punctuator::Multiply),
@@ -2677,15 +2616,18 @@ mod tests {
                 Token::Punctuator(Punctuator::Modulo),
                 Token::Punctuator(Punctuator::Increase),
                 Token::Punctuator(Punctuator::Decrease),
+                // Relational Operators
                 Token::Punctuator(Punctuator::Equal,),
                 Token::Punctuator(Punctuator::NotEqual,),
                 Token::Punctuator(Punctuator::GreaterThan,),
                 Token::Punctuator(Punctuator::LessThan,),
                 Token::Punctuator(Punctuator::GreaterThanOrEqual,),
                 Token::Punctuator(Punctuator::LessThanOrEqual,),
+                // Logical Operators
                 Token::Punctuator(Punctuator::And,),
                 Token::Punctuator(Punctuator::Or,),
                 Token::Punctuator(Punctuator::Not,),
+                // Bitwise Operators
                 Token::Punctuator(Punctuator::BitwiseAnd,),
                 Token::Punctuator(Punctuator::BitwiseOr,),
                 Token::Punctuator(Punctuator::BitwiseXor,),
@@ -2698,6 +2640,7 @@ mod tests {
         assert_eq!(
             lex_from_str_with_range_strip("=+=-=*=/=%=&=|=^=<<=>>=").unwrap(),
             vec![
+                // Assignment Operators
                 Token::Punctuator(Punctuator::Assign),
                 Token::Punctuator(Punctuator::AddAssign),
                 Token::Punctuator(Punctuator::SubtractAssign),
@@ -2712,24 +2655,32 @@ mod tests {
             ]
         );
 
+        // Brackets and Delimiters
         assert_eq!(
-            lex_from_str_with_range_strip("?,.->{}[]();:...[[]]").unwrap(),
+            lex_from_str_with_range_strip("{}[]()[[]];,").unwrap(),
             vec![
-                Token::Punctuator(Punctuator::QuestionMark),
-                Token::Punctuator(Punctuator::Comma),
-                Token::Punctuator(Punctuator::Dot),
-                Token::Punctuator(Punctuator::Arrow),
                 Token::Punctuator(Punctuator::BraceOpen),
                 Token::Punctuator(Punctuator::BraceClose),
                 Token::Punctuator(Punctuator::BracketOpen),
                 Token::Punctuator(Punctuator::BracketClose),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::Punctuator(Punctuator::ParenthesisClose),
-                Token::Punctuator(Punctuator::Semicolon),
-                Token::Punctuator(Punctuator::Colon),
-                Token::Punctuator(Punctuator::Ellipsis),
                 Token::Punctuator(Punctuator::AttributeOpen),
                 Token::Punctuator(Punctuator::AttributeClose),
+                Token::Punctuator(Punctuator::Semicolon),
+                Token::Punctuator(Punctuator::Comma),
+            ]
+        );
+
+        // Other Operators
+        assert_eq!(
+            lex_from_str_with_range_strip(".->?:...").unwrap(),
+            vec![
+                Token::Punctuator(Punctuator::Dot),
+                Token::Punctuator(Punctuator::Arrow),
+                Token::Punctuator(Punctuator::QuestionMark),
+                Token::Punctuator(Punctuator::Colon),
+                Token::Punctuator(Punctuator::Ellipsis),
             ]
         );
 
@@ -4617,7 +4568,7 @@ mod tests {
         // err: empty unicode escape string
         //
         // "abc\\u"
-        // 01234 5          // index
+        // 01234 56     // index
         assert!(matches!(
             lex_from_str_with_range_strip(r#""abc\u""#),
             Err(PreprocessError::MessageWithRange(
@@ -5087,32 +5038,6 @@ xyz
                 )
             ]
         );
-
-        // // err: invalid character in filepath
-        // assert!(matches!(
-        //     lex_from_str_with_range_strip("#include <foo\"bar>"),
-        //     Err(PreprocessError::MessageWithPosition(
-        //         _,
-        //         Position {
-        //             index: 13,
-        //             line: 0,
-        //             column: 13,
-        //         }
-        //     ))
-        // ));
-
-        // // err: invalid character in filepath
-        // assert!(matches!(
-        //     lex_from_str_with_range_strip("#include <foo\\bar>"),
-        //     Err(PreprocessError::MessageWithPosition(
-        //         _,
-        //         Position {
-        //             index: 13,
-        //             line: 0,
-        //             column: 13,
-        //         }
-        //     ))
-        // ));
 
         // err: invalid character `\n` in filepath
         assert!(matches!(

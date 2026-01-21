@@ -23,15 +23,20 @@ ANCPP is provided primarily as a library for the ANCC project (XiaoXuan C Compil
   - [3.10 Behavior control (`#pragma`)](#310-behavior-control-pragma)
 - [4. Unsupported Directives](#4-unsupported-directives)
 - [5. Unsupported Features](#5-unsupported-features)
-- [6. License](#6-license)
-- [7. References](#7-references)
+- [6. Token Types](#6-token-types)
+  - [6.1 Identifiers](#61-identifiers)
+  - [6.2 String and Character Literals](#62-string-and-character-literals)
+  - [6.3 Numbers](#63-numbers)
+  - [6.4 Punctuators](#64-punctuators)
+- [7. License](#7-license)
+- [8. References](#8-references)
 
 <!-- /code_chunk_output -->
 
 ## 1. Features
 
 - Fully C23 standard compliance, focusing on modern and portable C projects.
-- No non‑standard extensions or custom directives; follows standard behavior.
+- No non‑standard extensions, directives or behaviors.
 - Disable some "flex" features by default to make the preprocessor more predictable and less error-prone.
 - Precise and helpful error messages.
 
@@ -240,6 +245,8 @@ int x = BUZZ;                   // Expands to: `int x = ((42) + 1) * 2;`
 
 Since macros are pure textual substitution (that is, text find-and-replace), unbalanced parentheses, brackets or quotes in macro replacements can lead to invalid C code (or disrupting control flow) after macro expansion, which may be hard to detect. This constraint helps catch such mistakes early.
 
+> If something the C constants can do, prefer using `const` variables instead of macros. Macros should be used only in "static code generation" scenarios.
+
 **Empty replacement**
 
 The replacement can also be empty:
@@ -400,7 +407,7 @@ if (is_cli)
 else run(argc, argv);
 
 // The above expands to:
-//
+
 // if (is_cli)
 //     if (!argc) {
 //         puts("Error occurred.\n");
@@ -497,9 +504,13 @@ int min_value = MIN(MIN(a,b), c);       // Disallowed: Argument "MIN(a,b)" is an
 
 This constraint significantly weakens the flexibility of function-like macros, but it ensures that function-like macro arguments are simple and predictable. Since ANCC is designed for C beginner and modern C applications programming, this trade-off is acceptable.
 
+> If something the C functions can do, prefer using C functions (inline functions if necessary) instead of function-like macros. Function-like macros should be used only in "static code generation" scenarios.
+
 **Expansion of function-like macros**
 
-When invoking a function-like macro with arguments, if the arguments are macros themselves, they are **first expanded**, if the arguments are not macros, they remain unchanged (that is, they are treated as **literal text**, they wouldn't be evaluated or interpreted in any way like C language does), and then substituted into the replacement text.
+When invoking a function-like macro with identifiers, strings, characters or numbers as arguments, they are treated as **literal text**, they wouldn't be evaluated or interpreted in any way like C language does, and then substituted into the replacement text.
+
+If passed arguments are macros themselves, they are **expanded first** (recursively expanded if necessary), and then the expanded text is substituted into the replacement.
 
 ```c
 #define ADD(a, b) (a) + (b)
@@ -511,8 +522,8 @@ int x = ADD(left, RIGHT);       // Expands to: `int x = (left) + (2);`
 //
 // 1. Argument `left` is not a macro, so it remains unchanged.
 // 2. Argument `RIGHT` is a macro, so it is expanded to `2`.
-// 3. Invoke `ADD(...)` with the expanded arguments, i.e. `ADD(left, 2)`.
-// 4. Substitute the arguments into the replacement: `(left) + (2)`.
+// 3. Invoke `ADD(...)`.
+// 4. Substitute the arguments into the replacement and gets: `(left) + (2)`.
 ```
 
 The arguments are first expanded also in nested function-like macro invocations:
@@ -524,9 +535,9 @@ int x = INC(INC(3));            // Expands to: `int x = ((3) + 1) + 1;`
 // The steps of expansion of `INC(INC(3))` are:
 //
 // 1. The argument `INC(3)` is a macro invocation, so it is expanded first.
-// 2. Substitute the argument `3` into the replacement: `(3) + 1`.
-// 3. Invoke the outer `INC(...)` with the expanded arguments, i.e. `INC((3) + 1)`.
-// 4. Substitute the argument into the replacement: `((3) + 1) + 1`.
+// 2. Substitute the argument `3` into the replacement and gets: `(3) + 1`.
+// 3. Invoke the outer `INC(...)`.
+// 4. Substitute the argument into the replacement and gets: `((3) + 1) + 1`.
 ```
 
 When the subsitution is done, the resulting text is **scanned again** for macros and expanded.
@@ -540,8 +551,8 @@ int x = ADD(1, 2);              // Expands to: `int x = (1) + (2);`
 // The steps of expansion of `ADD(1, 2)` are:
 //
 // 1. Argument `1` and `2` are not macros, so they remain unchanged.
-// 2. Substitute the arguments into the replacement: `(1) OPEATOR (2)`.
-// 3. Scan the result for macros and find `OPEATOR`, so it is expanded to `+`.
+// 2. Substitute the arguments into the replacement and gets: `(1) OPEATOR (2)`.
+// 3. Scan the result for macros and find `OPEATOR`, it is expanded to `+`.
 // 4. The final expansion is `(1) + (2)`.
 ```
 
@@ -556,9 +567,11 @@ INVOKE(GREETING, "Hello, World!\n");    // Expands to: `puts("Hello, World!\n");
 // The steps of expansion of `INVOKE(GREETING, "Hello, World!\n")` are:
 //
 // 1. Argument `GREETING` is an identifier (it's not an invocation), so it remains unchanged.
-// 2. Argument `"Hello, World!\n"` is a string literal, so it remains unchanged.
-// 3. Substitute the arguments into the replacement: `GREETING("Hello, World!\n");`.
-// 4. Scan the result for macros and find `GREETING`, so it is expanded to `puts("Hello, World!\n");`.
+// 2. Argument `"Hello, World!\n"` is a string literal, so it remains unchanged as well.
+// 3. Substitute the arguments into the replacement and gets: `GREETING("Hello, World!\n");`.
+// 4. Scan the result for macros and find `GREETING`.
+// 5. Expand `GREETING("Hello, World!\n")`.
+// 6. Substitute the argument into the replacement and gets: `puts("Hello, World!\n");`.
 ```
 
 Becareful with nested function-like macro invocations, because the actual arguments that produced from the first expansion may be mismatched for the second invocation:
@@ -574,10 +587,10 @@ LOG(SURROUND("Hello"))          // Error: Mismatched arguments.
 // The steps of expansion of `LOG(SURROUND("Hello"))` are:
 //
 // 1. Argument `SURROUND("Hello")` is a macro invocation, so it is expanded first.
-// 2. Substitute the argument `"Hello"` into the replacement: `"[", "Hello", "]"`.
-// 3. Invoke the outer `LOG(...)` with the expanded arguments.
-// 4. Substitute the argument into the replacement: `WRITE("[", "Hello", "]");`.
-// 5. Scan the result for macros and find `WRITE`
+// 2. Substitute the argument `"Hello"` into the replacement and gets: `"[", "Hello", "]"`.
+// 3. Invoke the outer `LOG(...)`.
+// 4. Substitute the argument into the replacement and gets: `WRITE("[", "Hello", "]");`.
+// 5. Scan the result for macros and find `WRITE`.
 // 6. Error: `WRITE` expects only one argument, but three arguments are provided.
 ```
 
@@ -597,9 +610,7 @@ WRITE("Hello")                  // Expands to: `">" WRITE("Hello") "!\n";`
 
 **Stringizing (the `#` operator)**
 
-In function-like macros, a `#` operator before an identifier in the replacement runs the identifier through parameter replacement and encloses the result in quotes, effectively creating a string literal.
-
-Stringizing can only be applied to function-like macro parameters.
+In a function-like macro's replacement list, placing `#` before a parameter name (spaces between `#` and the parameter are allowed) converts the argument's source spelling into a C string literal.
 
 ```c
 #define DEBUG(var) printf("%s=%d\n", #var, var);
@@ -607,7 +618,7 @@ int foo = 42;
 DEBUG(foo);                     // Expands to: `printf("%s=%d\n", "foo", x);`
 ```
 
-Not only identifiers, but also numbers, chars, and string literals can be stringized.
+Not only identifiers, but also numbers, chars, and string literals can be stringized. When stringize a string literal, the quotes and special characters are escaped automatically.
 
 ```c
 #define SHOW(x) puts(#x);
@@ -626,7 +637,7 @@ FOO(a + b);                     // Disabled: Argument is an expression.
 FOO(foo());                     // Disabled: Argument is a macro invocation.
 ```
 
-Note that the `#` operator will stop expansion of the argument, so the actual argument is treated as literal text and keeps unchanged.
+Note that the `#` operator will stop expansion of the argument, so if you pass a macro as the argument, the macro name is treated as literal text and keeps unchanged. You may remember the macro will be **expanded first** when passed as arguments in function-like macro invocations, but the `#` operator is an exception to this rule.
 
 ```c
 #define SHOW(x) puts(#x);
@@ -635,23 +646,35 @@ Note that the `#` operator will stop expansion of the argument, so the actual ar
 SHOW(FOO);                      // Expands to: `puts("FOO");`, not `puts("42");`
 ```
 
-If you want to stringify the expanded value of an argument, you need to use an additional level of indirection.
+If you want to stringize the expanded value of a macro argument, you need to use an additional level of indirection.
 
 ```c
-#define SHOW(x) puts(#x);
 #define SHOW_MACRO_VAL(x) SHOW(x)
+#define SHOW(x) puts(#x);
 
 #define FOO 42
 SHOW_MACRO_VAL(FOO);            // Expands to: `puts("42");`
 
 // The steps of expansion of `SHOW_MACRO_VAL(FOO)` are:
 //
-// 1. Expand `SHOW_MACRO_VAL(FOO)`, because the replacement `SHOW(x)` does not contain `#`, so the argument `FOO` is expanded first.
-// 2. `FOO` is a macro, so it is expanded to `42`.
-// 3. Substitute the argument into the replacement: `SHOW(42)`.
-// 4. Expand `SHOW(42)`, now the replacement contains `#`, so the argument `42` is not expanded further.
+// 1. Expand `SHOW_MACRO_VAL(FOO)`, because the replacement `SHOW(x)` does not contain `#`, so the argument `FOO` is expanded first to `42`.
+// 2. Substitute the argument into the replacement and gets: `SHOW(42)`.
+// 3. Scan the result for macros and find `SHOW`, so it is expanded next.
+// 4. Expand `SHOW(42)`, now the replacement contains `#`, so the argument `42` remains unchanged.
 // 5. The final expansion is `puts("42");`.
 ```
+
+The stringizing result table:
+
+| Argument      | Stringize Result |
+|---------------|------------------|
+| `identifier`  | `"identifier"`   |
+| `number`      | `"number"`       |
+| `'character'` | `"'character'"`  |
+| `"string"`    | `"\"string\""`   |
+| `MACRO_NAME`  | `"MACRO_NAME"`   |
+
+Stringizing may only be applied to parameters of function-like macros.
 
 **Token concatenation (the `##` operator)**
 
@@ -676,7 +699,7 @@ FOO(2b);                        // Disabled: Result token "2b9s" is not a valid 
 FOO(+);                         // Disabled: Result token "+9s" is not a valid identifier.
 ```
 
-Like the stringizing operator, `##` also stops expansion of the arguments before concatenation.
+Like the stringizing operator, `##` also stops expansion of the macro arguments.
 
 ```c
 #define CONCAT(a, b) a##b
@@ -684,7 +707,7 @@ Like the stringizing operator, `##` also stops expansion of the arguments before
 CONCAT(PREFIX, 1)               // Expands to: `PREFIX1`, not `foo1`
 ```
 
-Token concatenation can only be used in macro replacements (It's usually used in function-like macros, but can also be used in object-like macros though it's meaningless.)
+Token concatenation (the `##` operator) may only appear in macro replacement lists. It is most useful in function-like macros; while it is permitted in object-like macros, doing so is rarely meaningful.
 
 ### 3.4 Variadic macros
 
@@ -705,9 +728,9 @@ Examples:
 LOG("Value: %d\n", 42);         // Expands to: `fprintf(stderr, "Value: %d\n", 42);`
 LOG("Hello, World!\n", );       // Expands to: `fprintf(stderr, "Hello, World!\n", );`
 
-#define LINE(...) char line[] = { __VA_ARGS__ , '\n'}
-LINE('f', 'o', 'o');            // Expands to: `char line[] = { 'f', 'o', 'o', '\n'};`
-LINE();                         // Expands to: `char line[] = { , '\n'};`
+#define STR(...) char str[] = { __VA_ARGS__ , '\0'}
+STR('f', 'o', 'o');            // Expands to: `char line[] = { 'f', 'o', 'o', '\0'};`
+STR();                         // Expands to: `char line[] = { , '\0'};`
 
 #define VEC(type, name, ...) type name[] = { __VA_ARGS__ }
 VEC(int, numbers, 1, 2, 3);     // Expands to: `int numbers[] = { 1, 2, 3 };`
@@ -721,9 +744,9 @@ You may use `__VA_OPT__(...)` to include content only if there are additional ar
 LOG("Value: %d\n", 42);         // Expands to: `fprintf(stderr, "Value: %d\n", 42);`
 LOG("Hello, World!\n");         // Expands to: `fprintf(stderr, "Hello, World!\n" );`
 
-#define LINE(...) char line[] = { __VA_ARGS__ __VA_OPT__(,) '\n'}
-LINE('f', 'o', 'o');            // Expands to: `char line[] = { 'f', 'o', 'o', '\n'};`
-LINE();                         // Expands to: `char line[] = { '\n'};`
+#define STR(...) char str[] = { __VA_ARGS__ __VA_OPT__(,) '\0'}
+STR('f', 'o', 'o');            // Expands to: `char str[] = { 'f', 'o', 'o', '\0'};`
+STR();                         // Expands to: `char str[] = { '\0'};`
 
 #define VEC(type, name, ...) type name[] __VA_OPT__( = { __VA_ARGS__ } )
 VEC(int, numbers, 1, 2, 3);     // Expands to: `int numbers[] = { 1, 2, 3 };`
@@ -1105,20 +1128,39 @@ In ANCPP, the system include directories and user-specified include directories 
 
 **The limitations of `FILE_PATH`**
 
-The `FILE_PATH` is more restricted than regular string literals since it does not support escape sequences, the character `\` is treated as a normal character, it is usually used as path separator in Windows platform. As a result,`FILE_PATH` is unable to contain character `"` and `>` in `"..."` and `<...>` form respectively.
+The `FILE_PATH` is more restricted than regular string literals since it does not support escape sequences, the character `\` is treated as a normal character, although it is usually used as path separator in Windows platform, but it is recommended that use forward slash `/` as path separator even in Windows platform.
 
 ```c
-#include "include\my_header.h"      // Backslash is a normal character
-#include "my\x5fheader.h"           // It represents the directory "my" followed by the file "x5fheader.h", not "my_header.h"
+// Backslash is a normal character.
+// It is good practice to use forward slash `/` as path separator, e.g.
+// "include "include/my_header.h"
+#include "include\my_header.h"
+
+// It represents the directory "my" followed by the file "x5fheader.h",
+// It is not "my_header.h" since escape sequences `\x5f` are not supported in FILE_PATH.
+// It is recommended to use forward slash `/` as path separator to avoid confusion, e.g.
+// `#include "my/header.h"`
+#include "my\x5fheader.h"
+
 #include "my"header.h"              // Error: Double quote terminates the string literal
 #include <my>header.h>              // Error: Greater-than sign terminates the angle-bracketed file path
 ```
 
+Per standard suggestion, avoid using following characters in `FILE_PATH`:
+
+- The character `'`
+- The character `"`
+- The character `\`
+- The character sequence `//`
+- The character sequence `/*`
+
+Because file path tokens may be reinterpreted during preprocessing, and these characters may cause unexpected results.
+
 Note that if you define a string literal macro and then use it in `#include`, the string literal rules apply:
 
 ```c
-#define HEADER_FILE "include\\my_header.h"
-#include HEADER_FILE                // Correct: Backslash is escaped in string literal
+#define HEADER_FILE "my\u2764header.h"  // Backslash is escaped in string literal
+#include HEADER_FILE                    // Includes the file "my❤header.h"
 ```
 
 **Include guards**
@@ -1403,11 +1445,211 @@ if true ??< return 1; ??>           // Error: Trigraphs are removed in C23.
 printf("%s??/n", argv??(1??));      // Error: Trigraphs are removed in C23.
 ```
 
-## 6. License
+## 6. Token Types
+
+ANCPP produces tokens including identifiers, numbers, string literals, character literals, and punctuators. The definitions of these token types are based on the C23 standard.
+
+Directives, macros and conditionals are removed during preprocessing, so they are not part of the final token stream.
+
+### 6.1 Identifiers
+
+Besides C type (struct, union, enum) names, function names and variable names, the C keywords are also treated as identifiers.
+
+An identifier is a sequence of letters (A-Z, a-z), digits (0-9), and underscores (_), starting with a letter or an underscore.
+
+- `myVariable`
+- `_temp123`
+- `MAX_SIZE`
+
+Identifiers can not start with a digit:
+
+- `2ndValue`        // invalid
+- `123_abc`         // invalid
+
+Identifiers are case-sensitive, so `myVar`, `MyVar`, and `MYVAR` are considered different identifiers.
+
+Unicode characters are also allowed in identifiers, including `\u{a0}` to `\u{d7ff}`, and `\u{e000}` to `\u{10ffff}`.
+
+- `变量`
+- `ヴァリアブル`
+- `❤️`
+
+Note that namespace separators (`::`) in attribute names are also included in identifiers.
+
+### 6.2 String and Character Literals
+
+Character literals are a single character enclosed in single quotes (`'`), while string literals are a sequence of characters enclosed in double quotes (`"`).
+
+- `'A'`                 // character literal
+- `"Hello, World!"`     // string literal
+
+Both character and string literals can include escape sequences to represent special characters, supported escape sequences:
+
+| Escape Sequence | Description         |
+|-----------------|---------------------|
+| `\\`            | Backslash (`\`)     |
+| `\'`            | Single quote (`'`)  |
+| `\"`            | Double quote (`"`)  |
+| `\?`            | Question mark (`?`) |
+| `\a`            | Alert (bell)        |
+| `\b`            | Backspace           |
+| `\f`            | Form feed           |
+| `\n`            | Newline             |
+| `\r`            | Carriage return     |
+| `\t`            | Horizontal tab      |
+| `\v`            | Vertical tab        |
+| `\ooo`          | Octal value (1 to 3 digits), e.g., `\101` (A), `\12` (newline) |
+| `\xhh...`       | Hexadecimal value, 1 or more digits, only two digits are supported currently. e.g., `\x41` (A), `\x0A` (newline) |
+| `\uXXXX`        | Unicode code point (4 hex digits), e.g., `\u0041` (A), `\u03A9` (Ω) |
+| `\UXXXXXXXX`    | Unicode code point (8 hex digits), e.g., `\U00000041` (A), `\U000003A9` (Ω) |
+
+String and character literal prefixes are also supported:
+
+| Prefix | Description                        |
+|--------|------------------------------------|
+| `L`    | Wide character or string literal   |
+| `u`    | UTF-16 character or string literal |
+| `U`    | UTF-32 character or string literal |
+| `u8`   | UTF-8 character or string literal  |
+
+- `L'A'`                // wide character literal
+- `u8"Hello"`           // UTF-8 string literal
+
+`[ANCPP RESTRICTION]`: Multicharacter constant is not supported. e.g., `'AB'`, `u'CD'` are not allowed.
+
+### 6.3 Numbers
+
+Number literals include integer literals and floating-point literals.
+
+**Integer literals**
+
+Integer literals can be in decimal, octal, hexadecimal, or binary format:
+
+| Format      | Prefix  | Example                 |
+|-------------|---------|-------------------------|
+| Decimal     | None    | `123`, `0`, `4567`      |
+| Octal       | `0`     | `0123`, `0777`          |
+| Hexadecimal | `0x` or `0X` | `0x123`, `0XABC`   |
+| Binary      | `0b` or `0B` | `0b1010`, `0B1101` |
+
+Integer can have suffixes to indicate their width:
+
+| Suffix       | Description       | Example           |
+|--------------|-------------------|-------------------|
+| `l` or `L`   | Long integer      | `123l`, `0b1010L` |
+| `ll` or `LL` | Long long integer | `123ll`, `456LL`  |
+| `wb` or `WB` | Wide integer      | `123wb`, `0XFFWB` |
+
+Additionally, unsigned suffix (`u` or `U`) is also supported, it can be combined with other suffixes, e.g., `123ul`, `45ull`, `0XFFUWB`, or use alone to indicate unsigned integer, e.g., `123u`, `0b1010U`.
+
+If a suffix is not specified, the type of the integer literal is determined based on its value, that is the smallest type that can hold the value is chosen.
+
+**Floating-point literals**
+
+Floating-point literals can be in decimal or hexadecimal format:
+
+| Format      | Prefix       | Example                 |
+|-------------|--------------|-------------------------|
+| Decimal     | None         | `123.45`, `.667`, `1.414e10`, `1.732e+2`, `2.718e-3` |
+| Hexadecimal | `0x` or `0X` | `0x1.23p4`, `0x4.5p+6`,  `0X7.5p-8` |
+
+Floating-point literals can have suffixes to indicate their width:
+
+| Suffix      | Description | Example                |
+|-------------|-------------|------------------------|
+| `f` or `F`  | Float       | `123.45f`, `0x1.23p4F` |
+| `l` or `L`  | Double      | `123.45l`, `0X4.5P+6L` |
+
+Additionally, the suffix `d` or `D` is also supported to indicate a decimal floating-point literal (`_Decimal{32|64|128}`), it can be combined with other suffixes, e.g.,`123.45df`, `0x1.23p4DL`, or use alone to indicate default precision (`_Decimal64`), e.g., `123.45dd`, `0.667DD`.
+
+If a suffix is not specified, the type of the floating-point literal is `double`.
+
+### 6.4 Punctuators
+
+Punctuators include operators, brackets, delimiters, and other special symbols used in C programming.
+
+**Arithmetic Operators**
+
+| Punctuator | Description          |
+|------------|----------------------|
+| `+`        | Addition             |
+| `-`        | Subtraction          |
+| `*`        | Multiplication       |
+| `/`        | Division             |
+| `%`        | Modulus              |
+| `++`       | Increment            |
+| `--`       | Decrement            |
+
+**Relational and Logical Operators**
+
+| Punctuator | Description              |
+|------------|--------------------------|
+| `==`       | Equal to                 |
+| `!=`       | Not equal to             |
+| `<`        | Less than                |
+| `<=`       | Less than or equal to    |
+| `>`        | Greater than             |
+| `>=`       | Greater than or equal to |
+| `&&`       | Logical AND              |
+| `||`       | Logical OR               |
+| `!`        | Logical NOT              |
+
+**Bitwise Operators**
+
+| Punctuator | Description          |
+|------------|----------------------|
+| `&`        | Bitwise AND          |
+| `|`        | Bitwise OR           |
+| `^`        | Bitwise XOR          |
+| `~`        | Bitwise NOT          |
+| `<<`       | Left shift           |
+| `>>`       | Right shift          |
+
+**Assignment Operators**
+
+| Punctuator | Description               |
+|------------|---------------------------|
+| `=`        | Assignment                |
+| `+=`       | Addition assignment       |
+| `-=`       | Subtraction assignment    |
+| `*=`       | Multiplication assignment |
+| `/=`       | Division assignment       |
+| `%=`       | Modulus assignment        |
+| `&=`       | Bitwise AND assignment    |
+| `|=`       | Bitwise OR assignment     |
+| `^=`       | Bitwise XOR assignment    |
+| `<<=`      | Left shift assignment     |
+| `>>=`      | Right shift assignment    |
+
+**Brackets and Delimiters**
+
+| Punctuator | Description             |
+|------------|-------------------------|
+| `(`        | Left parenthesis        |
+| `)`        | Right parenthesis       |
+| `{`        | Left brace              |
+| `}`        | Right brace             |
+| `[`        | Left bracket            |
+| `]`        | Right bracket           |
+| `[[`       | Left attribute bracket  |
+| `]]`       | Right attribute bracket |
+| `;`        | Semicolon               |
+| `,`        | Comma                   |
+
+**Other Punctuators**
+
+| Punctuator  | Description                   |
+|-------------|-------------------------------|
+| `.`         | Member access                 |
+| `->`        | Member access through pointer |
+| `:` and `?` | Conditional operator          |
+| `...`       | Ellipsis                      |
+
+## 7. License
 
 See the "LICENSE" and "LICENSE.additional" files in the root directory of this project for details.
 
-## 7. References
+## 8. References
 
 - [The XiaoXuan C Compiler Project](https://github.com/hemashushu/xiaoxuan-c-compiler)
 - [C Reference](https://en.cppreference.com/w/c/preprocessor.html)
