@@ -45,7 +45,7 @@ pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, Preprocess
 struct Lexer<'a> {
     upstream: &'a mut PeekableIter<'a, CharWithPosition>,
 
-    // The last position of the character consumed by `next_char()`.
+    // The position of the last consumed character by `next_char()`.
     pub last_position: Position,
 
     // The token index of the last newline character.
@@ -1717,7 +1717,9 @@ impl Lexer<'_> {
                         self.push_last_position_into_stack();
 
                         // escape chars.
-                        // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
+                        // see:
+                        // - https://en.cppreference.com/w/c/language/escape.html
+                        // - https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
                         let escaped_char = match self.next_char() {
                             Some(current_char2) => {
                                 match current_char2 {
@@ -1728,11 +1730,11 @@ impl Lexer<'_> {
                                     'v' => '\x0b', // vertical tabulation (VT, ascii 11)
                                     'f' => '\x0c', // form feed (FF, ascii 12)
                                     'r' => '\r',   // carriage return (CR, ascii 13)
-                                    'e' => '\x1b', // escape character (ESC, ascii 27)
-                                    '\\' => '\\',  // backslash
-                                    '\'' => '\'',  // single quote
-                                    '"' => '"',    // double quote
-                                    '?' => '?',    // question mark (?), used to avoid trigraphs
+                                    // 'e' => '\x1b', // escape character (ESC, ascii 27) // non-standard escape sequence
+                                    '\\' => '\\', // backslash
+                                    '\'' => '\'', // single quote
+                                    '"' => '"',   // double quote
+                                    '?' => '?',   // question mark (?), used to avoid trigraphs
                                     '0'..='7' => {
                                         // Octal escape sequence.
                                         // format: `\o`, `\oo`, and `\ooo`.
@@ -2026,7 +2028,9 @@ impl Lexer<'_> {
                             self.push_last_position_into_stack();
 
                             // escape chars.
-                            // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
+                            // see:
+                            // - https://en.cppreference.com/w/c/language/escape.html
+                            // - https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
                             let escaped_char = match self.next_char() {
                                 Some(current_char2) => {
                                     match current_char2 {
@@ -2037,11 +2041,11 @@ impl Lexer<'_> {
                                         'v' => '\x0b', // vertical tabulation (VT, ascii 11)
                                         'f' => '\x0c', // form feed (FF, ascii 12)
                                         'r' => '\r', // carriage return (CR, ascii 13)
-                                        'e' => '\x1b', // escape character (ESC, ascii 27)
+                                        // 'e' => '\x1b', // escape character (ESC, ascii 27) // non-standard escape sequence
                                         '\\' => '\\', // backslash
                                         '\'' => '\'', // single quote
-                                        '"' => '"',  // double quote
-                                        '?' => '?',  // question mark (?), used to avoid trigraphs
+                                        '"' => '"',   // double quote
+                                        '?' => '?',   // question mark (?), used to avoid trigraphs
                                         '0'..='7' => {
                                             // Octal escape sequence.
                                             // format: `\o`, `\oo`, and `\ooo`.

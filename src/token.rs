@@ -6,7 +6,7 @@
 
 use std::fmt::Display;
 
-use crate::{error::PreprocessError, range::Range};
+use crate::{error::PreprocessError, location::Location, range::Range};
 
 /// Represents a token for the C preprocessor.
 ///
@@ -321,6 +321,18 @@ impl TokenWithRange {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct TokenWithLocation {
+    pub token: Token,
+    pub location: Location,
+}
+
+impl TokenWithLocation {
+    pub fn new(token: Token, location: Location) -> Self {
+        Self { token, location }
+    }
+}
+
 impl IntegerNumber {
     pub fn new(value: String, unsigned: bool, length: IntegerNumberWidth) -> Self {
         Self {
@@ -438,13 +450,17 @@ impl Display for Token {
 pub fn escape_char(c: char) -> String {
     match c {
         '\\' => "\\\\".to_string(),
-        '"' => "\\\"".to_string(),
         '\'' => "\\'".to_string(),
-        '\0' => "\\0".to_string(), // Null character
-        '\t' => "\\t".to_string(), // \x09, Tab
-        '\n' => "\\n".to_string(), // \x0a, Newline
-        '\r' => "\\r".to_string(), // \x0d, Carriage return
-        '\x00'..='\x1f' | '\u{80}'..='\u{ff}' => {
+        '"' => "\\\"".to_string(),
+        '?' => "\\?".to_string(),
+        '\x07' => "\\a".to_string(), // \x07, Alert (bell)
+        '\x08' => "\\b".to_string(), // \x08, Backspace
+        '\t' => "\\t".to_string(),   // \x09, Tab
+        '\n' => "\\n".to_string(),   // \x0a, Newline
+        '\x0b' => "\\v".to_string(), // \x0b, Vertical tab
+        '\x0c' => "\\f".to_string(), // \x0c, Form feed
+        '\r' => "\\r".to_string(),   // \x0d, Carriage return
+        '\u{0}'..='\u{1f}' | '\u{80}'..='\u{ff}' => {
             // For control characters (non-printable) characters, and extended ASCII codes,
             // use hexadecimal escape
             format!("\\x{:02x}", c as u8)
@@ -684,7 +700,7 @@ mod tests {
 
         assert_eq!(
             Token::Char('\0', CharEncoding::Default).to_string(),
-            "'\\0'"
+            "'\\x00'"
         );
 
         assert_eq!(
@@ -742,7 +758,7 @@ mod tests {
                 StringEncoding::Default
             )
             .to_string(),
-            "\"hello\\t\\n\\r\\\\\\\'\\\"\\0world\""
+            "\"hello\\t\\n\\r\\\\\\\'\\\"\\x00world\""
         );
 
         assert_eq!(

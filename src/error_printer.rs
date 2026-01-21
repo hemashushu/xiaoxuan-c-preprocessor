@@ -191,7 +191,7 @@ impl PreprocessError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Position, Range, error::PreprocessError};
+    use crate::{error::PreprocessError, position::Position, range::Range};
     use pretty_assertions::assert_eq;
 
     #[test]

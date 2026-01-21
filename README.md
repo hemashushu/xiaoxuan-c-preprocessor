@@ -637,7 +637,7 @@ FOO(a + b);                     // Disabled: Argument is an expression.
 FOO(foo());                     // Disabled: Argument is a macro invocation.
 ```
 
-Note that the `#` operator will stop expansion of the argument, so if you pass a macro as the argument, the macro name is treated as literal text and keeps unchanged. You may remember the macro will be **expanded first** when passed as arguments in function-like macro invocations, but the `#` operator is an exception to this rule.
+Note that the `#` operator will stop expansion of the argument, so if you pass a macro as the argument, the macro name is used. You may remember that the macro will be **expanded first** when passed as arguments in function-like macro invocations, but the `#` operator is an exception, it discards the expansion result and uses the original macro name instead.
 
 ```c
 #define SHOW(x) puts(#x);
@@ -1493,15 +1493,17 @@ Both character and string literals can include escape sequences to represent spe
 | `\?`            | Question mark (`?`) |
 | `\a`            | Alert (bell)        |
 | `\b`            | Backspace           |
-| `\f`            | Form feed           |
-| `\n`            | Newline             |
-| `\r`            | Carriage return     |
 | `\t`            | Horizontal tab      |
+| `\n`            | Newline             |
 | `\v`            | Vertical tab        |
+| `\f`            | Form feed           |
+| `\r`            | Carriage return     |
 | `\ooo`          | Octal value (1 to 3 digits), e.g., `\101` (A), `\12` (newline) |
-| `\xhh...`       | Hexadecimal value, 1 or more digits, only two digits are supported currently. e.g., `\x41` (A), `\x0A` (newline) |
+| `\xh...`        | Hexadecimal value, 1 or more digits, only two digits are supported by ANCCP. e.g., `\x41` (A), `\x0A` (newline) |
 | `\uXXXX`        | Unicode code point (4 hex digits), e.g., `\u0041` (A), `\u03A9` (Ω) |
 | `\UXXXXXXXX`    | Unicode code point (8 hex digits), e.g., `\U00000041` (A), `\U000003A9` (Ω) |
+
+`\e` is not standard escape sequence, though it is supported by some compilers (e.g., GCC, Clang), ANCPP does not support it.
 
 String and character literal prefixes are also supported:
 

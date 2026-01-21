@@ -7,8 +7,8 @@
 use std::io::Write;
 
 use crate::{
-    ast::{Condition, Define, Expression, If, Pragma, Program, Statement},
-    token::{Token, TokenWithRange},
+    ast::{Condition, Define, If, Program, Statement},
+    token::TokenWithRange,
 };
 
 const DEFAULT_INDENT_CHARS: &str = "    ";
@@ -214,40 +214,18 @@ pub fn print_program_to_string(program: &Program) -> String {
     String::from_utf8(output).unwrap()
 }
 
-pub fn print_expression<W: Write>(writer: &mut W, expression: &Expression) -> std::io::Result<()> {
-    match expression {
-        Expression::Number(number, _) => write!(writer, "{number}"),
-        Expression::Binary(operator, _, left, right) => {
-            write!(writer, "(")?;
-            print_expression(writer, left)?;
-            write!(writer, " {operator} ")?;
-            print_expression(writer, right)?;
-            write!(writer, ")")
-        }
-        Expression::Unary(operator, _, exp) => {
-            write!(writer, "({operator}")?;
-            print_expression(writer, exp)?;
-            write!(writer, ")")
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub fn print_expression_to_string(expression: &Expression) -> String {
-    let mut output = Vec::new();
-    print_expression(&mut output, expression).unwrap();
-    String::from_utf8(output).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        ast::{BinaryOperator, Branch, Condition, Define, Expression, If, Pragma, Program, Statement, UnaryOperator}, ast_printer::{print_expression_to_string, print_program_to_string}, location::Location, range::Range, token::{
+        ast::{Branch, Condition, Define, If, Pragma, Program, Statement},
+        ast_printer::print_program_to_string,
+        range::Range,
+        token::{
             CharEncoding, IntegerNumber, IntegerNumberWidth, Number, Punctuator, StringEncoding,
             Token, TokenWithRange,
-        }
+        },
     };
 
     // Helper functions to create tokens for testing
@@ -669,82 +647,6 @@ mod tests {
         assert_eq!(
             output,
             "#pragma STDC FENV_ACCESS ON\n#define MAX 100\n#include <stdio.h>\nprintf ( \"Hello, World!\" ) ;\n"
-        );
-    }
-
-    #[test]
-    fn test_print_expression() {
-        // Test printing a simple number
-        assert_eq!(
-            print_expression_to_string(&Expression::Number(11, Location::default(),)),
-            "11"
-        );
-
-        // Test printing a binary expression
-        assert_eq!(
-            print_expression_to_string(&Expression::Binary(
-                BinaryOperator::Add,
-                Location::default(),
-                Box::new(Expression::Number(11, Location::default())),
-                Box::new(Expression::Number(13, Location::default())),
-            )),
-            "(11 + 13)"
-        );
-
-        // Test printing a nested binary expression: ((1 + 2) * 3)
-        assert_eq!(
-            print_expression_to_string(&Expression::Binary(
-                BinaryOperator::Multiply,
-                Location::default(),
-                Box::new(Expression::Binary(
-                    BinaryOperator::Add,
-                    Location::default(),
-                    Box::new(Expression::Number(1, Location::default(),)),
-                    Box::new(Expression::Number(2, Location::default(),)),
-                )),
-                Box::new(Expression::Number(3, Location::default(),)),
-            )),
-            "((1 + 2) * 3)"
-        );
-
-        // Test printing a unary expression: (-42)
-        assert_eq!(
-            print_expression_to_string(&Expression::Unary(
-                UnaryOperator::Minus,
-                Location::default(),
-                Box::new(Expression::Number(42, Location::default())),
-            )),
-            "(-42)"
-        );
-
-        // Test printing a unary expression with a nested binary expression: (-(11 + 13))
-        assert_eq!(
-            print_expression_to_string(&Expression::Unary(
-                UnaryOperator::Minus,
-                Location::default(),
-                Box::new(Expression::Binary(
-                    BinaryOperator::Add,
-                    Location::default(),
-                    Box::new(Expression::Number(11, Location::default())),
-                    Box::new(Expression::Number(13, Location::default())),
-                )),
-            )),
-            "(-(11 + 13))"
-        );
-
-        // Test printing a binary expression with a unary operator: (11 + (-13))
-        assert_eq!(
-            print_expression_to_string(&Expression::Binary(
-                BinaryOperator::Add,
-                Location::default(),
-                Box::new(Expression::Number(11, Location::default())),
-                Box::new(Expression::Unary(
-                    UnaryOperator::Minus,
-                    Location::default(),
-                    Box::new(Expression::Number(13, Location::default())),
-                )),
-            )),
-            "(11 + (-13))"
         );
     }
 }
