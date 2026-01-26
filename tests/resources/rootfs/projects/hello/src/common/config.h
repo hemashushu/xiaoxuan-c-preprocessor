@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemashushu <hippospark@gmail.com>, All rights reserved.
+// Copyright (c) 2026 Hemashushu <hippospark@gmail.com>, All rights reserved.
 //
 // This Source Code Form is subject to the terms of
 // the Mozilla Public License version 2.0 and additional exceptions.
@@ -6,5 +6,4 @@
 
 #pragma once
 
-#include <stdio.h>
-#include <stdlib.h>
+#define NUMBER 42

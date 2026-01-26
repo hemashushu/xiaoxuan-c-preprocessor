@@ -7,20 +7,25 @@
  */
 
 // You can compile this code with a C compiler that supports the C23 standard.
-// `gcc -Wall -g -std=c23 -o main.elf -I ../header -I ../include -I ../resources -I common main.c lib.c data.c`
+//
+// gcc -Wall -g -std=c23 -o main.elf \
+//  -I ../include \
+//  -I ../src/header \
+//  -I ../src/common \
+//  -I ../src/resources \
+//  main.c lib.c foo.c bar.c
 
-#include "app.h"
-#include "data.h"
-#include "test.h"
+#include <stdio.h>
+#include <stdlib.h>
 
-int main() {
+#include "hello.h"
+
+int main()
+{
     puts("Hello, world!");
 
-    int result = add(1, 2);
-    printf("1 + 2 = %d\n", result);
-
-    int total = sum();
-    printf("Sum of data: %d\n", total);
+    int value = hello();
+    printf("Output value is: %d\n", value);
 
     return EXIT_SUCCESS;
 }

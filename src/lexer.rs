@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemashushu <hippospark@gmail.com>, All rights reserved.
+// Copyright (c) 2026 Hemashushu <hippospark@gmail.com>, All rights reserved.
 //
 // This Source Code Form is subject to the terms of
 // the Mozilla Public License version 2.0 and additional exceptions.
@@ -7,7 +7,7 @@
 use std::char;
 
 use crate::{
-    char_with_position::CharWithPosition,
+    char_with_position::{CharWithPosition, CharsWithPositionIter},
     error::PreprocessError,
     initializer::initialize,
     peekable_iter::PeekableIter,
@@ -28,6 +28,16 @@ pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, Preprocess
     let chars = initialize(source_text)?;
     let mut chars_iter = chars.into_iter();
     let mut peekable_char_iter = PeekableIter::new(&mut chars_iter, PEEK_BUFFER_LENGTH_LEX);
+    let mut tokenizer = Lexer::new(&mut peekable_char_iter);
+    tokenizer.lex()
+}
+
+pub fn lex_from_clean_str(
+    clean_source_text: &str,
+) -> Result<Vec<TokenWithRange>, PreprocessError> {
+    let mut chars = clean_source_text.chars();
+    let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
+    let mut peekable_char_iter = PeekableIter::new(&mut char_position_iter, PEEK_BUFFER_LENGTH_LEX);
     let mut tokenizer = Lexer::new(&mut peekable_char_iter);
     tokenizer.lex()
 }

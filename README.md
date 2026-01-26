@@ -510,6 +510,19 @@ This constraint significantly weakens the flexibility of function-like macros, b
 
 When invoking a function-like macro with identifiers, strings, characters or numbers as arguments, they are treated as **literal text**, they wouldn't be evaluated or interpreted in any way like C language does, and then substituted into the replacement text.
 
+```c
+#define ADD(a, b) (a) + (b)
+int left = 1;
+int x = ADD(left, 11);          // Expands to: `int x = (left) + (11);`
+
+// The steps of expansion of `ADD(left, 11)` are:
+//
+// 1. Argument `left` is an identifier, so it remains unchanged.
+// 2. Argument `11` is a number, so it remains unchanged as well.
+// 3. Invoke `ADD(...)`.
+// 4. Substitute the arguments into the replacement and gets: `(left) + (11)`.
+```
+
 If passed arguments are macros themselves, they are **expanded first** (recursively expanded if necessary), and then the expanded text is substituted into the replacement.
 
 ```c
@@ -526,7 +539,21 @@ int x = ADD(left, RIGHT);       // Expands to: `int x = (left) + (2);`
 // 4. Substitute the arguments into the replacement and gets: `(left) + (2)`.
 ```
 
-The arguments are first expanded also in nested function-like macro invocations:
+The expansion of arguments wouldn't break the arguments list, that is, the expansion is taken place **after** passing the arguments and **before** substituting them into the replacement text.
+
+```c
+#define PRINT(a, b) a; b
+
+PRINT("hello", "world");    // Expands to: `"hello"; "world";`
+
+#define FOOBAR "foo", "bar"
+PRINT(FOOBAR, "buzz");      // Expands to: `"foo"; "bar"; "buzz";`
+
+// invocation of `PRINT(FOOBAR, "buzz")` still is two arguments,
+// it wouldn't become `PRINT("foo", "bar", "buzz")` which has three arguments.
+```
+
+The arguments expansion also applies to nested function-like macro invocations:
 
 ```c
 #define INC(a) (a) + 1
@@ -556,7 +583,7 @@ int x = ADD(1, 2);              // Expands to: `int x = (1) + (2);`
 // 4. The final expansion is `(1) + (2)`.
 ```
 
-If the resulting text contains another function-like macro invocation, it is also expanded:
+If the resulting text contains function-like macro invocation, it is also expanded:
 
 ```c
 #define GREETING(msg) puts(msg);
@@ -568,10 +595,31 @@ INVOKE(GREETING, "Hello, World!\n");    // Expands to: `puts("Hello, World!\n");
 //
 // 1. Argument `GREETING` is an identifier (it's not an invocation), so it remains unchanged.
 // 2. Argument `"Hello, World!\n"` is a string literal, so it remains unchanged as well.
-// 3. Substitute the arguments into the replacement and gets: `GREETING("Hello, World!\n");`.
-// 4. Scan the result for macros and find `GREETING`.
-// 5. Expand `GREETING("Hello, World!\n")`.
-// 6. Substitute the argument into the replacement and gets: `puts("Hello, World!\n");`.
+// 3. Invoke `INVOKE(...)`.
+// 4. Substitute the arguments into the replacement and gets: `GREETING("Hello, World!\n");`.
+// 5. Scan the result for macros and find `GREETING`.
+// 6. Expand `GREETING("Hello, World!\n")`.
+// 7. Substitute the argument into the replacement and gets: `puts("Hello, World!\n");`.
+```
+
+Note that argument substitution happens only the first time, so if the argument appears in the resulting text during rescanning, it won't be substituted again.
+
+```c
+#define WRITE puts(msg);
+#define LOG(msg) puts("log:"); WRITE
+
+LOG("Hello")                    // Expands to: `puts("log:"); puts(msg);`
+
+// The steps of expansion of `LOG("Hello")` are:
+//
+// 1. Argument `"Hello"` is a string literal, so it remains unchanged.
+// 2. Invoke `LOG(...)`.
+// 3. Substitute the argument into the replacement and gets: `puts("log:"); WRITE;`.
+// 4. Scan the result for macros and find `WRITE`.
+// 5. Expand `WRITE`
+// 6. Substitute the macro, gets: `puts("log:"); puts(msg);`.
+// 7. Note that `msg` remains unchanged because argument substitution only happens
+//    in the previous step.
 ```
 
 Becareful with nested function-like macro invocations, because the actual arguments that produced from the first expansion may be mismatched for the second invocation:
@@ -580,19 +628,24 @@ Becareful with nested function-like macro invocations, because the actual argume
 #define WRITE(msg) puts(msg);
 #define SURROUND(text) "[", text, "]"
 
-#define LOG(s) WRITE(s)
+#define LOG(s) WRITE("log:" s)
 
 LOG(SURROUND("Hello"))          // Error: Mismatched arguments.
 
 // The steps of expansion of `LOG(SURROUND("Hello"))` are:
 //
-// 1. Argument `SURROUND("Hello")` is a macro invocation, so it is expanded first.
-// 2. Substitute the argument `"Hello"` into the replacement and gets: `"[", "Hello", "]"`.
-// 3. Invoke the outer `LOG(...)`.
-// 4. Substitute the argument into the replacement and gets: `WRITE("[", "Hello", "]");`.
+// 1. There is only one argument `SURROUND("Hello")` for `LOG(...)`.
+// 2. `LOG(s)` accepts one argument, so it is valid so far.
+// 3. Argument `SURROUND("Hello")` is a macro invocation, so it is expanded first.
+// 4. Invoke `SURROUND(...)`.
+// 5. Substitute the argument `"Hello"` into the replacement and gets: `"[", "Hello", "]"`.
+// 3. Invoke `LOG(...)`.
+// 4. Substitute the argument into the replacement and gets: `WRITE("log" "[", "Hello", "]");`.
 // 5. Scan the result for macros and find `WRITE`.
 // 6. Error: `WRITE` expects only one argument, but three arguments are provided.
 ```
+
+Since ANCPP restricts function-like macro arguments to identifiers, strings, characters or numbers only, the above example is disabled.
 
 **Self-referential function-like macros**
 
@@ -691,14 +744,6 @@ VAR(buz_, b, 2)                 // Expands to: `buz_b2`
 
 Spaces around the `##` operator are allowed, so `x##2` above can also be written as `x ## 2`, and `family ## member ## index` can also be written as `family##member##index`.
 
-`[ANCPP RESTRICTION]`: The result of token concatenation must be a valid C identifier: the first token must be an identifier, and the remaining tokens must be either identifiers or integer numbers.
-
-```c
-#define FOO(x) x##9s
-FOO(2b);                        // Disabled: Result token "2b9s" is not a valid identifier.
-FOO(+);                         // Disabled: Result token "+9s" is not a valid identifier.
-```
-
 Like the stringizing operator, `##` also stops expansion of the macro arguments.
 
 ```c
@@ -707,7 +752,21 @@ Like the stringizing operator, `##` also stops expansion of the macro arguments.
 CONCAT(PREFIX, 1)               // Expands to: `PREFIX1`, not `foo1`
 ```
 
-Token concatenation (the `##` operator) may only appear in macro replacement lists. It is most useful in function-like macros; while it is permitted in object-like macros, doing so is rarely meaningful.
+And like stringizing, token concatenation (the `##` operator) is processed in the argument substitution phase. Therefore, if the result of token concatenation is a valid macro or macro invocation, it will be expanded during rescanning.
+
+```c
+#define FOOBAR "hello"
+#define CONCAT(a, b) a##b
+CONCAT(FOO, BAR);               // Expands to: `"hello"`
+```
+
+`[ANCPP RESTRICTION]`: The result of token concatenation must be a valid C identifier: the first token must be an identifier, and the remaining tokens must be either identifiers or integer numbers.
+
+```c
+#define FOO(x) x##9s
+FOO(2b);                        // Disabled: Result token "2b9s" is not a valid identifier.
+FOO(+);                         // Disabled: Result token "+9s" is not a valid identifier.
+```
 
 ### 3.4 Variadic macros
 
@@ -759,6 +818,16 @@ Note that `__VA_ARGS__` and `__VA_OPT__(...)` can only be used in the replacemen
 
 ```c
 #define FOO(args...)            // Disabled: Ellipsis with name is not allowed.
+```
+
+**Stringizing `__VA_ARGS__`**
+
+You can also use the `#` operator to stringize `__VA_ARGS__` in the replacement of variadic macros.
+
+```c
+#define SHOW_ALL(...) puts(#__VA_ARGS__);
+SHOW_ALL(1, 2, foo, "bar");     // Expands to: `puts("1, 2, foo, \"bar\"");`
+SHOW_ALL();                     // Expands to: `puts("");`
 ```
 
 `[ANCPP RESTRICTION]`: Apply `##` to `__VA_ARGS__` is not supported.
@@ -1030,7 +1099,7 @@ And the grouping parentheses `(...)` are also supported to control the precedenc
 
 **Attribute testing**
 
-In conditional expressions, you can use the `__has_c_attribute(...)` operator to check whether a specific C attribute is supported by the compiler. For standard attributes, it will expand to the year and month in which the attribute was added to the working draft (see table below), otherwise it expands to 0.
+In conditional expressions, you can use the `__has_c_attribute(...)` operator (it did called _operator_ though it looks like a function) to check whether a specific C attribute is supported by the compiler. For standard attributes, it will expand to the year and month in which the attribute was added to the working draft (see table below), otherwise it expands to 0.
 
 | attribute-token | Attribute          | Value     |
 |-----------------|--------------------|-----------|
@@ -1056,6 +1125,8 @@ void old_function(int n) {
     // ...
 }
 ```
+
+> You can use `#ifdef __has_c_attribute` to check whether the `__has_c_attribute(...)` operator is supported by the preprocessor.
 
 ### 3.7 Source file inclusion (`#include`)
 
@@ -1219,7 +1290,7 @@ If you unsure whether your compiler supports `#pragma once`, it's Ok to use both
 
 **`__has_include(...)` operator**
 
-The `__has_include(...)` operator in conditional expressions checks whether a specified file exists. It expands to 1 if the file exists, otherwise it expands to 0.
+The `__has_include(...)` operator (it did called _operator_ though it looks like a function) in conditional expressions checks whether a specified file exists. It expands to 1 if the file exists, otherwise it expands to 0.
 
 Syntax:
 
@@ -1405,6 +1476,10 @@ Currently, ANCPP only supports one pragma:
 ```
 
 This pragma is used to prevent multiple inclusions of the current source file, it is equivalent to traditional include guards.
+
+Since ANCPP always ensures that a source file is only included once even if it does not have include guards or `#pragma once`, this pragma has no effect in ANCPP, but it is supported for compatibility with existing code.
+
+The `__Pragma(string-literal)` operator is effectively equivalent to `#pragma ...` but it can be used in macro definitions. ANCPP supports it though it has no effect.
 
 ## 4. Unsupported Directives
 

@@ -6,16 +6,10 @@
  * For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
  */
 
-#include "data.h"
+#include "config.h"
+#include "foo.h"
 
-char data[] = {
-#embed "../resources/data.bin" if_empty(0x01, 0x02, 0x03)
-};
-
-int sum() {
-    int total = 0;
-    for(int i = 0; i < sizeof(data); i++) {
-        total += data[i];
-    }
-    return total;
+int foo()
+{
+    return NUMBER;
 }

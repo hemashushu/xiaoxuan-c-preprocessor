@@ -6,8 +6,13 @@
  * For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
  */
 
- #include "test.h"
+#include "hello.h"
 
-int add(int a, int b) {
-    return a + b;
+#include "foo.h"
+#include "bar.h"
+
+int hello()
+{
+    // 42 + 55 = 97
+    return foo() + bar();
 }

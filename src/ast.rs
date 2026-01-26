@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemashushu <hippospark@gmail.com>, All rights reserved.
+// Copyright (c) 2026 Hemashushu <hippospark@gmail.com>, All rights reserved.
 //
 // This Source Code Form is subject to the terms of
 // the Mozilla Public License version 2.0 and additional exceptions.
@@ -138,7 +138,8 @@ pub enum Define {
         // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
         identifier: (String, Range),
 
-        // The parameter names. If the macro is variadic, the last parameter name is `...`.
+        // The parameter names.
+        // If the macro is variadic, the last parameter name is `...`.
         parameters: Vec<String>,
 
         // Can be empty, e.g., `#define FOO(x, y)`

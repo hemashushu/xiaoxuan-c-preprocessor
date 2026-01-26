@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemashushu <hippospark@gmail.com>, All rights reserved.
+// Copyright (c) 2026 Hemashushu <hippospark@gmail.com>, All rights reserved.
 //
 // This Source Code Form is subject to the terms of
 // the Mozilla Public License version 2.0 and additional exceptions.
@@ -12,17 +12,16 @@ mod location;
 mod parser;
 mod peekable_iter;
 mod position;
-// mod processor;
+mod processor;
 mod range;
 
 pub mod ast;
 pub mod ast_printer;
-// pub mod context;
-pub mod error_printer;
-// pub mod memory_file_provider;
-// pub mod native_file_provider;
-// pub mod prompt;
+pub mod context;
 pub mod error;
+pub mod error_printer;
+pub mod memory_file_provider;
+pub mod native_file_provider;
 pub mod token;
 
 // pub use processor::process_source_file;

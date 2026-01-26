@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemashushu <hippospark@gmail.com>, All rights reserved.
+// Copyright (c) 2026 Hemashushu <hippospark@gmail.com>, All rights reserved.
 //
 // This Source Code Form is subject to the terms of
 // the Mozilla Public License version 2.0 and additional exceptions.
@@ -9,19 +9,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::file_provider::{FileProvider, normalize_path};
+use crate::context::{FileProvider, normalize_path};
 
 /// A simple in-memory file provider that implements the `FileProvider` trait.
 /// This provider is intended for unit testing only and does not interact with the real file system.
 ///
 /// The in-memory file provider simulates a file system with the following structure:
 /// - `/projects/test` — project root directory
-/// - `/projects/test/src` — source directory
-/// - `/projects/test/src/common` — internal shared code such as project's configuration
-/// - `/projects/test/include` — public header directory
-/// - `/projects/test/header` — internal header directory
-/// - `/projects/test/share` — public binary files directory
-/// - `/projects/test/resources` — internal binary files directory
+/// - `/projects/hello/src` — source directory
+/// - `/projects/hello/src/common` — internal shared code such as project's configuration
+/// - `/projects/hello/include` — public header directory
+/// - `/projects/hello/header` — internal header directory
+/// - `/projects/hello/share` — public binary files directory
+/// - `/projects/hello/resources` — internal binary files directory
 /// - `/usr/include` — system header directory
 pub struct MemoryFileProvider {
     /// Maps canonical file paths to their contents.
@@ -42,10 +42,10 @@ enum FileContent {
 impl MemoryFileProvider {
     pub fn new() -> Self {
         let user_include_directories: Vec<PathBuf> = vec![
-            PathBuf::from("/projects/test/header"),     // internal headers
-            PathBuf::from("/projects/test/include"),    // public headers
-            PathBuf::from("/projects/test/resources"),  // internal binary files
-            PathBuf::from("/projects/test/src/common"), // internal shared code
+            PathBuf::from("/projects/hello/include"), // public headers
+            PathBuf::from("/projects/hello/src/header"), // internal headers
+            PathBuf::from("/projects/hello/src/common"), // internal shared code
+            PathBuf::from("/projects/hello/src/resources"), // internal binary files
         ];
 
         let system_include_directories: Vec<PathBuf> = vec![PathBuf::from("/usr/include")];
@@ -61,7 +61,7 @@ impl MemoryFileProvider {
     ///
     /// `source_file_path_name` is the path relative to the project root directory,
     pub fn add_user_text_file(&mut self, source_file_path_name: &Path, content: &str) {
-        let path = Path::new("/projects/test").join(source_file_path_name);
+        let path = Path::new("/projects/hello").join(source_file_path_name);
         let normalized_path = normalize_path(&path);
         self.file_content_map
             .insert(normalized_path, FileContent::Text(content.to_owned()));
@@ -71,7 +71,7 @@ impl MemoryFileProvider {
     ///
     /// `source_file_path_name` is the path relative to the project root directory.
     pub fn add_user_binary_file(&mut self, source_file_path_name: &Path, content: Vec<u8>) {
-        let path = Path::new("/projects/test").join(source_file_path_name);
+        let path = Path::new("/projects/hello").join(source_file_path_name);
         let normalized_path = normalize_path(&path);
         self.file_content_map
             .insert(normalized_path, FileContent::Binary(content));
@@ -212,7 +212,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        file_provider::{FileProvider, ResolvedResult},
+        context::{FileProvider, ResolvedResult},
         memory_file_provider::MemoryFileProvider,
     };
 
@@ -222,135 +222,46 @@ mod tests {
         provider.add_user_text_file(Path::new("src/main.c"), "SRC_MAIN_C");
         provider.add_user_text_file(Path::new("src/lib.c"), "SRC_LIB_C");
         provider.add_user_text_file(Path::new("include/hello.h"), "INCLUDE_HELLO_H");
-        provider.add_user_text_file(Path::new("header/foo.h"), "HEADER_FOO_H");
-        provider.add_user_text_file(Path::new("header/bar.h"), "HEADER_BAR_H");
-        provider.add_user_text_file(Path::new("header/folder/buz.h"), "HEADER_FOLDER_BUZ_H");
-        provider.add_user_binary_file(Path::new("resources/hippo.png"), vec![1, 2, 3, 4, 5]);
+        provider.add_user_text_file(Path::new("src/header/foo.h"), "HEADER_FOO_H");
+        provider.add_user_text_file(Path::new("src/header/bar.h"), "HEADER_BAR_H");
+        provider.add_user_text_file(
+            Path::new("src/header/subfolder/buzz.h"),
+            "HEADER_FOLDER_BUZZ_H",
+        );
+        provider.add_user_text_file(Path::new("src/common/config.h"), "CONFIG_H");
+        provider.add_user_binary_file(Path::new("src/resources/hippo.png"), vec![1, 2, 3, 4, 5]);
         provider.add_system_file(Path::new("stdio.h"), "STDIO_H");
-        provider.add_system_file(Path::new("elf.h"), "ELF_H");
-
-        // Test loading text files
-        assert_eq!(
-            provider
-                .load_text_file(&PathBuf::from("/projects/test/src/main.c"))
-                .unwrap(),
-            "SRC_MAIN_C"
-        );
-
-        assert_eq!(
-            provider
-                .load_text_file(&PathBuf::from("/projects/test/include/hello.h"))
-                .unwrap(),
-            "INCLUDE_HELLO_H"
-        );
-
-        assert_eq!(
-            provider
-                .load_text_file(&PathBuf::from("/projects/test/header/foo.h"))
-                .unwrap(),
-            "HEADER_FOO_H"
-        );
-
-        assert_eq!(
-            provider
-                .load_text_file(&PathBuf::from("/projects/test/header/folder/buz.h"))
-                .unwrap(),
-            "HEADER_FOLDER_BUZ_H"
-        );
-
-        assert_eq!(
-            provider
-                .load_text_file(&PathBuf::from("/usr/include/stdio.h"))
-                .unwrap(),
-            "STDIO_H"
-        );
-
-        assert!(
-            provider
-                .load_text_file(&PathBuf::from("/projects/test/src/non_existent.c"))
-                .is_err()
-        );
-
-        assert!(
-            provider
-                .load_text_file(&PathBuf::from("/projects/test/resources/hippo.png"))
-                .is_err()
-        );
-
-        // Test loading binary files
-        assert_eq!(
-            provider
-                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 0, None)
-                .unwrap(),
-            vec![1, 2, 3, 4, 5]
-        );
-
-        assert_eq!(
-            provider
-                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 2, None)
-                .unwrap(),
-            vec![3, 4, 5]
-        );
-
-        assert_eq!(
-            provider
-                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 2, Some(2))
-                .unwrap(),
-            vec![3, 4]
-        );
-
-        assert_eq!(
-            provider
-                .load_binary_file(
-                    &PathBuf::from("/projects/test/resources/hippo.png"),
-                    2,
-                    Some(10)
-                )
-                .unwrap(),
-            vec![3, 4, 5]
-        );
-
-        assert!(
-            provider
-                .load_binary_file(&PathBuf::from("/projects/test/resources/hippo.png"), 6, None)
-                .is_err()
-        );
-
-        assert!(
-            provider
-                .load_binary_file(
-                    &PathBuf::from("/projects/test/resources/non_existent.png"),
-                    0,
-                    None
-                )
-                .is_err()
-        );
-
-        assert!(
-            provider
-                .load_binary_file(&PathBuf::from("/projects/test/src/main.c"), 0, None)
-                .is_err()
-        );
+        provider.add_system_file(Path::new("stdlib.h"), "STDLIB_H");
 
         // Test resolving user header files
         assert_eq!(
             provider.resolve_user_file(Path::new("hello.h")),
-            Some(PathBuf::from("/projects/test/include/hello.h"))
+            Some(PathBuf::from("/projects/hello/include/hello.h"))
         );
 
         assert_eq!(
             provider.resolve_user_file(Path::new("foo.h")),
-            Some(PathBuf::from("/projects/test/header/foo.h"))
+            Some(PathBuf::from("/projects/hello/src/header/foo.h"))
         );
 
         assert_eq!(
-            provider.resolve_user_file(Path::new("folder/buz.h")),
-            Some(PathBuf::from("/projects/test/header/folder/buz.h"))
+            provider.resolve_user_file(Path::new("bar.h")),
+            Some(PathBuf::from("/projects/hello/src/header/bar.h"))
+        );
+
+        assert_eq!(
+            provider.resolve_user_file(Path::new("subfolder/buzz.h")),
+            Some(PathBuf::from("/projects/hello/src/header/subfolder/buzz.h"))
         );
 
         assert_eq!(
             provider.resolve_user_file(Path::new("hippo.png")),
-            Some(PathBuf::from("/projects/test/resources/hippo.png"))
+            Some(PathBuf::from("/projects/hello/src/resources/hippo.png"))
+        );
+
+        assert_eq!(
+            provider.resolve_user_file(Path::new("config.h")),
+            Some(PathBuf::from("/projects/hello/src/common/config.h"))
         );
 
         // Test resolving system header files
@@ -359,40 +270,45 @@ mod tests {
             Some(PathBuf::from("/usr/include/stdio.h"))
         );
 
+        assert_eq!(
+            provider.resolve_system_file(Path::new("stdlib.h")),
+            Some(PathBuf::from("/usr/include/stdlib.h"))
+        );
+
         // Test resolving user header files relative to a source file
         assert_eq!(
             provider.resolve_user_file_relative_to_current_file(
                 Path::new("./bar.h"),
-                Path::new("/projects/test/header/foo.h")
+                Path::new("/projects/hello/src/header/foo.h")
             ),
-            Some(PathBuf::from("/projects/test/header/bar.h"))
+            Some(PathBuf::from("/projects/hello/src/header/bar.h"))
         );
 
         assert_eq!(
             provider.resolve_user_file_relative_to_current_file(
-                Path::new("folder/buz.h"),
-                Path::new("/projects/test/header/foo.h")
+                Path::new("subfolder/buzz.h"),
+                Path::new("/projects/hello/src/header/foo.h")
             ),
-            Some(PathBuf::from("/projects/test/header/folder/buz.h"))
+            Some(PathBuf::from("/projects/hello/src/header/subfolder/buzz.h"))
         );
 
         assert_eq!(
             provider.resolve_user_file_relative_to_current_file(
                 Path::new("../foo.h"),
-                Path::new("/projects/test/header/folder/buz.h")
+                Path::new("/projects/hello/src/header/subfolder/buzz.h")
             ),
-            Some(PathBuf::from("/projects/test/header/foo.h"))
+            Some(PathBuf::from("/projects/hello/src/header/foo.h"))
         );
 
         // Test resolving user header files with fallback (resolve to user header directory)
         assert_eq!(
             provider.resolve_user_file_with_fallback(
                 Path::new("foo.h"),
-                Path::new("/projects/test/src/main.c"),
+                Path::new("/projects/hello/src/main.c"),
                 true
             ),
             Some(ResolvedResult::new(
-                PathBuf::from("/projects/test/header/foo.h"),
+                PathBuf::from("/projects/hello/src/header/foo.h"),
                 false
             ))
         );
@@ -400,12 +316,12 @@ mod tests {
         // Test resolving user header files with fallback (resolve to system header directory)
         assert_eq!(
             provider.resolve_user_file_with_fallback(
-                Path::new("elf.h"),
-                Path::new("/projects/test/src/main.c"),
+                Path::new("stdlib.h"),
+                Path::new("/projects/hello/src/main.c"),
                 true
             ),
             Some(ResolvedResult::new(
-                PathBuf::from("/usr/include/elf.h"),
+                PathBuf::from("/usr/include/stdlib.h"),
                 true
             ))
         );
@@ -414,11 +330,11 @@ mod tests {
         assert_eq!(
             provider.resolve_user_file_with_fallback(
                 Path::new("./lib.c"),
-                Path::new("/projects/test/src/main.c"),
+                Path::new("/projects/hello/src/main.c"),
                 true
             ),
             Some(ResolvedResult::new(
-                PathBuf::from("/projects/test/src/lib.c"),
+                PathBuf::from("/projects/hello/src/lib.c"),
                 false
             ))
         );
@@ -427,7 +343,7 @@ mod tests {
         assert_eq!(
             provider.resolve_user_file_with_fallback(
                 Path::new("./lib.c"),
-                Path::new("/projects/test/src/main.c"),
+                Path::new("/projects/hello/src/main.c"),
                 false
             ),
             None
@@ -447,7 +363,7 @@ mod tests {
         assert_eq!(
             provider.resolve_user_file_relative_to_current_file(
                 Path::new("non_existent.h"),
-                Path::new("/projects/test/src/main.c")
+                Path::new("/projects/hello/src/main.c")
             ),
             None
         );
@@ -455,10 +371,131 @@ mod tests {
         assert_eq!(
             provider.resolve_user_file_with_fallback(
                 Path::new("non_existent.h"),
-                Path::new("/projects/test/src/main.c"),
+                Path::new("/projects/hello/src/main.c"),
                 true
             ),
             None
+        );
+
+        // Test loading text files
+        assert_eq!(
+            provider
+                .load_text_file(&PathBuf::from("/projects/hello/src/main.c"))
+                .unwrap(),
+            "SRC_MAIN_C"
+        );
+
+        assert_eq!(
+            provider
+                .load_text_file(&PathBuf::from("/projects/hello/include/hello.h"))
+                .unwrap(),
+            "INCLUDE_HELLO_H"
+        );
+
+        assert_eq!(
+            provider
+                .load_text_file(&PathBuf::from("/projects/hello/src/header/foo.h"))
+                .unwrap(),
+            "HEADER_FOO_H"
+        );
+
+        assert_eq!(
+            provider
+                .load_text_file(&PathBuf::from(
+                    "/projects/hello/src/header/subfolder/buzz.h"
+                ))
+                .unwrap(),
+            "HEADER_FOLDER_BUZZ_H"
+        );
+
+        assert_eq!(
+            provider
+                .load_text_file(&PathBuf::from("/usr/include/stdio.h"))
+                .unwrap(),
+            "STDIO_H"
+        );
+
+        assert!(
+            provider
+                .load_text_file(&PathBuf::from("/projects/hello/src/non_existent.c"))
+                .is_err()
+        );
+
+        assert!(
+            provider
+                .load_text_file(&PathBuf::from("/projects/hello/src/resources/hippo.png"))
+                .is_err()
+        );
+
+        // Test loading binary files
+        assert_eq!(
+            provider
+                .load_binary_file(
+                    &PathBuf::from("/projects/hello/src/resources/hippo.png"),
+                    0,
+                    None
+                )
+                .unwrap(),
+            vec![1, 2, 3, 4, 5]
+        );
+
+        assert_eq!(
+            provider
+                .load_binary_file(
+                    &PathBuf::from("/projects/hello/src/resources/hippo.png"),
+                    2,
+                    None
+                )
+                .unwrap(),
+            vec![3, 4, 5]
+        );
+
+        assert_eq!(
+            provider
+                .load_binary_file(
+                    &PathBuf::from("/projects/hello/src/resources/hippo.png"),
+                    2,
+                    Some(2)
+                )
+                .unwrap(),
+            vec![3, 4]
+        );
+
+        assert_eq!(
+            provider
+                .load_binary_file(
+                    &PathBuf::from("/projects/hello/src/resources/hippo.png"),
+                    2,
+                    Some(10)
+                )
+                .unwrap(),
+            vec![3, 4, 5]
+        );
+
+        assert!(
+            provider
+                .load_binary_file(
+                    &PathBuf::from("/projects/hello/src/resources/hippo.png"),
+                    6,
+                    None
+                )
+                .is_err()
+        );
+
+        assert!(
+            provider
+                .load_binary_file(
+                    &PathBuf::from("/projects/hello/src/resources/non_existent.png"),
+                    0,
+                    None
+                )
+                .is_err()
+        );
+
+        assert!(
+            provider
+                .load_binary_file(&PathBuf::from("/projects/hello/src/main.c"), 0, None)
+                .is_err()
         );
     }
 }

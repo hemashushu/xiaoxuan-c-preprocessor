@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemashushu <hippospark@gmail.com>, All rights reserved.
+// Copyright (c) 2026 Hemashushu <hippospark@gmail.com>, All rights reserved.
 //
 // This Source Code Form is subject to the terms of
 // the Mozilla Public License version 2.0 and additional exceptions.
@@ -6,42 +6,72 @@
 
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use crate::{
-    PreprocessError, TokenWithLocation, file_provider::FileProvider,
-    header_file_cache::HeaderFileCache, macro_map::MacroMap, prompt::Prompt,
+    FILE_NUMBER_PREDEFINED,
+    ast::Program,
+    error::PreprocessError,
+    lexer::lex_from_clean_str,
+    location::Location,
+    position::Position,
+    range::Range,
+    token::{TokenWithLocation, TokenWithRange},
 };
 
 /// The `Context` struct holds all state required during preprocessing.
-/// It manages file access, macro definitions, file inclusion tracking, and user-facing messages.
+/// It manages file access, macro definitions, file inclusion tracking, and prompt messages.
 pub struct Context<'a, T>
 where
     T: FileProvider,
 {
-    /// Reference to the file provider used for file access.
+    /// The file provider used to load source and header files.
     pub file_provider: &'a T,
 
-    /// Mutable reference to the file cache.
+    /// The cache for header files to avoid redundant parsing.
+    /// Only header files (`*.h`) are cached, not source files (`*.c`).
     pub header_file_cache: &'a mut HeaderFileCache,
 
+    /// Identifiers which are used to prevent defining macros with these names.
+    /// They are usually C keywords, such as `int`, `return`, `if`, `else`, etc.
+    /// You may simply use `token::C23_KEYWORDS`.
     pub reserved_identifiers: &'a [&'a str],
 
     /// Macro definitions and related state.
     pub macro_map: MacroMap,
 
-    /// Whether to resolve relative file paths base on the current file.
-    /// Set to false to only search in the specified including directories.
+    /// A flag to control whether to resolve relative paths within the current source file.
+    ///
+    /// Set to true to resolve relative paths to the source file,
+    /// otherwise, preprocessor will only search in the specified including directories.
+    ///
+    /// For example, consider there are 3 defined include directories:
+    ///
+    /// - `./include`
+    /// - `./src/headers`
+    /// - `/usr/include`
+    ///
+    /// The statement `#include "foo.h"` in the source file `src/main.c` will try to
+    /// match `foo.h` in the following order:
+    ///
+    /// - `./include/foo.h`
+    /// - `./src/headers/foo.h`
+    /// - `/usr/include/foo.h`
+    ///
+    /// If `resolve_relative_path_within_current_file` is true, then it will also
+    /// try to match `src/foo.h`.
     pub resolve_relative_path_within_current_file: bool,
 
     /// The file number currently being processed.
     pub current_file_item: FileItem,
 
     /// List of included files to prevent redundant inclusions.
+    /// Besides the header files, the source file itself is also
+    /// included to prevent self-inclusion or reversive inclusion.
     pub included_files: Vec<FileLocation>,
 
-    /// User-facing messages, warnings, or notifications.
+    /// User-facing messages, warnings, or information.
     pub prompts: Vec<Prompt>,
 
     /// Output tokens generated during preprocessing.
@@ -62,18 +92,18 @@ where
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
     ) -> Self {
+        let location = FileLocation::new(
+            FilePathSource::from_source_file(current_file_relative_path),
+            current_file_canonical_full_path,
+        );
+        let current_file_item = FileItem::new(current_file_number, location);
+
         Self {
             file_provider,
             header_file_cache: file_cache,
             reserved_identifiers,
             resolve_relative_path_within_current_file,
-            current_file_item: FileItem::new(
-                current_file_number,
-                FileLocation::new(
-                    current_file_canonical_full_path,
-                    FileOrigin::from_source_file(current_file_relative_path),
-                ),
-            ),
+            current_file_item,
             macro_map: MacroMap::new(),
             included_files: Vec::new(),
             prompts: Vec::new(),
@@ -82,7 +112,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn from_keyvalues(
+    pub fn from_predefinitions(
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         reserved_identifiers: &'a [&'a str],
@@ -92,19 +122,19 @@ where
         current_file_relative_path: &Path,
         current_file_canonical_full_path: &Path,
     ) -> Result<Self, PreprocessError> {
+        let location = FileLocation::new(
+            FilePathSource::from_source_file(current_file_relative_path),
+            current_file_canonical_full_path,
+        );
+        let current_file_item = FileItem::new(current_file_number, location);
+
         Ok(Self {
             file_provider,
             header_file_cache: file_cache,
             reserved_identifiers,
             macro_map: MacroMap::from_key_values(predefinitions)?,
             resolve_relative_path_within_current_file,
-            current_file_item: FileItem::new(
-                current_file_number,
-                FileLocation::new(
-                    current_file_canonical_full_path,
-                    FileOrigin::from_source_file(current_file_relative_path),
-                ),
-            ),
+            current_file_item,
             included_files: Vec::new(),
             prompts: Vec::new(),
             output: Vec::new(),
@@ -121,27 +151,24 @@ where
 #[derive(Debug, PartialEq, Clone)]
 pub struct FileItem {
     pub number: usize,
-    pub file_location: FileLocation,
+    pub location: FileLocation,
 }
 
 impl FileItem {
-    pub fn new(number: usize, file_location: FileLocation) -> Self {
-        Self {
-            number,
-            file_location,
-        }
+    pub fn new(number: usize, location: FileLocation) -> Self {
+        Self { number, location }
     }
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FileLocation {
+    pub source: FilePathSource,
     pub canonical_full_path: PathBuf,
-    pub file_origin: FileOrigin,
 }
 
 /// Represents the source of a file.
 #[derive(Debug, PartialEq, Clone)]
-pub enum FileOrigin {
+pub enum FilePathSource {
     /// Represents a file that is part of the source code, such as `main.c` and `lib.c`.
     /// The `relative_file_path` is the path relative to the project root directory.
     SourceFile(/* relative_file_path */ PathBuf),
@@ -158,28 +185,27 @@ pub enum FileOrigin {
 }
 
 impl FileLocation {
-    pub fn new(canonical_full_path: &Path, file_origin: FileOrigin) -> Self {
+    pub fn new(source: FilePathSource, canonical_full_path: &Path) -> Self {
         Self {
+            source,
             canonical_full_path: canonical_full_path.to_path_buf(),
-            file_origin,
         }
     }
 }
 
-impl FileOrigin {
+impl FilePathSource {
     pub fn from_source_file(relative_file_path: &Path) -> Self {
-        FileOrigin::SourceFile(relative_file_path.to_path_buf())
+        FilePathSource::SourceFile(relative_file_path.to_path_buf())
     }
 
     pub fn from_user_header_file(relative_file_path: &Path) -> Self {
-        FileOrigin::UserHeader(relative_file_path.to_path_buf())
+        FilePathSource::UserHeader(relative_file_path.to_path_buf())
     }
 
     pub fn from_system_header_file(relative_file_path: &Path) -> Self {
-        FileOrigin::SystemHeader(relative_file_path.to_path_buf())
+        FilePathSource::SystemHeader(relative_file_path.to_path_buf())
     }
 }
-
 
 pub struct MacroMap {
     macros: HashMap<String, MacroDefinition>,
@@ -193,9 +219,9 @@ pub enum MacroDefinition {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum MacroManipulationResult {
     Success,
-    Failure,
+    AlreadyExist,
+    NotFound,
 }
-
 
 /// An abstract file system interface that provides
 /// access to the user and system header files and binary resources.
@@ -208,7 +234,7 @@ pub trait FileProvider {
     /// Resolves a user header file path relative to the current file.
     ///
     /// Examples:
-    /// - if the current file is `/path/to/source.c` and the relative path
+    /// - If the current file is `/path/to/source.c` and the relative path
     ///   is `../include/foo.h`, this function will resolve it to `/path/to/include/foo.h`.
     /// - If the current file is `/path/to/include/foo.h` and the relative path is `./bar.h`,
     ///   it will resolve it to `/path/to/include/bar.h`.
@@ -227,9 +253,12 @@ pub trait FileProvider {
     /// This mimics the behavior of the quoted include directive in C, e.g., `#include "header.h"`.
     ///
     /// The resolution process is as follows:
-    /// 1. If `resolve_relative` is true, attempts to resolve the header file relative to the source file's directory.
-    /// 2. If not found, attempts to resolve the file in the user header search directories.
-    /// 3. If still not found, attempts to resolve the file in the system header search directories.
+    /// 1. If `resolve_relative` is true, attempts to resolve the header file
+    ///    relative to the source file's directory.
+    /// 2. If the target file does not found, attempts to resolve the file
+    ///    in the user header search directories.
+    /// 3. If it does not found either, attempts to resolve the file in the
+    ///    system header search directories.
     ///
     /// Returns the canonical path if found, or `None` if not found.
     fn resolve_user_file_with_fallback(
@@ -267,6 +296,8 @@ pub trait FileProvider {
     fn load_binary_file(
         &self,
         canonical_full_path: &Path,
+
+        // Optional offset to start reading from.
         offset: usize,
 
         // Optional maximum length to read from the file.
@@ -286,16 +317,22 @@ pub struct ResolvedResult {
     pub canonical_full_path: PathBuf,
 
     /// Indicates whether the resolved file is a system header file.
-    pub is_system_file: bool,
+    pub is_system_header_file: bool,
 }
 
 impl ResolvedResult {
-    pub fn new(canonical_full_path: PathBuf, is_system_file: bool) -> Self {
+    pub fn new(canonical_full_path: PathBuf, is_system_header_file: bool) -> Self {
         Self {
             canonical_full_path,
-            is_system_file,
+            is_system_header_file,
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct PreprocessResult {
+    pub output: Vec<TokenWithLocation>,
+    pub prompts: Vec<Prompt>,
 }
 
 /// Canonicalizes a given path without checking the real file system.
@@ -325,25 +362,25 @@ pub fn normalize_path(src: &Path) -> PathBuf {
     output
 }
 
-
 /// A cache for the processed header files.
 ///
 /// Stores the canonical path, source code, and the parsed AST for each file.
 /// This cache prevents redundant parsing of the same file multiple times.
 ///
-/// The souce code file (`*.c`) should not be cached.
+/// Note that only header files (`*.h`) are cached, not source files (`*.c`).
 pub struct HeaderFileCache {
-    items: Vec<CacheItem>,
+    items: Vec<HeaderFileCacheItem>,
 }
 
-struct CacheItem {
-    canonical_full_path: PathBuf,
+struct HeaderFileCacheItem {
+    pub canonical_full_path: PathBuf,
 
     /// The source code of the file.
     /// It is used to generate the error message when parsing fails.
-    text_content: String,
+    pub text_content: String,
 
-    program: Program,
+    pub file_number: usize,
+    pub program: Program,
 }
 
 impl HeaderFileCache {
@@ -352,21 +389,26 @@ impl HeaderFileCache {
         Self { items: Vec::new() }
     }
 
-    /// Adds a file to the cache.
-    ///
-    /// - `canonical_full_path` - The canonical path of the file.
-    /// - `text_content` - The source code of the file.
-    ///
-    /// Returns the file number assigned to this file.
-    /// File number starts from 1 since 0 is reserved for predefined macros.
-    pub fn add(&mut self, canonical_full_path: &Path, text_content: &str) -> usize {
-        // File number starts from 1 since 0 is reserved for predefined macros.
-        let file_number = self.items.len() + 1;
+    /// File number is assigned automatically in the order of addition.
+    /// The first file number is 1.
+    /// File number 0 is reserved for predefined macros.
+    pub fn next_file_number(&self) -> usize {
+        self.items.len() + 1 // File number starts from 1
+    }
 
-        let item = CacheItem {
+    /// Adds a file to the cache.
+    pub fn add(
+        &mut self,
+        canonical_full_path: &Path,
+        text_content: &str,
+        file_number: usize,
+        program: Program,
+    ) -> usize {
+        let item = HeaderFileCacheItem {
             canonical_full_path: canonical_full_path.to_path_buf(),
             text_content: text_content.to_owned(),
-            program: Program::default(),
+            file_number,
+            program,
         };
 
         self.items.push(item);
@@ -374,54 +416,47 @@ impl HeaderFileCache {
         file_number
     }
 
-    /// Sets the program for a file in the cache.
-    ///
-    /// The `Program` is set after parsing the file instead of during the `add` method.
-    /// This is because the `Program` is generated after parsing the file,
-    /// and the parse operation may fail and raise an error, which contains
-    /// the `file_number`, this number only exists after the file is `add` to the cache.
-    pub fn set_program(&mut self, canonical_full_path: &Path, program: Program) {
-        let file_number = self
-            .items
-            .iter()
-            .position(|item| item.canonical_full_path == canonical_full_path)
-            .unwrap();
-
-        self.items[file_number].program = program;
-    }
-
-    pub fn get_file_number(&self, canonical_full_path: &Path) -> Option<usize> {
-        self.items
-            .iter()
-            .position(|item| item.canonical_full_path == canonical_full_path)
-            .map(|index| index + 1) // File number starts from 1
-    }
-
-    pub fn get_text_content(&self, canonical_full_path: &Path) -> Option<&String> {
+    pub fn get_by_canonical_full_path(
+        &self,
+        canonical_full_path: &Path,
+    ) -> Option<&HeaderFileCacheItem> {
         self.items
             .iter()
             .find(|item| item.canonical_full_path == canonical_full_path)
-            .map(|item| &item.text_content)
     }
 
-    pub fn get_program(&self, canonical_full_path: &Path) -> Option<&Program> {
-        self.items
-            .iter()
-            .find(|item| item.canonical_full_path == canonical_full_path)
-            .map(|item| &item.program)
-    }
+    // pub fn get_file_number(&self, canonical_full_path: &Path) -> Option<usize> {
+    //     self.items
+    //         .iter()
+    //         .position(|item| item.canonical_full_path == canonical_full_path)
+    //         .map(|index| index + 1) // File number starts from 1
+    // }
+
+    // pub fn get_text_content(&self, canonical_full_path: &Path) -> Option<&String> {
+    //     self.items
+    //         .iter()
+    //         .find(|item| item.canonical_full_path == canonical_full_path)
+    //         .map(|item| &item.text_content)
+    // }
+
+    // pub fn get_program(&self, canonical_full_path: &Path) -> Option<&Program> {
+    //     self.items
+    //         .iter()
+    //         .find(|item| item.canonical_full_path == canonical_full_path)
+    //         .map(|item| &item.program)
+    // }
 
     /// Checks if a file with the given canonical path exists in the cache.
-    pub fn contains(&self, canonical_full_path: &Path) -> bool {
+    pub fn exists(&self, canonical_full_path: &Path) -> bool {
         self.items
             .iter()
             .any(|item| item.canonical_full_path == canonical_full_path)
     }
 
     /// Returns a list of tuples containing the file number and canonical path for each cached file.
+    /// For example, the first item will be `(1, "/path/to/file.h")`.
     ///
     /// The file number for the first item is 1, since 0 is reserved for predefined macros.
-    /// For example, the first item will be `(1, "/path/to/file.h")`.
     pub fn get_cache_file_list(&self) -> Vec<(usize, PathBuf)> {
         self.items
             .iter()
@@ -447,33 +482,43 @@ impl MacroMap {
     pub fn from_key_values(
         predefinitions: &HashMap<String, String>,
     ) -> Result<Self, PreprocessError> {
-        let mut definition = Self::new();
+        let mut macros = Self::new();
         for (key, value) in predefinitions {
-            if definition.add_by_key_value(key, value)? == MacroManipulationResult::Failure {
+            if macros.add_object_like_by_single_value_string(key, value)?
+                == MacroManipulationResult::AlreadyExist
+            {
                 return Err(PreprocessError::Message(format!(
-                    "Macro '{}' is already defined.",
+                    "Macro '{}' is already exist.",
                     key
                 )));
             }
         }
-        Ok(definition)
+        Ok(macros)
     }
 
-    /// Adds a definition by a key and a value string.
+    /// Adds a macro by a key and a single value string.
     ///
-    /// `value`: A string represented with the source code style.
-    /// e.g. `"123"` represents a number, and `"\"abc\""` represents a string literal.
-    /// This value should be a single literal, such as a number, character, string, or identifier,
-    /// an empty value is allowed.
+    /// `value` is a string represented with the source code style, e.g.,
     ///
-    /// Returns `Ok(false)` if the key was already present.
-    pub fn add_by_key_value(
+    /// - `"123"` represents a number
+    /// - `"\"abc\""` represents a string literal.
+    ///
+    /// This value should be a single literal, such as:
+    ///
+    /// - a number
+    /// - a character
+    /// - a string
+    /// - an identifier
+    /// - empty value (i.e., `""`)
+    ///
+    /// Returns `MacroManipulationResult::AlreadyExist` if the key was already present.
+    fn add_object_like_by_single_value_string(
         &mut self,
         key: &str,
         value: &str,
     ) -> Result<MacroManipulationResult, PreprocessError> {
         // Tokenize the value and create TokenWithLocation instances.
-        let tokens = lex_from_str(value)?;
+        let tokens = lex_from_clean_str(value)?;
         let token_with_locations: Vec<TokenWithLocation> = tokens
             .into_iter()
             .map(|token_with_range| {
@@ -484,7 +529,7 @@ impl MacroMap {
 
         if token_with_locations.len() > 1 {
             return Err(PreprocessError::Message(format!(
-                "Expected a single value for key '{}', but got {} tokens.",
+                "Adding macro '{}' failed: expected a single value, but got {} tokens.",
                 key,
                 token_with_locations.len()
             )));
@@ -493,18 +538,18 @@ impl MacroMap {
         let item = MacroDefinition::ObjectLike(token_with_locations);
 
         Ok(match self.macros.insert(key.to_owned(), item) {
-            Some(_) => MacroManipulationResult::Failure, // Key was already present
-            None => MacroManipulationResult::Success,    // Key was added successfully
+            Some(_) => MacroManipulationResult::AlreadyExist, // Key was already present
+            None => MacroManipulationResult::Success,         // Key was added successfully
         })
     }
 
     /// Adds a definition by a key and a list of tokens with ranges.
-    /// Returns `Ok(false)` if the key was already present.
+    /// Returns `MacroManipulationResult::AlreadyExist` if the key was already present.
     pub fn add_object_like(
         &mut self,
         file_number: usize,
         key: &str,
-        definition: &[TokenWithRange],
+        definition: &[TokenWithRange], // Unexpanded tokens with ranges.
     ) -> MacroManipulationResult {
         let token_with_locations: Vec<TokenWithLocation> = definition
             .iter()
@@ -517,17 +562,19 @@ impl MacroMap {
         let macro_definition = MacroDefinition::ObjectLike(token_with_locations);
 
         match self.macros.insert(key.to_owned(), macro_definition) {
-            Some(_) => MacroManipulationResult::Failure, // Key was already present
-            None => MacroManipulationResult::Success,    // Key was added successfully
+            Some(_) => MacroManipulationResult::AlreadyExist, // Key was already present
+            None => MacroManipulationResult::Success,         // Key was added successfully
         }
     }
 
+    /// Adds a function-like macro definition by a key, parameters, and a list of tokens with ranges.
+    /// Returns `MacroManipulationResult::AlreadyExist` if the key was already present.
     pub fn add_function_like(
         &mut self,
         file_number: usize,
         key: &str,
         parameters: &[String],
-        definition: &[TokenWithRange],
+        definition: &[TokenWithRange], // Unexpanded tokens with ranges.
     ) -> MacroManipulationResult {
         let token_with_locations: Vec<TokenWithLocation> = definition
             .iter()
@@ -541,8 +588,8 @@ impl MacroMap {
             MacroDefinition::FunctionLike(parameters.to_vec(), token_with_locations);
 
         match self.macros.insert(key.to_owned(), macro_definition) {
-            Some(_) => MacroManipulationResult::Failure, // Key was already present
-            None => MacroManipulationResult::Success,    // Key was added successfully
+            Some(_) => MacroManipulationResult::AlreadyExist, // Key was already present
+            None => MacroManipulationResult::Success,         // Key was added successfully
         }
     }
 
@@ -550,16 +597,41 @@ impl MacroMap {
         self.macros.get(key)
     }
 
-    pub fn contains(&self, key: &str) -> bool {
-        self.macros.contains_key(key)
-    }
-
     /// Remove the definition for the given key.
-    /// Returns `true` if the key was present and removed, `false` otherwise.
+    /// Returns `MacroManipulationResult::Success` if the key was present and removed,
+    /// `MacroManipulationResult::NotFound` otherwise.
     pub fn remove(&mut self, key: &str) -> MacroManipulationResult {
         match self.macros.remove(key) {
             Some(_) => MacroManipulationResult::Success, // Key was present and removed
-            None => MacroManipulationResult::Failure,    // Key was not present
+            None => MacroManipulationResult::NotFound,   // Key was not present
         }
     }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.macros.contains_key(key)
+    }
+
+    pub fn contains(&self, key: &str, is_invocation: bool) -> bool {
+        match self.macros.get(key) {
+            Some(MacroDefinition::ObjectLike(_)) => !is_invocation,
+            Some(MacroDefinition::FunctionLike(_, _)) => is_invocation,
+            None => false,
+        }
+    }
+}
+
+/// `Prompt` is similar to `PreprocessError`, but is intended for user-facing messages
+/// that do not necessarily indicate an error. It can be used to display informational
+/// messages, warnings, or other information relevant to the user.
+#[derive(Debug, PartialEq)]
+pub enum Prompt {
+    Message(PromptLevel, /* file number */ usize, String),
+    MessageWithPosition(PromptLevel, /* file number */ usize, String, Position),
+    MessageWithRange(PromptLevel, /* file number */ usize, String, Range),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum PromptLevel {
+    Info,
+    Warning,
 }

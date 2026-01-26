@@ -10,14 +10,19 @@ use crate::{
     error::{PreprocessError, PreprocessFileError},
     location::Location,
     peekable_iter::PeekableIter,
-    range::Range,
-    token::{Number, Punctuator, Token, TokenWithLocation, TokenWithRange},
+    token::{Number, Punctuator, Token, TokenWithLocation},
 };
 
 // Buffer sizes for lookahead in `PeekableIter`.
 const PEEK_BUFFER_LENGTH_EXPRESSION_PARSE: usize = 3;
 
-/// Expressions used in `#if` and `#elif` directives
+/// Expanded expressions used in `#if` and `#elif` directives
+///
+/// This expression can only contain integer constants, binary operators,
+/// unary operators and grouping parentheses.
+///
+/// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
+/// must be expanded before constructing this expression.
 #[derive(Debug, PartialEq)]
 pub enum Expression {
     Number(u64, Location),
@@ -196,6 +201,14 @@ pub fn print_expression_to_string(expression: &Expression) -> String {
 //
 // See:
 // https://en.cppreference.com/w/c/language/operator_precedence.html
+
+/// Parse an expanded integer expression used in `#if` and `#elif` directives.
+///
+/// This expression can only contain integer constants, binary operators,
+/// unary operators and grouping parentheses.
+///
+/// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
+/// must be expanded before constructing this expression.
 pub fn parse_expression(
     token_with_locations: &[TokenWithLocation],
 
@@ -527,6 +540,13 @@ impl ExpressionParser<'_> {
     }
 }
 
+/// Evaluate an expanded expression used in `#if` and `#elif` directives.
+///
+/// This expression can only contain integer constants, binary operators,
+/// unary operators and grouping parentheses.
+///
+/// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
+/// must be expanded before constructing this expression.
 pub fn evaluate(
     token_with_locations: &[TokenWithLocation],
     file_number: usize,
