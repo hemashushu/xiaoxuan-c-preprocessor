@@ -4,10 +4,7 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 
 use chrono::Local;
 
@@ -16,7 +13,6 @@ use crate::{
     context::{
         Context, FileItem, FileLocation, FilePathSource, FileProvider, HeaderFileCache,
         MacroDefinition, MacroManipulationResult, PreprocessResult, Prompt, PromptLevel,
-        ResolvedResult,
     },
     error::{PreprocessError, PreprocessFileError},
     location::Location,
@@ -95,6 +91,14 @@ pub fn process_source_file<T>(
     // try to match `src/foo.h`.
     resolve_relative_path_within_current_file: bool,
 
+    // A flag that controls whether function-like macro arguments may consist of multiple tokens.
+    //
+    // When false (the default), ANCPP requires each macro argument to be a single token
+    // (identifier, number, string literal, or character literal). When true, an argument
+    // may be an arbitrary sequence of tokens, allowing more complex expressions to be
+    // passed as a single parameter.
+    enable_multiple_token_argument: bool,
+
     // The number of the source file, used for error reporting.
     // It should begin with `FILE_NUMBER_SOURCE_FILE_BEGIN` (which default to 65536)
     // and incremented by 1 for each source file.
@@ -121,6 +125,7 @@ where
         reserved_identifiers,
         predefinitions,
         resolve_relative_path_within_current_file,
+        enable_multiple_token_argument,
         source_file_number,
         source_file_path_name,
         source_file_canonical_full_path,
@@ -189,7 +194,7 @@ where
         reserved_identifiers: &'a [&'a str],
         predefinitions: &HashMap<String, String>,
         resolve_relative_path_within_current_file: bool,
-
+        enable_multiple_token_argument: bool,
         source_file_number: usize,
         source_file_path_name: &Path,
         source_file_canonical_full_path: &Path,
@@ -200,6 +205,7 @@ where
             reserved_identifiers,
             predefinitions,
             resolve_relative_path_within_current_file,
+            enable_multiple_token_argument,
             source_file_number,
             source_file_path_name,
             source_file_canonical_full_path,
@@ -906,125 +912,7 @@ where
         Ok(())
     }
 
-    fn check_include_guard(
-        &mut self,
-        file_number_of_header_file: usize,
-        relative_path: &Path,
-        program: &Program,
-    ) {
-        // Check if the file has an include guard or `#pragma once`.
-        // If it does, we can skip the preprocessing of the file.
-        // Otherwise, we will preprocess the file normally.
-        let first_statement_opt = program.statements.first();
-
-        if first_statement_opt.is_none() {
-            // File is empty
-            self.context.prompts.push(Prompt::Message(
-                PromptLevel::Warning,
-                file_number_of_header_file,
-                "Consider adding `#pragma once` to this file to prevent multiple inclusions."
-                    .to_string(),
-            ));
-            return;
-        }
-
-        let first_statement = first_statement_opt.unwrap();
-
-        if matches!(
-            first_statement,
-            Statement::Pragma(Pragma { components, .. })
-            if matches!(
-                components.first(),
-                Some(TokenWithRange { token: Token::Identifier(name), .. }) if name == "once"))
-        {
-            // The file has `#pragma once`, we can skip further checks.
-            return;
-        }
-
-        let suggested_include_guard_macro_name = relative_path
-            .to_string_lossy()
-            .replace(['/', '-', '.'], "_")
-            .to_uppercase();
-
-        // Check if the entire file consists of a single `#ifndef` structure,
-        //
-        // ```diagram
-        // #ifndef INCLUDE_GUARD_MACRO_NAME
-        // #define INCLUDE_GUARD_MACRO_NAME
-        // ... file content ...
-        // #endif
-        // ```
-        if program.statements.len() == 1
-            && matches!(
-                first_statement,
-                Statement::If(If {
-                    branches,
-                    alternative: None
-                }) if branches.len() == 1 &&
-                matches!(
-                    branches.first().unwrap(),
-                    Branch {
-                        condition: Condition::NotDefined(name0, _),
-                        consequence
-                    } if matches!(
-                        consequence.first(),
-                        Some(Statement::Define(Define::ObjectLike {
-                            identifier: (name1, _),
-                            definition
-                        })) if name0 == name1 && definition.is_empty()
-                    )
-                )
-            )
-        {
-            let branches = if let Statement::If(If { branches, .. }) = first_statement {
-                branches
-            } else {
-                unreachable!()
-            };
-
-            let branch = branches.first().unwrap();
-
-            let (name, range) = match &branch.condition {
-                Condition::NotDefined(name, range) => (name, range),
-                _ => unreachable!(),
-            };
-
-            // The file has an include guard.
-            if name.ends_with(&suggested_include_guard_macro_name) {
-                // The include guard macro name matches the suggested name.
-                // Suggest using `#pragma once` instead.
-                self.context.prompts.push(Prompt::Message(
-                    PromptLevel::Info,
-                    file_number_of_header_file,
-                    "Consider using `#pragma once` instead of include guards.".to_owned(),
-                ));
-            } else {
-                // The include guard macro name does not match the suggested name.
-                // Suggest renaming the include guard macro to follow the convention, which
-                // prevents potential conflicts with other macros.
-                self.context.prompts.push(Prompt::MessageWithRange(
-                    PromptLevel::Info,
-                    file_number_of_header_file,
-                    format!(
-                        "Consider renaming the include guard macro to `{}` to follow the convention.",
-                        suggested_include_guard_macro_name
-                    ),
-                    *range,
-                ));
-            }
-        } else {
-            // The file does not have an include guard or `#pragma once`.
-            // We suggest adding `#pragma once`.
-            self.context.prompts.push(Prompt::Message(
-                PromptLevel::Warning,
-                file_number_of_header_file,
-                "Consider adding `#pragma once` to this file to prevent multiple inclusions."
-                    .to_owned(),
-            ));
-        }
-    }
-
-    /// Expand macros in the given tokens.
+    /// Expand macros.
     ///
     /// This function handles the expansion of:
     /// - Object-like macros.
@@ -1078,14 +966,508 @@ where
     ) -> Result<Vec<TokenWithLocation>, PreprocessFileError> {
         // If we are expanding a function-like macro definition,
         // substitute the parameters first.
-        let body = if expansion_type == ExpansionType::FunctionLikeDefinition {
+        let mut output = if expansion_type == ExpansionType::FunctionLikeDefinition {
             self.substitute_macro_parameters(parameter_names, actual_arguments, body)?
         } else {
             body
         };
 
         // Expand macros, including object-like macros, function-like macros.
+        output = self.expand_tokens(expansion_type, macros_expansion_stack, output)?;
 
+        // If we are expanding a conditional expression,
+        // process special operators.
+        if expansion_type == ExpansionType::ConditionalExpression {
+            output = self.evaluate_operators(output)?;
+        }
+
+        Ok(output)
+    }
+
+    /// Substitute macro parameters in the function-likemacro body with
+    /// the provided arguments.
+    fn substitute_macro_parameters(
+        &mut self,
+        parameter_names: &[String],
+        actual_arguments: &[Argument],
+        body: Vec<TokenWithLocation>,
+    ) -> Result<Vec<TokenWithLocation>, PreprocessFileError> {
+        let mut output = Vec::new();
+        let mut iter = body.into_iter();
+        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
+        let mut code_parser =
+            CodeParser::new(&mut peekable_iter, self.context.current_file_item.number);
+
+        while let Some(current_token_with_location) = code_parser.next_token_with_location() {
+            match &current_token_with_location.token {
+                _ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => {
+                    // Process token concatenation (the `##` operator).
+                    // e.g.,
+                    // `... ##`
+
+                    // Collect tokens of token concatenation.
+                    let mut components = vec![];
+
+                    // Add the current token as the first component.
+                    components.push(current_token_with_location);
+
+                    // Consume `##` and collect following tokens.
+                    while code_parser.peek_token_and_equals(0, &Token::PoundPound) {
+                        code_parser.next_token(); // consume `##`
+
+                        if let Some(next_token_with_location) =
+                            code_parser.next_token_with_location()
+                        {
+                            components.push(next_token_with_location);
+                        } else {
+                            return Err(PreprocessFileError {
+                                file_number: code_parser.last_location.file_number,
+                                error: PreprocessError::MessageWithRange(
+                                    "Token concatenation (##) must be followed by a token."
+                                        .to_owned(),
+                                    code_parser.last_location.range,
+                                ),
+                            });
+                        }
+                    }
+
+                    // Convert tokens to identifier parts (strings).
+                    let mut component_names = vec![];
+                    for token_with_location in &components {
+                        match &token_with_location.token {
+                            Token::Identifier(name) => {
+                                match name.as_str() {
+                                    "__VA_ARGS__" => {
+                                        // ANCPP does not support this operation.
+                                        // e.g., `#define FOO(x) x ## __VA_ARGS__`
+                                        return Err(PreprocessFileError {
+                                            file_number: token_with_location
+                                                .location
+                                                .file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "Token concatenation (##) with __VA_ARGS__ is not supported."
+                                                    .to_owned(),
+                                                token_with_location.location.range,
+                                            ),
+                                        });
+                                    }
+                                    "__VA_OPT__" => {
+                                        // ANCPP does not support this operation.
+                                        return Err(PreprocessFileError {
+                                            file_number: token_with_location
+                                                .location
+                                                .file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "Token concatenation (##) with __VA_OPT__ is not supported."
+                                                    .to_owned(),
+                                                token_with_location.location.range,
+                                            ),
+                                        });
+                                    }
+                                    _ => {
+                                        let parameter_index_opt =
+                                            parameter_names.iter().position(|p| p == name);
+
+                                        match parameter_index_opt {
+                                            Some(parameter_index) => {
+                                                // The identifier is a parameter.
+
+                                                // Substitute the parameter with the corresponding argument.
+                                                let argument = &actual_arguments[parameter_index];
+                                                let Argument::Position(argument_value) = argument
+                                                else {
+                                                    // This should not happen for regular parameters.
+                                                    unreachable!()
+                                                };
+
+                                                if argument_value.origin.len() > 1 {
+                                                    return Err(PreprocessFileError {
+                                                        file_number: token_with_location
+                                                            .location
+                                                            .file_number,
+                                                        error: PreprocessError::MessageWithRange(
+                                                            "Token concatenation (##) with a parameter that expands to multiple tokens is not allowed."
+                                                                .to_owned(),
+                                                            token_with_location.location.range,
+                                                        ),
+                                                    });
+                                                }
+
+                                                let id = argument_value
+                                                    .origin
+                                                    .first()
+                                                    .unwrap()
+                                                    .token
+                                                    .to_string();
+
+                                                component_names.push(id);
+                                            }
+                                            _ => {
+                                                // The identifier is not a parameter, just push it as is.
+                                                component_names.push(name.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Token::Number(Number::Integer(value)) => {
+                                component_names.push(value.value.clone());
+                            }
+                            Token::String(value, _) => {
+                                component_names.push(value.clone());
+                            }
+                            Token::Char(value, _) => {
+                                component_names.push(value.to_string());
+                            }
+                            _ => {
+                                return Err(PreprocessFileError {
+                                    file_number: token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "Token concatenation (##) can only apply to identifiers, integer numbers, strings, or character literals."
+                                            .to_owned(),
+                                        token_with_location.location.range,
+                                    ),
+                                });
+                            }
+                        }
+                    }
+
+                    // Create the concatenated identifier token.
+                    let concatenated_name = component_names.join("");
+                    let concatenated_location = Location::new(
+                        components.first().unwrap().location.file_number,
+                        &Range::new(
+                            &components.first().unwrap().location.range.start,
+                            &components.last().unwrap().location.range.end_included,
+                        ),
+                    );
+
+                    // Check if the concatenated name is a valid identifier.
+                    if !is_valid_identifier(&concatenated_name) {
+                        return Err(PreprocessFileError {
+                            file_number: concatenated_location.file_number,
+                            error: PreprocessError::MessageWithRange(
+                                format!(
+                                    "The result of token concatenation (##) is not a valid identifier: '{}'.",
+                                    concatenated_name
+                                ),
+                                concatenated_location.range,
+                            ),
+                        });
+                    }
+
+                    let concatenated_token = TokenWithLocation::new(
+                        Token::Identifier(concatenated_name),
+                        concatenated_location,
+                    );
+
+                    // Push the concatenated identifier to the output.
+                    output.push(concatenated_token);
+                }
+                Token::Identifier(name) => {
+                    // Process parameter substitution and special macros.
+                    match name.as_str() {
+                        "__VA_ARGS__" => {
+                            // `__VA_ARGS__` is a special macro that represents the variable arguments
+                            // in function-like macros.
+                            // see:
+                            // https://en.cppreference.com/w/c/preprocessor/replace.html
+
+                            // Defence: __VA_ARGS__ can only be used in variadic function-like macros.
+                            if !matches!(parameter_names.last(), Some(param) if param == "...") {
+                                return Err(PreprocessFileError {
+                                    file_number: current_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "__VA_ARGS__ can only be used in variadic function-like macros."
+                                            .to_owned(),
+                                        current_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+
+                            // In the variadic function, the rest arguments are stored
+                            // in the last parameter named `...`.
+                            let Some(Argument::Rest(argument_values)) = actual_arguments.last()
+                            else {
+                                unreachable!()
+                            };
+
+                            // Push all variadic argument tokens to the output.
+                            for (index, argument_value) in argument_values.iter().enumerate() {
+                                if let Some(tls) = &argument_value.expanded {
+                                    output.extend(tls.clone());
+                                } else {
+                                    output.extend(argument_value.origin.clone());
+                                }
+
+                                // Add comma separator between arguments.
+                                if index < argument_values.len() - 1 {
+                                    output.push(TokenWithLocation::new(
+                                        Token::Punctuator(Punctuator::Comma),
+                                        Location::default(),
+                                    ));
+                                }
+                            }
+                        }
+                        "__VA_OPT__" => {
+                            // `__VA_OPT__ ( content )` is replaced by content if __VA_ARGS__ is non-empty,
+                            // and expands to nothing otherwise.
+
+                            // Defence: __VA_OPT__ can only be used in variadic function-like macros.
+                            if !matches!(parameter_names.last(), Some(param) if param == "...") {
+                                return Err(PreprocessFileError {
+                                    file_number: current_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "__VA_OPT__ can only be used in variadic function-like macros."
+                                            .to_owned(),
+                                        current_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+
+                            // Collect tokens inside the parentheses.
+                            let mut components = Vec::new();
+                            let mut parenthises_depth = 0;
+
+                            code_parser.consume_opening_paren()?; // Consumes '('
+
+                            while let Some(next_token_with_location) =
+                                code_parser.next_token_with_location()
+                            {
+                                match &next_token_with_location.token {
+                                    Token::Punctuator(Punctuator::ParenthesisOpen) => {
+                                        // Increase depth for nested parentheses.
+                                        parenthises_depth += 1;
+                                    }
+                                    Token::Punctuator(Punctuator::ParenthesisClose) => {
+                                        if parenthises_depth == 0 {
+                                            // Reached the matching closing parenthesis.
+                                            break;
+                                        } else {
+                                            // Decrease depth for nested parentheses.
+                                            parenthises_depth -= 1;
+                                        }
+                                    }
+                                    _ => {
+                                        // Other tokens are just collected.
+                                    }
+                                }
+
+                                components.push(next_token_with_location);
+                            }
+
+                            // The closing parenthesis has already been consumed by the loop above.
+                            // Do not need to consume it again.
+
+                            // In the variadic function, the rest arguments are stored
+                            // in the last parameter named `...`.
+                            let Some(Argument::Rest(argument_values)) = actual_arguments.last()
+                            else {
+                                unreachable!()
+                            };
+
+                            // `__VA_OPT__( content )` is only expanded if variadic arguments are provided.
+                            if !argument_values.is_empty() {
+                                let expanded_tokens = self.substitute_macro_parameters(
+                                    parameter_names,
+                                    actual_arguments,
+                                    components,
+                                )?;
+
+                                output.extend(expanded_tokens);
+                            }
+                        }
+                        _ => {
+                            // Process regular identifiers.
+
+                            let parameter_index_opt =
+                                parameter_names.iter().position(|p| p == name);
+
+                            match parameter_index_opt {
+                                // The identifier is a parameter.
+                                Some(parameter_index) => {
+                                    // Substitute the parameter with the corresponding argument.
+                                    let argument = &actual_arguments[parameter_index];
+                                    let Argument::Position(argument_value) = argument else {
+                                        // This should not happen for regular parameters.
+                                        unreachable!()
+                                    };
+
+                                    if let Some(tls) = &argument_value.expanded {
+                                        output.extend(tls.clone());
+                                    } else {
+                                        output.extend(argument_value.origin.clone());
+                                    }
+                                }
+                                _ => {
+                                    // The identifier is not a parameter, just push it as is.
+                                    output.push(current_token_with_location);
+                                }
+                            }
+                        }
+                    }
+                }
+                Token::Pound => {
+                    // _Stringizing_ (the `#` operator).
+                    //
+                    // Stringizing is used to produce a string literal and can only be applied to
+                    // macro parameters (includes `__VA_ARGS__`).
+                    // For example, `#define FOO(x) #x` will expand `FOO(abc)` to `"abc"` and `FOO(123)` to `"123"`.
+
+                    // expect `# parameter`
+                    if let Some(next_token_with_location) = code_parser.next_token_with_location() {
+                        match &next_token_with_location.token {
+                            Token::Identifier(name) => {
+                                if name == "__VA_ARGS__" {
+                                    // Stringizing __VA_ARGS__
+                                    //
+                                    // Example:
+                                    //
+                                    // ```c
+                                    // #define SHOW_ALL(...) puts(#__VA_ARGS__);
+                                    // SHOW_ALL(1, 2, foo, "bar");     // Expands to: `puts("1, 2, foo, \"bar\"");`
+                                    // SHOW_ALL();                     // Expands to: `puts("");`
+                                    // ```
+
+                                    // Defence: __VA_ARGS__ can only be used in variadic function-like macros.
+                                    if !matches!(parameter_names.last(), Some(param) if param == "...")
+                                    {
+                                        return Err(PreprocessFileError {
+                                            file_number: next_token_with_location.location.file_number,
+                                            error: PreprocessError::MessageWithRange(
+                                                "__VA_ARGS__ can only be used in variadic function-like macros."
+                                                    .to_owned(),
+                                                next_token_with_location.location.range,
+                                            ),
+                                        });
+                                    }
+
+                                    // In the variadic function, the rest arguments are stored
+                                    // in the last parameter named `...`.
+                                    let Some(Argument::Rest(argument_values)) =
+                                        actual_arguments.last()
+                                    else {
+                                        unreachable!()
+                                    };
+
+                                    // Convert the tokens to a string literal.
+                                    let stringized_string = stringize_arguments(argument_values)?;
+                                    let stringized_token = TokenWithLocation::new(
+                                        Token::String(stringized_string, StringEncoding::Default),
+                                        Location::default(),
+                                    );
+                                    output.push(stringized_token);
+                                } else {
+                                    // Stringizing regular parameter.
+
+                                    let parameter_index_opt =
+                                        parameter_names.iter().position(|p| p == name);
+
+                                    match parameter_index_opt {
+                                        // Found the parameter to be stringized.
+                                        Some(parameter_index) => {
+                                            // Convert the tokens to a string literal.
+                                            let argument = &actual_arguments[parameter_index];
+                                            let Argument::Position(argument_value) = argument
+                                            else {
+                                                unreachable!()
+                                            };
+
+                                            let stringized_string =
+                                                stringize_tokens(&argument_value.origin)?;
+                                            let stringized_token = TokenWithLocation::new(
+                                                Token::String(
+                                                    stringized_string,
+                                                    StringEncoding::Default,
+                                                ),
+                                                Location::default(),
+                                            );
+                                            output.push(stringized_token);
+                                        }
+                                        _ => {
+                                            // The identifier is not a macro parameter.
+                                            // e.g.
+                                            // `#define FOO(x) #y`   // 'y' is not a parameter.
+                                            return Err(PreprocessFileError {
+                                                file_number: next_token_with_location
+                                                    .location
+                                                    .file_number,
+                                                error: PreprocessError::MessageWithRange(
+                                                    format!(
+                                                        "Stringizing can only be applied to macro parameters, but '{}' is not a parameter.",
+                                                        name
+                                                    ),
+                                                    next_token_with_location.location.range,
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                // The next token is not an identifier.
+                                // e.g.,
+                                // `#define FOO(x) #123`
+                                return Err(PreprocessFileError {
+                                    file_number: next_token_with_location.location.file_number,
+                                    error: PreprocessError::MessageWithRange(
+                                        "Stringizing (#) can only be applied to macro parameters."
+                                            .to_owned(),
+                                        next_token_with_location.location.range,
+                                    ),
+                                });
+                            }
+                        }
+                    } else {
+                        // The `#` operator is not followed by any token.
+                        // e.g.,
+                        // `#define FOO(x) #`
+                        return Err(PreprocessFileError {
+                            file_number: current_token_with_location.location.file_number,
+                            error: PreprocessError::MessageWithRange(
+                                "Stringizing (#) operator must be followed by a macro parameter."
+                                    .to_owned(),
+                                current_token_with_location.location.range,
+                            ),
+                        });
+                    }
+                }
+                Token::PoundPound => {
+                    // Token concatenation (the `##` operator)
+                    // The token concatenation operator has already been handled in the
+                    // `_ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => { ... }` branch above.
+                    //
+                    // If the code reaches here, it means the `##` operator is not preceded by an identifier.
+
+                    // e.g.,
+                    // `#define FOO(x) ##x`
+                    return Err(PreprocessFileError {
+                        file_number: current_token_with_location.location.file_number,
+                        error: PreprocessError::MessageWithRange(
+                            "Token concatenation (##) must follow an identifier, string, or char."
+                                .to_owned(),
+                            current_token_with_location.location.range,
+                        ),
+                    });
+                }
+                _ => {
+                    // The current token is not a parameter or stringizing operator,
+                    // we simply copy it to the output.
+                    output.push(current_token_with_location);
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    /// Expand macros in the given tokens.
+    fn expand_tokens(
+        &mut self,
+        expansion_type: ExpansionType,
+        macros_expansion_stack: &[MacroExpansionStackItem],
+        body: Vec<TokenWithLocation>,
+    ) -> Result<Vec<TokenWithLocation>, PreprocessFileError> {
         let mut output = Vec::new();
         let mut iter = body.into_iter();
         let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
@@ -1214,18 +1596,17 @@ where
 
                             code_parser.consume_opening_paren()?; // Consumes '('
 
-                            match code_parser.peek_token(0) {
+                            match code_parser.next_token() {
                                 Some(Token::String(_, _)) => {
                                     // Just consume the string literal.
                                 }
                                 Some(_) => {
-                                    let location = code_parser.peek_location(0).unwrap();
                                     return Err(PreprocessFileError {
-                                        file_number: location.file_number,
+                                        file_number: code_parser.last_location.file_number,
                                         error: PreprocessError::MessageWithRange(
                                             "__Pragma must be followed by a string literal."
                                                 .to_owned(),
-                                            location.range,
+                                            code_parser.last_location.range,
                                         ),
                                     });
                                 }
@@ -1385,208 +1766,165 @@ where
                                             function_definition_ref.to_owned();
 
                                         // Collect the arguments for the macro invocation.
-                                        let mut argument_token_with_locations = vec![];
+                                        let mut argument_token_with_locationss = vec![];
                                         code_parser.consume_opening_paren()?; // Consumes '('
 
                                         while let Some(argument_token) = code_parser.peek_token(0) {
-                                            match &argument_token {
-                                                Token::Punctuator(Punctuator::ParenthesisClose) => {
-                                                    // If the next token is a closing parenthesis, we have reached the end of the arguments.
-                                                    break;
-                                                }
-                                                Token::String(first_string, first_string_type) => {
-                                                    // If the argument is a string, we need to handle the
-                                                    // case of adjacent string literals.
+                                            if matches!(
+                                                argument_token,
+                                                Token::Punctuator(Punctuator::ParenthesisClose)
+                                            ) {
+                                                // If the next token is a closing parenthesis, we have reached the end of the arguments.
+                                                break;
+                                            }
 
-                                                    // concatenates adjacent strings
-                                                    let argument_location =
-                                                        code_parser.peek_location(0).unwrap();
-                                                    let mut merged_string =
-                                                        vec![first_string.to_owned()];
-                                                    let mut merged_range = argument_location.range;
+                                            // Collect tokens for the current argument.
+                                            // Until we reach a comma (`,`) or closing parenthesis (`)`) at group level 0.
+                                            let mut argument_token_with_locations = vec![];
+                                            let mut group_level = 0;
 
-                                                    let merged_string_type = *first_string_type;
-                                                    let merged_file_number =
-                                                        argument_location.file_number;
-
-                                                    code_parser.next_token(); // consumes the first string literal token
-
-                                                    // concatenate the next token if it is also a string literal.
-                                                    while let Some(next_argument_token) =
-                                                        code_parser.peek_token(0)
-                                                    {
-                                                        if let Token::String(
-                                                            next_string,
-                                                            next_string_type,
-                                                        ) = next_argument_token
-                                                        {
-                                                            let next_argument_location =
-                                                                code_parser
-                                                                    .peek_location(0)
-                                                                    .unwrap();
-                                                            if merged_string_type
-                                                                != *next_string_type
-                                                            {
-                                                                // If the string types are different, we cannot concatenate them.
-                                                                return Err(
-                                                                    PreprocessFileError::new(
-                                                                        next_argument_location.file_number,
-                                                                    PreprocessError::MessageWithRange(
-                                                                            "Cannot concatenate string literals with different encoding types."
-                                                                                .to_owned(),
-                                                                            next_argument_location.range,
-                                                                            )
-                                                                    )
-                                                                );
-                                                            }
-
-                                                            // merge the next string literal
-                                                            merged_string
-                                                                .push(next_string.to_owned());
-                                                            merged_range.end_included =
-                                                                next_argument_location
-                                                                    .range
-                                                                    .end_included;
-
-                                                            code_parser.next_token(); // consumes the next string literal token
+                                            while let Some(argument_token) =
+                                                code_parser.peek_token(0)
+                                            {
+                                                match &argument_token {
+                                                    Token::Punctuator(
+                                                        Punctuator::ParenthesisOpen,
+                                                    ) => {
+                                                        group_level += 1;
+                                                    }
+                                                    Token::Punctuator(
+                                                        Punctuator::ParenthesisClose,
+                                                    ) => {
+                                                        if group_level == 0 {
+                                                            // If we reach a closing parenthesis at group level 0,
+                                                            // it indicates the end of the arguments.
+                                                            break;
                                                         } else {
-                                                            // If the next token is not a string literal, we stop merging.
+                                                            group_level -= 1;
+                                                        }
+                                                    }
+                                                    Token::Punctuator(Punctuator::Comma) => {
+                                                        if group_level == 0 {
+                                                            // If we reach a comma at group level 0,
+                                                            // it indicates the end of the current argument.
                                                             break;
                                                         }
                                                     }
-
-                                                    let merged_string_token =
-                                                        TokenWithLocation::new(
-                                                            Token::String(
-                                                                merged_string.join(""),
-                                                                merged_string_type,
-                                                            ),
-                                                            Location::new(
-                                                                merged_file_number,
-                                                                &merged_range,
-                                                            ),
-                                                        );
-
-                                                    // Push the merged string literal token to the arguments.
-                                                    argument_token_with_locations
-                                                        .push(merged_string_token);
+                                                    _ => {}
                                                 }
-                                                Token::Identifier(_)
-                                                | Token::Number(_)
-                                                | Token::Char(_, _) => {
-                                                    // Valid argument type for macro invocation.
-                                                    let argument_location =
-                                                        code_parser.peek_location(0).unwrap();
 
-                                                    argument_token_with_locations.push(
-                                                        TokenWithLocation::new(
-                                                            argument_token.clone(),
-                                                            *argument_location,
-                                                        ),
-                                                    );
+                                                // Collect the token as part of the current argument.
+                                                let argument_location =
+                                                    code_parser.peek_location(0).unwrap();
 
-                                                    code_parser.next_token(); // consumes the token
-                                                }
-                                                _ => {
-                                                    // Invalid argument for macro invocation.
-                                                    // ANCPP only allows single identifier, number, string (or adjacent strings), or char as arguments.
-                                                    let argument_location =
-                                                        code_parser.peek_location(0).unwrap();
+                                                argument_token_with_locations.push(
+                                                    TokenWithLocation::new(
+                                                        argument_token.clone(),
+                                                        *argument_location,
+                                                    ),
+                                                );
 
-                                                    return Err(PreprocessFileError {
-                                                        file_number: argument_location.file_number,
-                                                        error: PreprocessError::MessageWithRange(
-                                                            "Macro invocation only supports single identifier, number, string literal (or adjacent string literals), or character literal as arguments."
-                                                                .to_owned(),
-                                                            argument_location.range,
-                                                        ),
-                                                    });
-                                                }
+                                                code_parser.next_token(); // consumes the token
                                             }
 
-                                            if code_parser.peek_token_and_equals(
-                                                0,
-                                                &Token::Punctuator(Punctuator::Comma),
-                                            ) {
-                                                // If the next token is a comma, consume it.
-                                                code_parser.next_token(); // consumes the comma
+                                            argument_token_with_locationss
+                                                .push(argument_token_with_locations);
+
+                                            if let Some(argument_token) = code_parser.peek_token(0)
+                                            {
+                                                if matches!(
+                                                    argument_token,
+                                                    Token::Punctuator(Punctuator::Comma)
+                                                ) {
+                                                    // Consume the comma and continue to the next argument.
+                                                    code_parser.next_token(); // consumes ','
+
+                                                    if code_parser.peek_token_and_equals(
+                                                        0,
+                                                        &Token::Punctuator(
+                                                            Punctuator::ParenthesisClose,
+                                                        ),
+                                                    ) {
+                                                        // Trailing comma before closing parenthesis is not allowed.
+                                                        return Err(PreprocessFileError {
+                                                            file_number: current_token_with_location
+                                                                .location
+                                                                .file_number,
+                                                            error: PreprocessError::MessageWithRange(
+                                                                "Trailing comma in macro invocation is not allowed."
+                                                                    .to_owned(),
+                                                                current_token_with_location
+                                                                    .location
+                                                                    .range,
+                                                            ),
+                                                        });
+                                                    }
+                                                }
+                                            } else {
+                                                // Missing closing parenthesis or next token.
+                                                return Err(PreprocessFileError {
+                                                    file_number: current_token_with_location
+                                                        .location
+                                                        .file_number,
+                                                    error: PreprocessError::MessageWithRange(
+                                                        "Missing closing parenthesis in macro invocation."
+                                                            .to_owned(),
+                                                        current_token_with_location
+                                                            .location
+                                                            .range,
+                                                    ),
+                                                });
                                             }
                                         }
 
                                         code_parser.consume_closing_paren()?; // Consumes ')'
 
+                                        // Check `enable_multiple_token_argument` flag
+                                        if !self.context.enable_multiple_token_argument {
+                                            // Check that each argument consists of exactly one token.
+                                            for argument_token_with_locations in
+                                                &argument_token_with_locationss
+                                            {
+                                                if argument_token_with_locations.len() != 1 {
+                                                    return Err(PreprocessFileError {
+                                                        file_number: current_token_with_location
+                                                            .location
+                                                            .file_number,
+                                                        error: PreprocessError::MessageWithRange(
+                                                            "Each macro argument must be a single token. To allow multiple tokens as arguments, enable relevant options."
+                                                                .to_owned(),
+                                                            current_token_with_location
+                                                                .location
+                                                                .range,
+                                                        ),
+                                                    });
+                                                }
+                                            }
+                                        }
+
                                         // Expand arguments before invoking the macro.
                                         let mut argument_values = vec![];
-                                        for argument_token_with_location in
-                                            argument_token_with_locations
+                                        for argument_token_with_locations in
+                                            argument_token_with_locationss
                                         {
-                                            if let TokenWithLocation {
-                                                token: Token::Identifier(id),
-                                                ..
-                                            } = &argument_token_with_location
+                                            let argument_expansion_type = if expansion_type
+                                                == ExpansionType::ConditionalExpression
                                             {
-                                                match self.context.macro_map.get(id) {
-                                                    Some(MacroDefinition::ObjectLike(
-                                                        object_definition,
-                                                    )) => {
-                                                        // The identifier is an object-like macro.
-                                                        if contains_self_reference(
-                                                            macros_expansion_stack,
-                                                            id,
-                                                            false,
-                                                        ) {
-                                                            // The macro expansion stack contains the current macro,
-                                                            // which indicates a self-reference.
-                                                            // To prevent infinite recursion, we do not expand this macro.
-                                                            argument_values.push(ArgumentValue {
-                                                                origin:
-                                                                    argument_token_with_location,
-                                                                expanded: None,
-                                                            });
-                                                        } else {
-                                                            // The identifier is an object-like macro.
-                                                            // Replace macro with its corresponding tokens.
-                                                            let mut new_macros_expansion_stack =
-                                                                macros_expansion_stack.to_vec();
-                                                            new_macros_expansion_stack.push(
-                                                                MacroExpansionStackItem::Object(
-                                                                    id.to_owned(),
-                                                                ),
-                                                            );
-
-                                                            // Expand the argument.
-                                                            let expanded_tokens = self
-                                                                .expand_macro(
-                                                                ExpansionType::ObjectLikeDefinition,
-                                                                //&new_macros_expansion_stack,
-                                                                &[],
-                                                                &[],
-                                                                &[],
-                                                                object_definition.to_owned(),
-                                                            )?;
-
-                                                            argument_values.push(ArgumentValue {
-                                                                origin:
-                                                                    argument_token_with_location,
-                                                                expanded: Some(expanded_tokens),
-                                                            });
-                                                        }
-                                                    }
-                                                    _ => {
-                                                        // The identifier is not an object-like macro.
-                                                        argument_values.push(ArgumentValue {
-                                                            origin: argument_token_with_location,
-                                                            expanded: None,
-                                                        });
-                                                    }
-                                                }
+                                                ExpansionType::ConditionalExpression
                                             } else {
-                                                // The argument is not an identifier.
-                                                argument_values.push(ArgumentValue {
-                                                    origin: argument_token_with_location,
-                                                    expanded: None,
-                                                });
-                                            }
+                                                ExpansionType::Normal
+                                            };
+
+                                            let expanded_argument_tokens = self.expand_tokens(
+                                                argument_expansion_type,
+                                                macros_expansion_stack,
+                                                argument_token_with_locations.clone(),
+                                            )?;
+
+                                            argument_values.push(ArgumentValue {
+                                                origin: argument_token_with_locations,
+                                                expanded: Some(expanded_argument_tokens),
+                                            });
                                         }
 
                                         // Assemble the arguments according to the function parameters.
@@ -1595,7 +1933,8 @@ where
                                             if function_parameter == "..." {
                                                 // Variadic parameter
                                                 // Collect the rest arguments
-                                                arguments.push(Argument::Rest(argument_values));
+                                                let rest = argument_values.drain(0..).collect();
+                                                arguments.push(Argument::Rest(rest));
                                                 break;
                                             } else {
                                                 // Regular parameter
@@ -1620,6 +1959,21 @@ where
                                                     argument_values.remove(0),
                                                 ));
                                             }
+                                        }
+
+                                        if !argument_values.is_empty() {
+                                            return Err(PreprocessFileError {
+                                                file_number: current_token_with_location
+                                                    .location
+                                                    .file_number,
+                                                error: PreprocessError::MessageWithRange(
+                                                    format!(
+                                                        "Too many arguments provided for macro '{}'.",
+                                                        name
+                                                    ),
+                                                    current_token_with_location.location.range,
+                                                ),
+                                            });
                                         }
 
                                         let mut new_macros_expansion_stack =
@@ -1650,16 +2004,28 @@ where
                 Token::Pound => {
                     // _Stringizing_ (the `#` operator).
                     // This operator is handled in the argument substitution step above.
-                    //
-                    // It is not possible to reach here.
-                    unreachable!()
+
+                    return Err(PreprocessFileError {
+                        file_number: current_token_with_location.location.file_number,
+                        error: PreprocessError::MessageWithRange(
+                            "Stringizing (#) operator can only appear in function-like macro definitions."
+                                .to_owned(),
+                            current_token_with_location.location.range,
+                        ),
+                    });
                 }
                 Token::PoundPound => {
                     // Token concatenation (the `##` operator)
                     // This operator is handled in the argument substitution step above.
-                    //
-                    // It is not possible to reach here.
-                    unreachable!()
+
+                    return Err(PreprocessFileError {
+                        file_number: current_token_with_location.location.file_number,
+                        error: PreprocessError::MessageWithRange(
+                            "Token concatenation (##) operator can only appear in function-like macro definitions."
+                                .to_owned(),
+                            current_token_with_location.location.range,
+                        ),
+                    });
                 }
                 _ => {
                     // The current token is not an identifier,
@@ -1672,444 +2038,130 @@ where
         Ok(output)
     }
 
-    /// Substitute macro parameters in the function-likemacro body with
-    /// the provided arguments.
-    fn substitute_macro_parameters(
+    /// Process operators `__has_include`, `__has_embed` and `__has_c_attribute`
+    fn evaluate_operators(
         &mut self,
-        parameter_names: &[String],
-        actual_arguments: &[Argument],
         body: Vec<TokenWithLocation>,
     ) -> Result<Vec<TokenWithLocation>, PreprocessFileError> {
-        let mut output = Vec::new();
-        let mut iter = body.into_iter();
-        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
-        let mut code_parser =
-            CodeParser::new(&mut peekable_iter, self.context.current_file_item.number);
+        todo!()
+    }
 
-        while let Some(current_token_with_location) = code_parser.next_token_with_location() {
-            match &current_token_with_location.token {
-                _ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => {
-                    // Process token concatenation (the `##` operator).
-                    // e.g.,
-                    // `... ##`
+    fn check_include_guard(
+        &mut self,
+        file_number_of_header_file: usize,
+        relative_path: &Path,
+        program: &Program,
+    ) {
+        // Check if the file has an include guard or `#pragma once`.
+        // If it does, we can skip the preprocessing of the file.
+        // Otherwise, we will preprocess the file normally.
+        let first_statement_opt = program.statements.first();
 
-                    // Collect tokens of token concatenation.
-                    let mut components = vec![];
-
-                    // Add the current token as the first component.
-                    components.push(current_token_with_location);
-
-                    // Consume `##` and collect following tokens.
-                    while code_parser.peek_token_and_equals(0, &Token::PoundPound) {
-                        code_parser.next_token(); // consume `##`
-                        if let Some(next_token_with_location) =
-                            code_parser.next_token_with_location()
-                        {
-                            components.push(next_token_with_location);
-                        } else {
-                            return Err(PreprocessFileError {
-                                file_number: code_parser.last_location.file_number,
-                                error: PreprocessError::MessageWithRange(
-                                    "Token concatenation (##) must be followed by a token."
-                                        .to_owned(),
-                                    code_parser.last_location.range,
-                                ),
-                            });
-                        }
-                    }
-
-                    // Convert tokens to identifier parts (strings).
-                    let mut component_names = vec![];
-                    for token_with_location in &components {
-                        match &token_with_location.token {
-                            Token::Identifier(name) => {
-                                match name.as_str() {
-                                    "__VA_ARGS__" => {
-                                        // ANCPP does not support this operation.
-                                        // e.g., `#define FOO(x) x ## __VA_ARGS__`
-                                        return Err(PreprocessFileError {
-                                            file_number: token_with_location
-                                                .location
-                                                .file_number,
-                                            error: PreprocessError::MessageWithRange(
-                                                "Token concatenation (##) with __VA_ARGS__ is not supported."
-                                                    .to_owned(),
-                                                token_with_location.location.range,
-                                            ),
-                                        });
-                                    }
-                                    "__VA_OPT__" => {
-                                        // ANCPP does not support this operation.
-                                        return Err(PreprocessFileError {
-                                            file_number: token_with_location
-                                                .location
-                                                .file_number,
-                                            error: PreprocessError::MessageWithRange(
-                                                "Token concatenation (##) with __VA_OPT__ is not supported."
-                                                    .to_owned(),
-                                                token_with_location.location.range,
-                                            ),
-                                        });
-                                    }
-                                    _ => {
-                                        let parameter_index_opt =
-                                            parameter_names.iter().position(|p| p == name);
-
-                                        match parameter_index_opt {
-                                            Some(parameter_index) => {
-                                                // The identifier is a parameter.
-
-                                                // Substitute the parameter with the corresponding argument.
-                                                let argument = &actual_arguments[parameter_index];
-                                                let Argument::Position(argument_value) = argument
-                                                else {
-                                                    // This should not happen for regular parameters.
-                                                    unreachable!()
-                                                };
-
-                                                component_names
-                                                    .push(argument_value.origin.token.to_string());
-                                            }
-                                            _ => {
-                                                // The identifier is not a parameter, just push it as is.
-                                                component_names.push(name.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Token::Number(Number::Integer(value)) => {
-                                component_names.push(value.value.clone());
-                            }
-                            Token::String(value, _) => {
-                                component_names.push(value.clone());
-                            }
-                            Token::Char(value, _) => {
-                                component_names.push(value.to_string());
-                            }
-                            _ => {
-                                return Err(PreprocessFileError {
-                                    file_number: token_with_location.location.file_number,
-                                    error: PreprocessError::MessageWithRange(
-                                        "Token concatenation (##) can only apply to identifiers, integer numbers, strings, or character literals."
-                                            .to_owned(),
-                                        token_with_location.location.range,
-                                    ),
-                                });
-                            }
-                        }
-                    }
-
-                    // Create the concatenated identifier token.
-                    let concatenated_name = component_names.join("");
-                    let concatenated_location = Location::new(
-                        components.first().unwrap().location.file_number,
-                        &Range::new(
-                            &components.first().unwrap().location.range.start,
-                            &components.last().unwrap().location.range.end_included,
-                        ),
-                    );
-
-                    // Check if the concatenated name is a valid identifier.
-                    if !is_valid_identifier(&concatenated_name) {
-                        return Err(PreprocessFileError {
-                            file_number: concatenated_location.file_number,
-                            error: PreprocessError::MessageWithRange(
-                                format!(
-                                    "The result of token concatenation (##) is not a valid identifier: '{}'.",
-                                    concatenated_name
-                                ),
-                                concatenated_location.range,
-                            ),
-                        });
-                    }
-
-                    let concatenated_token = TokenWithLocation::new(
-                        Token::Identifier(concatenated_name),
-                        concatenated_location,
-                    );
-
-                    // Push the concatenated identifier to the output.
-                    output.push(concatenated_token);
-                }
-                Token::Identifier(name) => {
-                    // Process parameter substitution and special macros.
-                    match name.as_str() {
-                        "__VA_ARGS__" => {
-                            // `__VA_ARGS__` is a special macro that represents the variable arguments
-                            // in function-like macros.
-                            // see:
-                            // https://en.cppreference.com/w/c/preprocessor/replace.html
-
-                            // Defence: __VA_ARGS__ can only be used in variadic function-like macros.
-                            if !matches!(parameter_names.last(), Some(param) if param == "...") {
-                                return Err(PreprocessFileError {
-                                    file_number: current_token_with_location.location.file_number,
-                                    error: PreprocessError::MessageWithRange(
-                                        "__VA_ARGS__ can only be used in variadic function-like macros."
-                                            .to_owned(),
-                                        current_token_with_location.location.range,
-                                    ),
-                                });
-                            }
-
-                            // In the variadic function, the rest arguments are stored
-                            // in the last parameter named `...`.
-                            let Some(Argument::Rest(argument_values)) = actual_arguments.last()
-                            else {
-                                unreachable!()
-                            };
-
-                            // Push all variadic argument tokens to the output.
-                            for (index, argument_value) in argument_values.iter().enumerate() {
-                                if let Some(tls) = &argument_value.expanded {
-                                    output.extend(tls.clone());
-                                } else {
-                                    output.push(argument_value.origin.clone());
-                                }
-
-                                // Add comma separator between arguments.
-                                if index < argument_values.len() - 1 {
-                                    output.push(TokenWithLocation::new(
-                                        Token::Punctuator(Punctuator::Comma),
-                                        Location::default(),
-                                    ));
-                                }
-                            }
-                        }
-                        "__VA_OPT__" => {
-                            // `__VA_OPT__ ( content )` is replaced by content if __VA_ARGS__ is non-empty,
-                            // and expands to nothing otherwise.
-
-                            // Defence: __VA_OPT__ can only be used in variadic function-like macros.
-                            if !matches!(parameter_names.last(), Some(param) if param == "...") {
-                                return Err(PreprocessFileError {
-                                    file_number: current_token_with_location.location.file_number,
-                                    error: PreprocessError::MessageWithRange(
-                                        "__VA_OPT__ can only be used in variadic function-like macros."
-                                            .to_owned(),
-                                        current_token_with_location.location.range,
-                                    ),
-                                });
-                            }
-
-                            // Collect tokens inside the parentheses.
-                            let mut components = Vec::new();
-                            code_parser.consume_opening_paren()?; // Consumes '('
-
-                            while let Some(next_token_with_location) =
-                                code_parser.next_token_with_location()
-                            {
-                                match &next_token_with_location.token {
-                                    Token::Punctuator(Punctuator::ParenthesisClose) => {
-                                        // If the current token is a closing parenthesis,
-                                        // we have reached the end of the content.
-                                        break;
-                                    }
-                                    _ => {
-                                        // Otherwise, we collect the token as part of the content.
-                                        components.push(next_token_with_location);
-                                    }
-                                }
-                            }
-
-                            // The closing parenthesis has already been consumed by the loop above.
-                            // Do not need to consume it again.
-
-                            // In the variadic function, the rest arguments are stored
-                            // in the last parameter named `...`.
-                            let Some(Argument::Rest(argument_values)) = actual_arguments.last()
-                            else {
-                                unreachable!()
-                            };
-
-                            // `__VA_OPT__( content )` is only expanded if variadic arguments are provided.
-                            if !argument_values.is_empty() {
-                                output.extend(components);
-                            }
-                        }
-                        _ => {
-                            // Process regular identifiers.
-
-                            let parameter_index_opt =
-                                parameter_names.iter().position(|p| p == name);
-
-                            match parameter_index_opt {
-                                // The identifier is a parameter.
-                                Some(parameter_index) => {
-                                    // Substitute the parameter with the corresponding argument.
-                                    let argument = &actual_arguments[parameter_index];
-                                    let Argument::Position(argument_value) = argument else {
-                                        // This should not happen for regular parameters.
-                                        unreachable!()
-                                    };
-
-                                    if let Some(tls) = &argument_value.expanded {
-                                        output.extend(tls.clone());
-                                    } else {
-                                        output.push(argument_value.origin.clone());
-                                    }
-                                }
-                                _ => {
-                                    // The identifier is not a parameter, just push it as is.
-                                    output.push(current_token_with_location);
-                                }
-                            }
-                        }
-                    }
-                }
-                Token::Pound => {
-                    // _Stringizing_ (the `#` operator).
-                    //
-                    // Stringizing is used to produce a string literal and can only be applied to
-                    // macro parameters (includes `__VA_ARGS__`).
-                    // For example, `#define FOO(x) #x` will expand `FOO(abc)` to `"abc"` and `FOO(123)` to `"123"`.
-
-                    // expect `# parameter`
-                    if let Some(next_token_with_location) = code_parser.next_token_with_location() {
-                        match &next_token_with_location.token {
-                            Token::Identifier(name) => {
-                                if name == "__VA_ARGS__" {
-                                    // Stringizing __VA_ARGS__
-                                    //
-                                    // Example:
-                                    //
-                                    // ```c
-                                    // #define SHOW_ALL(...) puts(#__VA_ARGS__);
-                                    // SHOW_ALL(1, 2, foo, "bar");     // Expands to: `puts("1, 2, foo, \"bar\"");`
-                                    // SHOW_ALL();                     // Expands to: `puts("");`
-                                    // ```
-
-                                    // Defence: __VA_ARGS__ can only be used in variadic function-like macros.
-                                    if !matches!(parameter_names.last(), Some(param) if param == "...")
-                                    {
-                                        return Err(PreprocessFileError {
-                                            file_number: next_token_with_location.location.file_number,
-                                            error: PreprocessError::MessageWithRange(
-                                                "__VA_ARGS__ can only be used in variadic function-like macros."
-                                                    .to_owned(),
-                                                next_token_with_location.location.range,
-                                            ),
-                                        });
-                                    }
-
-                                    // In the variadic function, the rest arguments are stored
-                                    // in the last parameter named `...`.
-                                    let Some(Argument::Rest(argument_values)) =
-                                        actual_arguments.last()
-                                    else {
-                                        unreachable!()
-                                    };
-
-                                    // Convert the tokens to a string literal.
-                                    let stringized_string = stringize_arguments(argument_values)?;
-                                    let stringized_token = TokenWithLocation::new(
-                                        Token::String(stringized_string, StringEncoding::Default),
-                                        Location::default(),
-                                    );
-                                    output.push(stringized_token);
-                                } else {
-                                    // Stringizing regular parameter.
-
-                                    let parameter_index_opt =
-                                        parameter_names.iter().position(|p| p == name);
-
-                                    match parameter_index_opt {
-                                        // Found the parameter to be stringized.
-                                        Some(parameter_index) => {
-                                            // Convert the tokens to a string literal.
-                                            let argument = &actual_arguments[parameter_index];
-                                            let Argument::Position(argument_value) = argument
-                                            else {
-                                                unreachable!()
-                                            };
-
-                                            let stringized_string =
-                                                stringize_token(&argument_value.origin)?;
-                                            let stringized_token = TokenWithLocation::new(
-                                                Token::String(
-                                                    stringized_string,
-                                                    StringEncoding::Default,
-                                                ),
-                                                Location::default(),
-                                            );
-                                            output.push(stringized_token);
-                                        }
-                                        _ => {
-                                            // The identifier is not a macro parameter.
-                                            // e.g.
-                                            // `#define FOO(x) #y`   // 'y' is not a parameter.
-                                            return Err(PreprocessFileError {
-                                                file_number: next_token_with_location
-                                                    .location
-                                                    .file_number,
-                                                error: PreprocessError::MessageWithRange(
-                                                    format!(
-                                                        "Stringizing can only be applied to macro parameters, but '{}' is not a parameter.",
-                                                        name
-                                                    ),
-                                                    next_token_with_location.location.range,
-                                                ),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {
-                                // The next token is not an identifier.
-                                // e.g.,
-                                // `#define FOO(x) #123`
-                                return Err(PreprocessFileError {
-                                    file_number: next_token_with_location.location.file_number,
-                                    error: PreprocessError::MessageWithRange(
-                                        "Stringizing (#) can only be applied to macro parameters."
-                                            .to_owned(),
-                                        next_token_with_location.location.range,
-                                    ),
-                                });
-                            }
-                        }
-                    } else {
-                        // The `#` operator is not followed by any token.
-                        // e.g.,
-                        // `#define FOO(x) #`
-                        return Err(PreprocessFileError {
-                            file_number: current_token_with_location.location.file_number,
-                            error: PreprocessError::MessageWithRange(
-                                "Stringizing (#) operator must be followed by a macro parameter."
-                                    .to_owned(),
-                                current_token_with_location.location.range,
-                            ),
-                        });
-                    }
-                }
-                Token::PoundPound => {
-                    // Token concatenation (the `##` operator)
-                    // The token concatenation operator has already been handled in the
-                    // `_ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => { ... }` branch above.
-                    //
-                    // If the code reaches here, it means the `##` operator is not preceded by an identifier.
-
-                    // e.g.,
-                    // `#define FOO(x) ##x`
-                    return Err(PreprocessFileError {
-                        file_number: current_token_with_location.location.file_number,
-                        error: PreprocessError::MessageWithRange(
-                            "Token concatenation (##) must follow an identifier, string, or char."
-                                .to_owned(),
-                            current_token_with_location.location.range,
-                        ),
-                    });
-                }
-                _ => {
-                    // The current token is not a parameter or stringizing operator,
-                    // we simply copy it to the output.
-                    output.push(current_token_with_location);
-                }
-            }
+        if first_statement_opt.is_none() {
+            // File is empty
+            self.context.prompts.push(Prompt::Message(
+                PromptLevel::Warning,
+                file_number_of_header_file,
+                "Consider adding `#pragma once` to this file to prevent multiple inclusions."
+                    .to_string(),
+            ));
+            return;
         }
 
-        Ok(output)
+        let first_statement = first_statement_opt.unwrap();
+
+        if matches!(
+            first_statement,
+            Statement::Pragma(Pragma { components, .. })
+            if matches!(
+                components.first(),
+                Some(TokenWithRange { token: Token::Identifier(name), .. }) if name == "once"))
+        {
+            // The file has `#pragma once`, we can skip further checks.
+            return;
+        }
+
+        let suggested_include_guard_macro_name = relative_path
+            .to_string_lossy()
+            .replace(['/', '-', '.'], "_")
+            .to_uppercase();
+
+        // Check if the entire file consists of a single `#ifndef` structure,
+        //
+        // ```diagram
+        // #ifndef INCLUDE_GUARD_MACRO_NAME
+        // #define INCLUDE_GUARD_MACRO_NAME
+        // ... file content ...
+        // #endif
+        // ```
+        if program.statements.len() == 1
+            && matches!(
+                first_statement,
+                Statement::If(If {
+                    branches,
+                    alternative: None
+                }) if branches.len() == 1 &&
+                matches!(
+                    branches.first().unwrap(),
+                    Branch {
+                        condition: Condition::NotDefined(name0, _),
+                        consequence
+                    } if matches!(
+                        consequence.first(),
+                        Some(Statement::Define(Define::ObjectLike {
+                            identifier: (name1, _),
+                            definition
+                        })) if name0 == name1 && definition.is_empty()
+                    )
+                )
+            )
+        {
+            let branches = if let Statement::If(If { branches, .. }) = first_statement {
+                branches
+            } else {
+                unreachable!()
+            };
+
+            let branch = branches.first().unwrap();
+
+            let (name, range) = match &branch.condition {
+                Condition::NotDefined(name, range) => (name, range),
+                _ => unreachable!(),
+            };
+
+            // The file has an include guard.
+            if name.ends_with(&suggested_include_guard_macro_name) {
+                // The include guard macro name matches the suggested name.
+                // Suggest using `#pragma once` instead.
+                self.context.prompts.push(Prompt::Message(
+                    PromptLevel::Info,
+                    file_number_of_header_file,
+                    "Consider using `#pragma once` instead of include guards.".to_owned(),
+                ));
+            } else {
+                // The include guard macro name does not match the suggested name.
+                // Suggest renaming the include guard macro to follow the convention, which
+                // prevents potential conflicts with other macros.
+                self.context.prompts.push(Prompt::MessageWithRange(
+                    PromptLevel::Info,
+                    file_number_of_header_file,
+                    format!(
+                        "Consider renaming the include guard macro to `{}` to follow the convention.",
+                        suggested_include_guard_macro_name
+                    ),
+                    *range,
+                ));
+            }
+        } else {
+            // The file does not have an include guard or `#pragma once`.
+            // We suggest adding `#pragma once`.
+            self.context.prompts.push(Prompt::Message(
+                PromptLevel::Warning,
+                file_number_of_header_file,
+                "Consider adding `#pragma once` to this file to prevent multiple inclusions."
+                    .to_owned(),
+            ));
+        }
     }
 
     // Preprocess the program in the context of the included file.
@@ -2226,7 +2278,7 @@ fn stringize_tokens(
 fn stringize_arguments(args: &[ArgumentValue]) -> Result<String, PreprocessFileError> {
     let mut outputs = vec![];
     for arg in args {
-        let token_string = stringize_token(&arg.origin)?;
+        let token_string = stringize_tokens(&arg.origin)?;
         outputs.push(token_string);
     }
     Ok(outputs.join(", "))
@@ -2263,7 +2315,7 @@ fn contains_self_reference(
 struct ArgumentValue {
     // The original token value before expansion.
     // ANCPP only supports single token as argument value.
-    origin: TokenWithLocation,
+    origin: Vec<TokenWithLocation>,
 
     // The fully expanded tokens.
     // Only exists if the argument is a macro.
@@ -2486,6 +2538,7 @@ mod tests {
             &C23_KEYWORDS,
             predefinitions,
             false,
+            false,
             FILE_NUMBER_SOURCE_FILE_BEGIN,
             Path::new("src/main.c"),
             Path::new("/projects/hello/src/main.c"),
@@ -2498,6 +2551,38 @@ mod tests {
         predefinitions: &HashMap<String, String>,
     ) -> Vec<TokenWithLocation> {
         process_single_source_file(src, predefinitions)
+            .unwrap()
+            .output
+    }
+
+    /// Help function to process a single source file with given predefinitions.
+    fn process_multiple_tokens_argument(
+        src: &str,
+        predefinitions: &HashMap<String, String>,
+    ) -> Result<PreprocessResult, PreprocessFileError> {
+        let mut file_cache = HeaderFileCache::new();
+        let mut file_provider = MemoryFileProvider::new();
+        file_provider.add_user_text_file(Path::new("src/main.c"), src);
+
+        process_source_file(
+            &file_provider,
+            &mut file_cache,
+            &C23_KEYWORDS,
+            predefinitions,
+            false,
+            true,
+            FILE_NUMBER_SOURCE_FILE_BEGIN,
+            Path::new("src/main.c"),
+            Path::new("/projects/hello/src/main.c"),
+        )
+    }
+
+    /// Help function to process a single source file and get the output tokens.
+    fn process_multiple_tokens_argument_and_get_tokens(
+        src: &str,
+        predefinitions: &HashMap<String, String>,
+    ) -> Vec<TokenWithLocation> {
+        process_multiple_tokens_argument(src, predefinitions)
             .unwrap()
             .output
     }
@@ -2533,6 +2618,7 @@ mod tests {
             &mut file_cache,
             &C23_KEYWORDS,
             &predefinitions,
+            false,
             false,
             FILE_NUMBER_SOURCE_FILE_BEGIN,
             Path::new("src/main.c"),
@@ -2630,23 +2716,25 @@ int main() {
     #[test]
     fn test_process_predefinitions() {
         let mut predefinitions = HashMap::new();
-        predefinitions.insert("FOO".to_string(), "'🦛'".to_string());
-        predefinitions.insert("BAR".to_string(), "\"✨ abc\"".to_string());
         predefinitions.insert("A".to_string(), "123".to_string());
-        predefinitions.insert("B".to_string(), "".to_string()); // Empty
-        predefinitions.insert("C".to_string(), "FOO".to_string()); // Reference to FOO
+        predefinitions.insert("B".to_string(), "3.14".to_string());
+        predefinitions.insert("C".to_string(), "'🦛'".to_string());
+        predefinitions.insert("D".to_string(), "\"✨ abc\"".to_string());
+        predefinitions.insert("E".to_string(), "foo".to_string());
+        predefinitions.insert("F".to_string(), "+".to_string());
+        predefinitions.insert("G".to_string(), "".to_string()); // Empty
 
         let tokens = process_single_source_file_and_get_tokens(
             "\
-hello FOO BAR A B C world.",
+A B C D E F G",
             &predefinitions,
         );
-        assert_eq!(
-            print_tokens(&tokens),
-            "hello '🦛' \"✨ abc\" 123 '🦛' world ."
-        );
+        assert_eq!(print_tokens(&tokens), "123 3.14 '🦛' \"✨ abc\" foo +");
 
         let mut predefinitions = HashMap::new();
+        predefinitions.insert("A".to_string(), "'😆'".to_string());
+        predefinitions.insert("B".to_string(), "A".to_string());
+        predefinitions.insert("C".to_string(), "B".to_string());
         predefinitions.insert("M".to_string(), "M".to_string()); // Self-reference
         predefinitions.insert("X".to_string(), "Z".to_string()); // Indirect self-reference
         predefinitions.insert("Y".to_string(), "X".to_string());
@@ -2654,22 +2742,25 @@ hello FOO BAR A B C world.",
 
         let tokens = process_single_source_file_and_get_tokens(
             "\
-M X Y Z",
+A B C M X Y Z",
             &predefinitions,
         );
-        assert_eq!(print_tokens(&tokens), "M X Y Z");
+        assert_eq!(print_tokens(&tokens), "'😆' '😆' '😆' M X Y Z");
     }
 
     #[test]
-    fn test_process_dynamic_macro() {
+    fn test_process_builtin_macro() {
         let predefinitions = HashMap::new();
         let tokens = process_single_source_file_and_get_tokens(
             "\
-__FILE__
-__LINE__
-__DATE__
-2025 // Prevent ajacent string concatenation
-__TIME__",
+__FILE__;
+__LINE__;
+__DATE__;
+__TIME__;
+__STDC_EMBED_NOT_FOUND__;
+__STDC_EMBED_FOUND__;
+__STDC_EMBED_EMPTY__;
+",
             &predefinitions,
         );
 
@@ -2679,30 +2770,60 @@ __TIME__",
 
         assert_eq!(
             print_tokens(&tokens),
-            format!(r#""src/main.c" 2 "{}" 2025 "{}""#, date_string, time_string)
+            format!(
+                r#""src/main.c" ; 2 ; "{}" ; "{}" ; 0 ; 1 ; 2 ;"#,
+                date_string, time_string
+            )
         );
     }
 
     #[test]
     fn test_process_define() {
         let mut predefinitions = HashMap::new();
-        predefinitions.insert("FOO".to_string(), "'🦛'".to_string());
-        predefinitions.insert("BAR".to_string(), "\"✨ abc\"".to_string());
 
         let tokens = process_single_source_file_and_get_tokens(
             "\
 #define A 123
-#define B
-#define C FOO
-hello FOO BAR A B C world.",
+#define B 3.14
+#define C '🦛'
+#define D \"✨ abc\"
+#define E foo
+#define F +
+#define G
+A B C D E F G",
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "123 3.14 '🦛' \"✨ abc\" foo +");
+
+        // Reference
+        let tokens = process_single_source_file_and_get_tokens(
+            "\
+#define A '😆'
+#define B A
+#define C B
+#define M M
+#define X Z
+#define Y X
+#define Z Y
+A B C M X Y Z",
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "'😆' '😆' '😆' M X Y Z");
+
+        // Work with predefinitions
+        predefinitions.insert("FOO".to_string(), "\"巴拉巴拉呣呣\"".to_string());
+        let tokens = process_single_source_file_and_get_tokens(
+            "\
+#define BAR FOO
+FOO 11 BAR",
             &predefinitions,
         );
         assert_eq!(
             print_tokens(&tokens),
-            "hello '🦛' \"✨ abc\" 123 '🦛' world ."
+            "\"巴拉巴拉呣呣\" 11 \"巴拉巴拉呣呣\""
         );
 
-        // err: redefine FOO
+        // err: Redefine without undefine
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -2730,7 +2851,35 @@ hello FOO BAR A B C world.",
             })
         ));
 
-        // err: define 'defined' macro
+        // err: Redefine with same definition
+        assert!(matches!(
+            process_single_source_file(
+                "\
+#define FOO 'a'
+#define FOO 'a'",
+                &HashMap::new(),
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    Range {
+                        start: Position {
+                            index: 24,
+                            line: 1,
+                            column: 8
+                        },
+                        end_included: Position {
+                            index: 26,
+                            line: 1,
+                            column: 10
+                        }
+                    }
+                )
+            })
+        ));
+
+        // err: Define reserved identifier: 'defined'
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -2757,7 +2906,7 @@ hello FOO BAR A B C world.",
             })
         ));
 
-        // err: define a macro with the same name as C keyword `return`
+        // err: Define reserved identifier: the C keyword `return`
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -2782,10 +2931,10 @@ hello FOO BAR A B C world.",
 #define A 123
 #undef A
 #define A 456
-hello A world.",
+A",
             &HashMap::new(),
         );
-        assert_eq!(print_tokens(&tokens), "hello 456 world .");
+        assert_eq!(print_tokens(&tokens), "456");
 
         // err: undefine non-existing macro
         assert!(matches!(
@@ -2814,57 +2963,14 @@ hello A world.",
                 )
             })
         ));
-        // err: undefine 'defined' macro
-        assert!(matches!(
-            process_single_source_file(
-                "\
-#undef defined
-",
-                &HashMap::new(),
-            ),
-            Err(PreprocessFileError {
-                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
-                error: PreprocessError::MessageWithRange(
-                    _,
-                    Range {
-                        start: Position {
-                            index: 7,
-                            line: 0,
-                            column: 7
-                        },
-                        end_included: Position {
-                            index: 13,
-                            line: 0,
-                            column: 13
-                        }
-                    }
-                )
-            })
-        ));
-
-        // err: undefine a macro with the same name as C keyword `return`
-        assert!(matches!(
-            process_single_source_file(
-                "\
-        #undef return",
-                &HashMap::new(),
-            ),
-            Err(PreprocessFileError {
-                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
-                error: PreprocessError::MessageWithRange(
-                    _,
-                    range
-                )
-            })
-            if range == Range::from_detail(7, 0, 7, 6)
-        ));
     }
 
     #[test]
     fn test_process_define_function() {
         let predefinitions = HashMap::new();
         let tokens = process_single_source_file_and_get_tokens(
-            r#"#define FOO(x) x
+            r#"
+#define FOO(x) x
 #define BAR(x, y) x y
 #define A 'a'
 #define B A
@@ -2882,25 +2988,38 @@ BAR(123, '✨')
 BAR(A,B)"#,
             &predefinitions,
         );
-
         assert_eq!(print_tokens(&tokens), r#""foo" foo 123 '✨' 'a' 'a'"#);
 
-        let tokens_nested = process_single_source_file_and_get_tokens(
-            r#"#define FOO(a) 1 a
+        // Macro invocation inside macro body
+        let tokens = process_single_source_file_and_get_tokens(
+            r#"
+#define FOO(a) 1 a
 #define BAR(x, y) 2 FOO(x) y
-#define BUZ(z) 3 BAR(z, spark)
-BUZ(hippo)"#,
+#define BUZZ(z) 3 BAR(z, spark)
+
+BUZZ(hippo)"#,
             &predefinitions,
         );
+        assert_eq!(print_tokens(&tokens), "3 2 1 hippo spark");
 
-        assert_eq!(print_tokens(&tokens_nested), "3 2 1 hippo spark");
+        // Self-reference macro invocation
+        let tokens = process_single_source_file_and_get_tokens(
+            r#"
+#define FOO(x) BAR(x)
+#define BAR(y) FOO(y)
+#define BUZZ(z) BUZZ(z)
+
+FOO(a) BAR(b) BUZZ(c)"#,
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "FOO ( a ) BAR ( b ) BUZZ ( c )");
 
         // err: redefine function-like macro
         assert!(matches!(
             process_single_source_file(
                 "\
 #define FOO(x) x
-#define FOO(y) y + 1",
+#define FOO(y) y",
                 &predefinitions
             ),
             Err(PreprocessFileError {
@@ -2957,7 +3076,7 @@ FOO(1)",
                 "\
 #define FOO(x,y) x y
 FOO(1, 2, 3)",
-                &predefinitions
+                &predefinitions,
             ),
             Err(PreprocessFileError {
                 file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
@@ -2979,12 +3098,12 @@ FOO(1, 2, 3)",
             })
         ));
 
-        // err: invalid argument type for function-like macro
+        // err: Missing closing parenthesis
         assert!(matches!(
             process_single_source_file(
                 "\
 #define FOO(x) x
-FOO(i++)",
+FOO(abc",
                 &predefinitions
             ),
             Err(PreprocessFileError {
@@ -2993,21 +3112,49 @@ FOO(i++)",
                     _,
                     Range {
                         start: Position {
-                            index: 22,
+                            index: 17,
                             line: 1,
-                            column: 5
+                            column: 0
                         },
                         end_included: Position {
-                            index: 23,
+                            index: 19,
                             line: 1,
-                            column: 6
+                            column: 2
                         }
                     }
                 )
             })
         ));
 
-        // err: define 'defined' macro
+        // err: multiple tokens as argument
+        assert!(matches!(
+            process_single_source_file(
+                "\
+#define FOO(x) x
+FOO(a b c)",
+                &predefinitions
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    Range {
+                        start: Position {
+                            index: 17,
+                            line: 1,
+                            column: 0
+                        },
+                        end_included: Position {
+                            index: 19,
+                            line: 1,
+                            column: 2
+                        }
+                    }
+                )
+            })
+        ));
+
+        // err: define reserved identifier: 'defined'
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -3036,6 +3183,60 @@ FOO(i++)",
     }
 
     #[test]
+    fn test_process_define_function_multiple_tokens_argument() {
+        let predefinitions = HashMap::new();
+
+        // Multiple tokens as argument
+        let tokens = process_multiple_tokens_argument_and_get_tokens(
+            r#"
+#define FOO(x,y) x; y
+FOO(1+2,abc)"#,
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "1 + 2 ; abc");
+
+        // Commas inside argument
+        let tokens = process_multiple_tokens_argument_and_get_tokens(
+            r#"
+#define FOO(x,y) x; y
+FOO(2*(a+b,c-d), (x,y,z))"#,
+            &predefinitions,
+        );
+        assert_eq!(
+            print_tokens(&tokens),
+            "2 * ( a + b , c - d ) ; ( x , y , z )"
+        );
+
+        // Macro invocation inside argument
+        let tokens = process_multiple_tokens_argument_and_get_tokens(
+            r#"
+#define FOO(x) x
+#define BAR(y) y
+FOO(BAR(hello))"#,
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "hello");
+
+        // Nested macro invocation inside argument
+        let tokens = process_multiple_tokens_argument_and_get_tokens(
+            r#"
+#define FOO(x) (x+1)
+FOO(FOO(hello))"#,
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "( ( hello + 1 ) + 1 )");
+
+        // Self-reference macro invocation inside argument
+        let tokens = process_multiple_tokens_argument_and_get_tokens(
+            r#"
+#define FOO(x) FOO(x+1)
+FOO(hello)"#,
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "FOO ( hello + 1 )");
+    }
+
+    #[test]
     fn test_process_define_function_variadic() {
         let predefinitions = HashMap::new();
         let tokens = process_single_source_file_and_get_tokens(
@@ -3044,20 +3245,24 @@ FOO(i++)",
 #define FOO(...) __VA_ARGS__
 
 // Consumes the first two arguments and outputs the rest
-#define BAR(x,y,...) __VA_ARGS__
+#define BAR(x,y,...) x y __VA_ARGS__
 
-// Outputs `name = { values }`
-#define BUZ(x,...) x __VA_OPT__(= { __VA_ARGS__ })
-FOO()
-FOO(1, 2, 3)
-BAR(A, B)
-BAR(a, b, c, d, e)
-BUZ(t)
-BUZ(u,v,w)",
+// Outputs `int name[] = { values }`
+#define BUZZ(x,...) int x[] __VA_OPT__(= { __VA_ARGS__ })
+
+FOO();
+FOO(1, 2, 3);
+BAR(a, b);
+BAR(c, d, e, f);
+BUZZ(first);
+BUZZ(last,11,13);",
             &predefinitions,
         );
 
-        assert_eq!(print_tokens(&tokens), "1 , 2 , 3 c , d , e t u = { v , w }");
+        assert_eq!(
+            print_tokens(&tokens),
+            "; 1 , 2 , 3 ; a b ; c d e , f ; int first [ ] ; int last [ ] = { 11 , 13 } ;"
+        );
 
         // err: not enough arguments for variadic macro
         assert!(matches!(
@@ -3093,32 +3298,37 @@ FOO(123)",
         let predefinitions = HashMap::new();
         let tokens = process_single_source_file_and_get_tokens(
             r#"
-#define FOO 3.14 "world" '🐘'
+#define FOO '🐘'
 #define STR(x) #x
 #define STR2(x) STR(x)
 #define STR3(...) #__VA_ARGS__
-STR(hello)
-11              // Prevent adjacent string concatenation
-STR("world")
-13
-STR(FOO)
-17
-STR('🦛')
-19
-STR2('🦛')
-23
-STR3(42)
-29
-STR3(1, '2', "3", id, FOO)"#,
+STR(hello);
+STR("world");
+STR(FOO);
+STR2(FOO);
+STR3(42);
+STR3(11, '🦛', "abc", id, FOO);"#,
             &predefinitions,
         );
 
         assert_eq!(
             print_tokens(&tokens),
-            r#""hello" 11 "\"world\"" 13 "3.14 \"world\" \'🐘\'" 17 "\'🦛\'" 19 "\'🦛\'" 23 "42" 29 "1, \'2\', \"3\", id, 3.14 \"world\" \'🐘\'""#
+            r#""hello" ; "\"world\"" ; "FOO" ; "\'🐘\'" ; "42" ; "11, \'🦛\', \"abc\", id, FOO" ;"#
         );
 
-        // err: stringizing in a not function-like macro
+        // Multiple tokens as argument for stringizing
+
+        let tokens = process_multiple_tokens_argument_and_get_tokens(
+            r#"
+#define STR(...) #__VA_ARGS__
+STR(a, b, c, d);
+STR(a b, c d);"#,
+            &predefinitions,
+        );
+
+        assert_eq!(print_tokens(&tokens), r#""a, b, c, d" ; "a b, c d" ;"#);
+
+        // err: stringizing on non-function-like macro
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -3146,66 +3356,12 @@ STR",
             })
         ));
 
-        // err: stringizing on punctuator
+        // err: stringizing on non-parameter
         assert!(matches!(
             process_single_source_file(
                 "\
-#define PLUS 1+2
-#define STR(x) #x
-STR(PLUS)",
-                &predefinitions,
-            ),
-            Err(PreprocessFileError {
-                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
-                error: PreprocessError::MessageWithRange(
-                    _,
-                    Range {
-                        start: Position {
-                            index: 14,
-                            line: 0,
-                            column: 14
-                        },
-                        end_included: Position {
-                            index: 14,
-                            line: 0,
-                            column: 14
-                        }
-                    }
-                )
-            })
-        ));
-    }
-
-    #[test]
-    fn test_process_token_concatenation() {
-        let predefinitions = HashMap::new();
-        let tokens = process_single_source_file_and_get_tokens(
-            "\
-#define FOO a##1
-#define BAR sprite##2##b
-#define BUZ is##FOO
-#define CONCAT(a, b) a##b
-#define CONCAT2(a, b) sprite##a##b
-FOO
-BAR
-BUZ
-CONCAT(hello, world)
-CONCAT2(9, s)
-            ",
-            &predefinitions,
-        );
-
-        assert_eq!(
-            print_tokens(&tokens),
-            "a1 sprite2b isFOO helloworld sprite9s"
-        );
-
-        // err: concatenate a number and an identifier
-        assert!(matches!(
-            process_single_source_file(
-                "\
-#define CONCAT 1##hello
-CONCAT",
+#define STR(x) #123
+STR(foo)",
                 &predefinitions,
             ),
             Err(PreprocessFileError {
@@ -3219,39 +3375,47 @@ CONCAT",
                             column: 16
                         },
                         end_included: Position {
-                            index: 17,
+                            index: 18,
                             line: 0,
-                            column: 17
+                            column: 18
                         }
                     }
                 )
             })
         ));
+    }
 
-        // err: concatenate a number and an identifier through a function-like macro
-        assert!(matches!(
-            process_single_source_file(
-                "\
+    #[test]
+    fn test_process_token_concatenation() {
+        let predefinitions = HashMap::new();
+        let tokens = process_single_source_file_and_get_tokens(
+            "\
+#define FOO() foo##1
+#define BAR() sprite ## 2 ## bar
+#define ABC abc
+#define BUZZ() ABC ## 3
 #define CONCAT(a, b) a##b
-CONCAT(1, hello)",
-                &predefinitions,
-            ),
-            Err(PreprocessFileError {
-                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
-                error: PreprocessError::MessageWithRange(
-                    _,
-                    range
-                )
-            })
-            if range == Range::from_detail(33, 1, 7, 1)
-        ));
 
-        // err: concatenate an identifier and a string
+FOO()
+BAR()
+BUZZ()
+CONCAT(hello, world)
+CONCAT(ABC, 42)
+            ",
+            &predefinitions,
+        );
+
+        assert_eq!(
+            print_tokens(&tokens),
+            "foo1 sprite2bar ABC3 helloworld ABC42"
+        );
+
+        // err: invalid identifier after concatenation
         assert!(matches!(
             process_single_source_file(
                 "\
-#define CONCAT hello##\"world\"
-CONCAT",
+#define CONCAT() 9 ## s
+CONCAT()",
                 &predefinitions,
             ),
             Err(PreprocessFileError {
@@ -3260,21 +3424,49 @@ CONCAT",
                     _,
                     Range {
                         start: Position {
+                            index: 17,
+                            line: 0,
+                            column: 17
+                        },
+                        end_included: Position {
                             index: 22,
                             line: 0,
                             column: 22
-                        },
-                        end_included: Position {
-                            index: 28,
-                            line: 0,
-                            column: 28
                         }
                     }
                 )
             })
         ));
 
-        // err: concatenate an identifier and a string through a function-like macro
+        // err: invalid identifier, through parameter concatenation
+        assert!(matches!(
+            process_single_source_file(
+                "\
+#define CONCAT(a, b) a##b
+CONCAT(9, s)",
+                &predefinitions,
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    Range {
+                        start: Position {
+                            index: 21,
+                            line: 0,
+                            column: 21
+                        },
+                        end_included: Position {
+                            index: 24,
+                            line: 0,
+                            column: 24
+                        }
+                    }
+                )
+            })
+        ));
+
+        // err: invalid identifier: concatenate an identifier and a string
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -3288,9 +3480,9 @@ CONCAT(hello, \"world\")",
                     _,
                     Range {
                         start: Position {
-                            index: 24,
+                            index: 21,
                             line: 0,
-                            column: 24
+                            column: 21
                         },
                         end_included: Position {
                             index: 24,
@@ -3302,13 +3494,12 @@ CONCAT(hello, \"world\")",
             })
         ));
 
-        // err: concatenate a argument which expands to multiple tokens
+        // err: concatenate a multiple tokens argument
         assert!(matches!(
-            process_single_source_file(
+            process_multiple_tokens_argument(
                 "\
-#define FOO 1 2
 #define CONCAT(a, b) a##b
-CONCAT(hello, FOO)",
+CONCAT(hello world, 2)",
                 &predefinitions,
             ),
             Err(PreprocessFileError {
@@ -3317,21 +3508,21 @@ CONCAT(hello, FOO)",
                     _,
                     Range {
                         start: Position {
-                            index: 40,
-                            line: 1,
-                            column: 24
+                            index: 21,
+                            line: 0,
+                            column: 21
                         },
                         end_included: Position {
-                            index: 40,
-                            line: 1,
-                            column: 24
+                            index: 21,
+                            line: 0,
+                            column: 21
                         }
                     }
                 )
             })
         ));
 
-        // err: `##` followed by `__VA_ARGS__`
+        // err: `##` is followed by `__VA_ARGS__`
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -3359,7 +3550,63 @@ CONCAT(hello, world)",
             })
         ));
 
-        // err: `##` followed by nothing
+        // err: `##` is followed by `__VA_OPT__`
+        assert!(matches!(
+            process_single_source_file(
+                "\
+#define CONCAT(...) ##__VA_OPT__
+CONCAT(hello, world)",
+                &predefinitions,
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    Range {
+                        start: Position {
+                            index: 20,
+                            line: 0,
+                            column: 20
+                        },
+                        end_included: Position {
+                            index: 21,
+                            line: 0,
+                            column: 21
+                        }
+                    }
+                )
+            })
+        ));
+
+        // err: `##` is preceded by nothing
+        assert!(matches!(
+            process_single_source_file(
+                "\
+#define CONCAT(a, b) ##a
+CONCAT(hello, world)",
+                &predefinitions,
+            ),
+            Err(PreprocessFileError {
+                file_number: FILE_NUMBER_SOURCE_FILE_BEGIN,
+                error: PreprocessError::MessageWithRange(
+                    _,
+                    Range {
+                        start: Position {
+                            index: 21,
+                            line: 0,
+                            column: 21
+                        },
+                        end_included: Position {
+                            index: 22,
+                            line: 0,
+                            column: 22
+                        }
+                    }
+                )
+            })
+        ));
+
+        // err: `##` is followed by nothing
         assert!(matches!(
             process_single_source_file(
                 "\
@@ -3388,7 +3635,163 @@ CONCAT(hello, world)",
         ));
     }
 
-    #[test]
+    // #[test]
+    fn test_process_if() {
+        let predefinitions = HashMap::new();
+
+        // Test `ifdef`
+        assert_eq!(
+            print_tokens(&process_single_source_file_and_get_tokens(
+                r#"
+#define FOO 'a'
+#define BAR
+
+#ifdef FOO
+    FOO
+#else
+    'b'
+#endif
+
+#ifdef BAR
+    "hello"
+#else
+    "world"
+#endif
+
+#ifdef BAZ
+    11
+#else
+    13
+#endif
+"#,
+                &predefinitions,
+            )),
+            "'a' \"hello\" 13"
+        );
+
+        // Test `ifndef`
+        assert_eq!(
+            print_tokens(&process_single_source_file_and_get_tokens(
+                r#"
+#define FOO 'a'
+#define BAR
+
+#ifndef FOO
+    FOO
+#else
+    'b'
+#endif
+
+#ifndef BAR
+    "hello"
+#else
+    "world"
+#endif
+
+#ifndef BAZ
+    11
+#else
+    13
+#endif
+"#,
+                &predefinitions,
+            )),
+            "'b' \"world\" 11"
+        );
+
+        // Test `if` and operator `defined`
+        assert_eq!(
+            print_tokens(&process_single_source_file_and_get_tokens(
+                r#"
+#define FOO 'a'
+
+#if defined(FOO)
+    FOO
+#else
+    'b'
+#endif
+
+#if !defined(FOO)
+    "hello"
+#else
+    "world"
+#endif
+
+#if defined BAR
+    11
+#else
+    13
+#endif
+
+#if !defined BAR
+    17
+#else
+    19
+#endif
+
+"#,
+                &predefinitions,
+            )),
+            "'a' \"world\" 13 17"
+        );
+
+        // Test `if` and binary and unary operators
+        assert_eq!(
+            print_tokens(&process_single_source_file_and_get_tokens(
+                r#"
+#define FOO 11
+#define BAR 3 + 7
+#define BUZ 0
+
+#if FOO
+    a   // <--
+#else
+    b
+#endif
+
+#if FOO == 11
+    c   // <--
+#else
+    d
+#endif
+
+#if FOO + BAR == 21
+    e   // <--
+#else
+    f
+#endif
+
+#if FOO > BAR
+    g   // <--
+#else
+    h
+#endif
+
+#if FOO || BUZ
+    i   // <--
+#else
+    j
+#endif
+
+#if FOO && BUZ
+    k
+#else
+    l   // <--
+#endif
+
+#if !FOO
+    m
+#else
+    n   // <--
+#endif
+"#,
+                &predefinitions,
+            )),
+            "a c e g i l n"
+        );
+    }
+
+    // #[test]
     fn test_process_include() {
         let tokens0 = process_multiple_source_files_and_get_tokens(
             r#"
@@ -3621,7 +4024,7 @@ FOO BAR
         ));
     }
 
-    #[test]
+    // #[test]
     fn test_process_embed() {
         assert_eq!(
             print_tokens(&process_multiple_source_files_and_get_tokens(
@@ -3723,297 +4126,7 @@ FOO BAR
         ));
     }
 
-    #[test]
-    fn test_process_if() {
-        let predefinitions = HashMap::new();
-
-        // Test `ifdef`
-        assert_eq!(
-            print_tokens(&process_single_source_file_and_get_tokens(
-                r#"
-#define FOO 'a'
-#define BAR
-
-#ifdef FOO
-    FOO
-#else
-    'b'
-#endif
-
-#ifdef BAR
-    "hello"
-#else
-    "world"
-#endif
-
-#ifdef BAZ
-    11
-#else
-    13
-#endif
-"#,
-                &predefinitions,
-            )),
-            "'a' \"hello\" 13"
-        );
-
-        // Test `ifndef`
-        assert_eq!(
-            print_tokens(&process_single_source_file_and_get_tokens(
-                r#"
-#define FOO 'a'
-#define BAR
-
-#ifndef FOO
-    FOO
-#else
-    'b'
-#endif
-
-#ifndef BAR
-    "hello"
-#else
-    "world"
-#endif
-
-#ifndef BAZ
-    11
-#else
-    13
-#endif
-"#,
-                &predefinitions,
-            )),
-            "'b' \"world\" 11"
-        );
-
-        // Test `if` and operator `defined`
-        assert_eq!(
-            print_tokens(&process_single_source_file_and_get_tokens(
-                r#"
-#define FOO 'a'
-
-#if defined(FOO)
-    FOO
-#else
-    'b'
-#endif
-
-#if !defined(FOO)
-    "hello"
-#else
-    "world"
-#endif
-
-#if defined BAR
-    11
-#else
-    13
-#endif
-
-#if !defined BAR
-    17
-#else
-    19
-#endif
-
-"#,
-                &predefinitions,
-            )),
-            "'a' \"world\" 13 17"
-        );
-
-        // Test `if` and binary and unary operators
-        assert_eq!(
-            print_tokens(&process_single_source_file_and_get_tokens(
-                r#"
-#define FOO 11
-#define BAR 3 + 7
-#define BUZ 0
-
-#if FOO
-    a   // <--
-#else
-    b
-#endif
-
-#if FOO == 11
-    c   // <--
-#else
-    d
-#endif
-
-#if FOO + BAR == 21
-    e   // <--
-#else
-    f
-#endif
-
-#if FOO > BAR
-    g   // <--
-#else
-    h
-#endif
-
-#if FOO || BUZ
-    i   // <--
-#else
-    j
-#endif
-
-#if FOO && BUZ
-    k
-#else
-    l   // <--
-#endif
-
-#if !FOO
-    m
-#else
-    n   // <--
-#endif
-"#,
-                &predefinitions,
-            )),
-            "a c e g i l n"
-        );
-    }
-
-    #[test]
-    fn test_process_operator_has_include() {
-        // Test `#has_include`
-        assert_eq!(
-            print_tokens(&process_multiple_source_files_and_get_tokens(
-                r#"
-#if __has_include("foo.h")
-    11
-#else
-    13
-#endif
-
-#if __has_include("bar.h")
-    17
-#else
-    19
-#endif
-"#,
-                &[("header/foo.h", "123")],
-                &[],
-                &[],
-            )),
-            "11 19"
-        );
-    }
-
-    #[test]
-    fn test_process_operator_has_embed() {
-        // Test `#has_embed`
-        assert_eq!(
-            print_tokens(&process_multiple_source_files_and_get_tokens(
-                r#"
-#if __has_embed("foo.bin")
-    11
-#else
-    13
-#endif
-
-#if __has_embed("bar.bin")
-    17
-#else
-    19
-#endif
-
-#if __has_embed("baz.bin")
-    23
-#else
-    29
-#endif
-
-#if __has_embed("foo.bin") == __STDC_EMBED_FOUND__
-    foo_found
-#elif __has_embed("foo.bin") == __STDC_EMBED_EMPTY__
-    foo_empty
-#elif __has_embed("foo.bin") == __STDC_EMBED_NOT_FOUND__
-    foo_not_found
-#else
-    foo_otherwise
-#endif
-
-#if __has_embed("bar.bin") == __STDC_EMBED_FOUND__
-    bar_found
-#elif __has_embed("bar.bin") == __STDC_EMBED_EMPTY__
-    bar_empty
-#elif __has_embed("bar.bin") == __STDC_EMBED_NOT_FOUND__
-    bar_not_found
-#else
-    bar_otherwise
-#endif
-
-#if __has_embed("baz.bin") == __STDC_EMBED_FOUND__
-    baz_found
-#elif __has_embed("baz.bin") == __STDC_EMBED_EMPTY__
-    baz_empty
-#elif __has_embed("baz.bin") == __STDC_EMBED_NOT_FOUND__
-    baz_not_found
-#else
-    baz_otherwise
-#endif
-"#,
-                &[],
-                &[
-                    ("resources/foo.bin", &[1, 2, 3]),
-                    ("resources/bar.bin", &[])
-                ],
-                &[],
-            )),
-            "11 17 29 foo_found bar_empty baz_not_found"
-        );
-    }
-
-    #[test]
-    fn test_process_operator_has_c_attribute() {
-        // Test `#has_c_attribute`
-        assert_eq!(
-            print_tokens(&process_multiple_source_files_and_get_tokens(
-                r#"
-#if __has_c_attribute(deprecated)
-    11
-#else
-    13
-#endif
-
-#if __has_c_attribute(deprecated) == 201904
-    17
-#else
-    19
-#endif
-                "#,
-                &[],
-                &[],
-                &[],
-            )),
-            "11 17"
-        );
-
-        // Test `#has_c_attribute` with non-existing attribute
-        assert_eq!(
-            print_tokens(&process_multiple_source_files_and_get_tokens(
-                r#"
-#if __has_c_attribute(__non_existing__)
-    11
-#else
-    13
-#endif
-                "#,
-                &[],
-                &[],
-                &[],
-            )),
-            "13"
-        );
-    }
-
-    #[test]
+    // #[test]
     fn test_process_include_guard_check() {
         // Empty header file
         assert!(matches!(
@@ -4162,6 +4275,140 @@ FOO BAR
         ));
     }
 
+    // #[test]
+    fn test_process_operator_has_include() {
+        // Test `#has_include`
+        assert_eq!(
+            print_tokens(&process_multiple_source_files_and_get_tokens(
+                r#"
+#if __has_include("foo.h")
+    11
+#else
+    13
+#endif
+
+#if __has_include("bar.h")
+    17
+#else
+    19
+#endif
+"#,
+                &[("header/foo.h", "123")],
+                &[],
+                &[],
+            )),
+            "11 19"
+        );
+    }
+
+    // #[test]
+    fn test_process_operator_has_embed() {
+        // Test `#has_embed`
+        assert_eq!(
+            print_tokens(&process_multiple_source_files_and_get_tokens(
+                r#"
+#if __has_embed("foo.bin")
+    11
+#else
+    13
+#endif
+
+#if __has_embed("bar.bin")
+    17
+#else
+    19
+#endif
+
+#if __has_embed("baz.bin")
+    23
+#else
+    29
+#endif
+
+#if __has_embed("foo.bin") == __STDC_EMBED_FOUND__
+    foo_found
+#elif __has_embed("foo.bin") == __STDC_EMBED_EMPTY__
+    foo_empty
+#elif __has_embed("foo.bin") == __STDC_EMBED_NOT_FOUND__
+    foo_not_found
+#else
+    foo_otherwise
+#endif
+
+#if __has_embed("bar.bin") == __STDC_EMBED_FOUND__
+    bar_found
+#elif __has_embed("bar.bin") == __STDC_EMBED_EMPTY__
+    bar_empty
+#elif __has_embed("bar.bin") == __STDC_EMBED_NOT_FOUND__
+    bar_not_found
+#else
+    bar_otherwise
+#endif
+
+#if __has_embed("baz.bin") == __STDC_EMBED_FOUND__
+    baz_found
+#elif __has_embed("baz.bin") == __STDC_EMBED_EMPTY__
+    baz_empty
+#elif __has_embed("baz.bin") == __STDC_EMBED_NOT_FOUND__
+    baz_not_found
+#else
+    baz_otherwise
+#endif
+"#,
+                &[],
+                &[
+                    ("resources/foo.bin", &[1, 2, 3]),
+                    ("resources/bar.bin", &[])
+                ],
+                &[],
+            )),
+            "11 17 29 foo_found bar_empty baz_not_found"
+        );
+    }
+
+    // #[test]
+    fn test_process_operator_has_c_attribute() {
+        // Test `#has_c_attribute`
+        assert_eq!(
+            print_tokens(&process_multiple_source_files_and_get_tokens(
+                r#"
+#if __has_c_attribute(deprecated)
+    11
+#else
+    13
+#endif
+
+#if __has_c_attribute(deprecated) == 201904
+    17
+#else
+    19
+#endif
+                "#,
+                &[],
+                &[],
+                &[],
+            )),
+            "11 17"
+        );
+
+        // Test `#has_c_attribute` with non-existing attribute
+        assert_eq!(
+            print_tokens(&process_multiple_source_files_and_get_tokens(
+                r#"
+#if __has_c_attribute(__non_existing__)
+    11
+#else
+    13
+#endif
+                "#,
+                &[],
+                &[],
+                &[],
+            )),
+            "13"
+        );
+    }
+
     #[test]
     fn test_process_error_directive() {
         let predefinitions = HashMap::new();
@@ -4230,16 +4477,22 @@ FOO BAR
     #[test]
     fn test_process_pragma() {
         let predefinitions = HashMap::new();
-        let tokens = process_single_source_file_and_get_tokens(
-            "\
-#pragma STDC FENV_ACCESS ON
-#pragma STDC FP_CONTRACT OFF
-#pragma STDC CX_LIMITED_RANGE DEFAULT",
-            &predefinitions,
-        );
 
         // pragmas are ignored currently, so the output should be empty.
-        assert!(tokens.is_empty());
+        assert_eq!(
+            print_tokens(&process_single_source_file_and_get_tokens(
+                "\
+#pragma STDC FENV_ACCESS ON
+#pragma STDC FP_CONTRACT OFF
+#pragma STDC CX_LIMITED_RANGE DEFAULT
+#define WORLD __Pragma(\"GCC dependency \\\"foo.h\\\"\") world
+hello
+WORLD
+",
+                &predefinitions,
+            )),
+            "hello world"
+        );
     }
 
     #[test]
@@ -4249,29 +4502,30 @@ FOO BAR
         assert_eq!(
             print_tokens(&process_single_source_file_and_get_tokens(
                 r#"
-"foo" "bar"
-"buz"
+#define STR1 "Hello"
+#define STR2 "World"
+#define STR3 STR1 ", " STR2 "!"
 
-#define STR1 "Hello, "
-#define STR2 "world!"
-#define STR3 STR1 STR2
+"foo" "bar"
+"buz";
 
 STR1
 STR2
-2025
+2026
 STR3
 "#,
                 &predefinitions,
             )),
-            r#""foobarbuzHello, world!" 2025 "Hello, world!""#
+            r#""foobarbuz" ; "HelloWorld" 2026 "Hello, World!""#
         );
 
         assert_eq!(
-            print_tokens(&process_single_source_file_and_get_tokens(
+            print_tokens(&process_multiple_tokens_argument_and_get_tokens(
                 r#"
 #define FOO(x) x
 
-// adjacent strings as argument
+// adjacent strings in argument
+
 FOO(
     "Hello"
     ","

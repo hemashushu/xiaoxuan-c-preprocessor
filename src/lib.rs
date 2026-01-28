@@ -5,7 +5,7 @@
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
 mod char_with_position;
-mod expression;
+// mod expression;
 mod initializer;
 mod lexer;
 mod location;
@@ -24,7 +24,7 @@ pub mod memory_file_provider;
 pub mod native_file_provider;
 pub mod token;
 
-// pub use processor::process_source_file;
+pub use processor::process_source_file;
 
 // ANCPP reserves file number 0 for predefined macros.
 pub const FILE_NUMBER_PREDEFINED: usize = 0;
@@ -37,4 +37,4 @@ pub const FILE_NUMBER_PREDEFINED: usize = 0;
 //
 // To avoid conflicts with header files, this file number should be greater than
 // or equal to `FILE_NUMBER_SOURCE_FILE_BEGIN`, which is defined as 65536.
-pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2 ^ 16;
+pub const FILE_NUMBER_SOURCE_FILE_BEGIN: usize = 2_usize.pow(16);

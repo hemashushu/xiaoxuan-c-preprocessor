@@ -97,6 +97,13 @@ let mut file_cache = HeaderFileCache::new();
 // try to match `src/foo.h`.
 let resolve_relative_path_within_current_file = false;
 
+
+// By default, ANCPP requires each macro invocation argument to be a single token
+// (identifier, number, string literal, character literal, or punctuator). When true, an argument
+// may be an arbitrary sequence of tokens, allowing more complex expressions to be
+// passed as a single parameter.
+let enable_multiple_token_argument = false;
+
 // Add the predefined macros you need
 let mut predefinitions = HashMap::new();
 predefinitions.insert("__STDC__".to_string(), "1".to_string());
@@ -133,6 +140,7 @@ let result = process_source_file(
         &ancpp::token::C23_KEYWORDS,
         predefinitions,
         resolve_relative_path_within_current_file,
+        enable_multiple_token_argument,
         source_file_number,
         source_file_path_name,
         source_file_full_path,
@@ -161,7 +169,7 @@ println!("{:?}", result);
 
 The function `process_source_file` is the main API provided by ANCPP. It takes a `FileProvider`, a `HeaderFileCache`, a map of predefined macros, and several parameters related to the source file, and returns the preprocessed result as a `Result<PreprocessResult, PreprocessorError>`. A `PreprocessResult` contains a vector of `TokenWithLocation` (the preprocessed tokens, ready for consumption by the AST parser of compilers) and a vector of `Prompt` (warnings and hints generated during preprocessing).
 
-By default, ANCPP only resolves header and resource files located in the user and system directories specified in the `FileProvider`. For example, if your source file `src/main.c` contains a statement `#include "./header.h"`, ANCPP will search for `header.h` in the user including directories (such as `include`, `src/header` directories under the project root), and the system including directories (e.g., `/usr/include`). It will not search other directories (e.g. the project's source code folder `src/`) unless you enable the parameter `resolve_relative_path_within_current_file`. Most C compilers, such as GCC and Clang (LLVM), resolve relative paths which is related to the current file being compiled. To match this behavior, set the `resolve_relative_path_within_current_file` parameter to `true`.
+By default, ANCPP only resolves header and resource files located in the user and system directories specified in the `FileProvider`, this strategy improves consistency and security. For example, if your source file `src/main.c` contains a statement `#include "./header.h"`, ANCPP will search for `header.h` in the user including directories (such as `include`, `src/header` directories under the project root), and the system including directories (e.g., `/usr/include`). It will not search other directories (e.g. the project's source code folder `src/`) unless you enable the parameter `resolve_relative_path_within_current_file`. Most C compilers, such as GCC and Clang (LLVM), resolve relative paths which is related to the current file being compiled. To match this behavior, set the `resolve_relative_path_within_current_file` parameter to `true`.
 
 In a typical C project with multiple source and header files, preprocessing may produce errors or warnings, each associated with a specific source file number (as well as line and column). ANCPP automatically assigns file numbers to header files, starting from 1 (file number 0 is reserved for predefined macros). The source file number should be specified manually using the `source_file_number` parameter. To avoid conflicts with header files, the source file number should be greater than or equal to `FILE_NUMBER_SOURCE_FILE_BEGIN`, which is defined as 65536 in ANCPP.
 
@@ -189,11 +197,20 @@ Examples:
 
 ```c
 #define PI 3.14159
-float c = 2 * PI * r;           // Expands to: `float c = 2 * 3.14159 * r;`
+float c = 2 * PI * r;
 
 #define MESSAGE "Hello, World!\n"
-puts(MESSAGE);                  // Expands to: `puts("Hello, World!");`
+puts(MESSAGE);
 ```
+
+After preprocessing, all occurrences of the macro identifier in the source code are replaced with the replacement text. So the above code expands to:
+
+```c
+float c = 2 * 3.14159 * r;
+puts("Hello, World!\n");
+```
+
+> Macros are not constants, they are used for changing source code during preprocessing. When preprocessing is finished, directive lines no longer exist in the code, and macros have been replaced with their corresponding replacement text.
 
 The replacement can be not only a single value, but also expressions or statements.
 
@@ -208,18 +225,16 @@ int arr[] = DATA;               // Expands to: `int arr[] = {1, 2, 3, 4, 5};`
 If the replacement contains multiple lines, you can use the backslash `\` at the end of each line to indicate that the macro definition continues on the next line.
 
 ```c
-#define ASSERT if (arg != 0) { \
+#define ASSERT_ARG if (arg != 0) { \
         puts("Assertion failed.\n"); \
         exit(1); \
     }
 
 int myfunc(int arg) {
-    ASSERT                      // Expands to the if statement above.
+    ASSERT_ARG                      // Expands to the if statement above.
     // ... rest of the function
 }
 ```
-
-> While a single value macro has no significant advantage over a `const` variable, complex macros work as "code generators" that can greatly improve code readability and maintainability by avoiding repetitive code.
 
 The replacement can also contain other macros, which will be expanded.
 
@@ -379,14 +394,26 @@ IDENTIFIER(ARGUMENTS)
 Examples:
 
 ```c
-#define SQUARE(x) ((x) * (x))
-int a = SQUARE(5);              // Expands to: `int a = ((5) * (5));`
+#define CHECK_RESULT(x) if ((x) != 0) { \
+        puts("Error occurred.\n"); \
+        exit(1); \
+    }
 
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
-int m = MAX(10, 20);            // Expands to: `int m = ((10) > (20) ? (10) : (20));`
+CHECK_RESULT(foo);
 ```
 
-You may notice that in the above examples, the parameters in the replacement text are wrapped in parentheses, sometimes the whole replacement is also wrapped in parentheses. This is a common practice to preserve correct operator precedence after macro expansion because the arguments are textually substituted. The following example illustrates the issue:
+After preprocessing, you get:
+
+```c
+if ((foo) != 0) {
+    puts("Error occurred.\n");
+    exit(1);
+}
+```
+
+> Function-like macros work as "code generators", the definition specifies a template for generating code snippets. Function-like macros can greatly improve code maintainability by avoiding repetitive code.
+
+You may also notice that in the above examples, the parameters in the replacement text are wrapped in parentheses, sometimes the whole replacement is also wrapped in parentheses. This is a common practice to preserve correct operator precedence after macro expansion because the arguments are textually substituted. The following example illustrates the issue:
 
 ```c
 #define ADD(a, b) a + b         // Warning: Missing parentheses may lead to unexpected results.
@@ -395,25 +422,64 @@ int x = ADD(1, 2) * 3;          // Expands to: `int x = 1 + 2 * 3;` which is eva
 
 If the replacement is compound statements, you should also wrap the whole replacement in a `do { ... } while (0)` construct to ensure correct control flow.
 
+Let's look at an example that demonstrates the issue:
+
 ```c
-#define CHECK_AND_EXIT(cond) \
-    if (!cond) { \
+#define CHECK_RESULT(x) if ((x) != 0) { \
         puts("Error occurred.\n"); \
         exit(1); \
-    }                           // Warning: Missing `do { ... } while (0)`
+    }
 
 if (is_cli)
-    CHECK_AND_EXIT(argc);
-else run(argc, argv);
+    CHECK_RESULT(pass);
+else run();
 
 // The above expands to:
-
+//
 // if (is_cli)
-//     if (!argc) {
+//     if ((pass) != 0) {
 //         puts("Error occurred.\n");
 //         exit(1);
 //     };
-// else run(argc, argv);        // Invalid `else` because there is no matching `if`.
+// else run();
+//
+// Invalid `else` because there is no matching `if`.
+```
+
+An improved version:
+
+```c
+#define CHECK_RESULT(x) do { \
+    if ((x) != 0) { \
+            puts("Error occurred.\n"); \
+            exit(1); \
+        } \
+    } while (0)
+
+if (is_cli)
+    CHECK_RESULT(pass);
+else run();
+
+// The above expands to:
+//
+// if (is_cli)
+//     do {
+//         if ((pass) != 0) {
+//             puts("Error occurred.\n");
+//             exit(1);
+//         }
+//     } while (0);
+// else run();
+//
+// Now the `else` matches the outer `if`.
+
+// It is good practice to wrap the `if...else...` statement in braces as well:
+//
+// if (is_cli) {
+//     CHECK_RESULT(pass);
+// } else {
+//     run();
+// }
 ```
 
 `[ANCPP RESTRICTION]`: Function-like macro replacement also requires balanced parentheses, brackets and quotes.
@@ -471,7 +537,7 @@ int g = SUBTRACT((,),)          // Disabled: The first argument is `(,)`, but th
 
 The examples above are valid in traditional preprocessors, where empty arguments are treated as zero-length tokens. However, this can easily lead to expand to invalid C code, so ANCPP disallows empty arguments.
 
-`[ANCPP RESTRICTION]`: Macro invocation arguments are limited to a single identifier, string (or adjacent string literals), character, or number. Expressions and punctuation are not allowed as arguments.
+`[ANCPP RESTRICTION]`: By default, ANCPP requires each macro argument to be a single token (identifier, number, string literal, character literal, or punctuator). Expressions and punctuation are not allowed as arguments.
 
 In the traditional preprocessors, function-like macro arguments can be anything, including punctuations (even the commas within nested parentheses), expressions, statements, code blocks and directives. However, this flexibility can lead to unexpected behaviors, especially when the arguments have side effects or involve complex expressions.
 
@@ -502,13 +568,15 @@ int min_value = MIN(MIN(a,b), c);       // Disallowed: Argument "MIN(a,b)" is an
 // );
 ```
 
-This constraint significantly weakens the flexibility of function-like macros, but it ensures that function-like macro arguments are simple and predictable. Since ANCC is designed for C beginner and modern C applications programming, this trade-off is acceptable.
+This constraint significantly weakens the flexibility of function-like macros, but it ensures that function-like macro arguments are simple and predictable.
+
+If mulitple tokens are needed in an argument, you can enable the `enable_multiple_token_argument` flag in the `Processor` to allow it.
 
 > If something the C functions can do, prefer using C functions (inline functions if necessary) instead of function-like macros. Function-like macros should be used only in "static code generation" scenarios.
 
 **Expansion of function-like macros**
 
-When invoking a function-like macro with identifiers, strings, characters or numbers as arguments, they are treated as **literal text**, they wouldn't be evaluated or interpreted in any way like C language does, and then substituted into the replacement text.
+When invoking a function-like macro with identifiers, strings, characters, numbers, or punctuators as arguments, they are treated as **literal text**, they wouldn't be evaluated or interpreted in any way like C language does, and then substituted into the replacement text.
 
 ```c
 #define ADD(a, b) (a) + (b)
@@ -827,6 +895,7 @@ You can also use the `#` operator to stringize `__VA_ARGS__` in the replacement 
 ```c
 #define SHOW_ALL(...) puts(#__VA_ARGS__);
 SHOW_ALL(1, 2, foo, "bar");     // Expands to: `puts("1, 2, foo, \"bar\"");`
+SHOW_ALL(1 2, foo "bar");       // Expands to: `puts("1 2, foo \"bar\"");`
 SHOW_ALL();                     // Expands to: `puts("");`
 ```
 
@@ -1195,7 +1264,7 @@ The difference between the two forms is the way the preprocessor searches for th
 - `#include <FILE_PATH>`: The preprocessor searches for the file in the system include directories (which are defined by the compiler) and user-specified include directories (which are specified by user via compiler command-line options).
 - `#include "FILE_PATH"`: The preprocessor first searches for the relative file path in the same directory as the source file. If the file is not found there, it then searches in the system include directories and user-specified include directories.
 
-In ANCPP, the system include directories and user-specified include directories are configured via the `FileProvider` interface passed to the `process_source_file(...)` function. By default when ANCPP handle `#include "FILE_PATH"` form, it wouldn't search the relative file path in the same directory as the current source file, it searches in user-specified include directories directly and then system include directories. To enable searching relative file path, you need to pass `true` to the `resolve_relative_path_within_current_file` parameter of `process_source_file(...)` function.
+In ANCPP, the system include directories and user-specified include directories are configured via the `FileProvider` interface passed to the `process_source_file(...)` function. By default when ANCPP handle `#include "FILE_PATH"` form, it wouldn't search the relative file path in the same directory as the current source file, it searches in user-specified include directories directly and then system include directories, this strategy improves consistency and security. To enable searching relative file path, you need to pass `true` to the `resolve_relative_path_within_current_file` parameter of `process_source_file(...)` function.
 
 **The limitations of `FILE_PATH`**
 
