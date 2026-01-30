@@ -5052,7 +5052,7 @@ xyz
             ]
         );
 
-        // err: invalid character `\n` in filepath
+        // err: invalid character `\n` in file path
         assert!(matches!(
             lex_from_str_with_range_strip("#include <foo\nbar>"),
             Err(PreprocessError::MessageWithPosition(
@@ -5065,7 +5065,7 @@ xyz
             ))
         ));
 
-        // err: invalid character `\n` in filepath
+        // err: invalid character `\n` in file path
         assert!(matches!(
             lex_from_str_with_range_strip("#include \"foo\nbar\""),
             Err(PreprocessError::MessageWithPosition(
@@ -5078,13 +5078,13 @@ xyz
             ))
         ));
 
-        // err: incomplete filepath, missing the closing '>'
+        // err: incomplete file path, missing the closing '>'
         assert!(matches!(
             lex_from_str_with_range_strip("#include <foo.h"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
-        // err: incomplete filepath, missing the closing '"'
+        // err: incomplete file path, missing the closing '"'
         assert!(matches!(
             lex_from_str_with_range_strip("#include \"foo.h"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))

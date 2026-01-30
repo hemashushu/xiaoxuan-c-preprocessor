@@ -830,10 +830,7 @@ where
         // - `#pragma STDC CX_LIMITED_RANGE arg`
 
         // Pragmas are compiler-specific options, not preprocessor directives.
-        // They should ideally be passed to the compiler for handling.
-        // However, I have not yet found a suitable way to do this.
-        // todo
-
+        // Therefore, ANCPP does not process pragmas currently.
         Ok(())
     }
 

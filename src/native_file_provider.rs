@@ -167,7 +167,7 @@ mod tests {
         let provider = NativeFileProvider::new(&user_include_dirs, &system_include_dirs);
 
         let vrootfs =
-            |filepath: &str| -> PathBuf { rootfs_path.join(filepath.trim_start_matches('/')) };
+            |file_path_str: &str| -> PathBuf { rootfs_path.join(file_path_str.trim_start_matches('/')) };
 
         // Test resolving user header files
         assert_eq!(
@@ -191,8 +191,8 @@ mod tests {
         );
 
         assert_eq!(
-            provider.resolve_user_file(Path::new("hippo.png")),
-            Some(vrootfs("/projects/hello/src/resources/hippo.png"))
+            provider.resolve_user_file(Path::new("hippo.dat")),
+            Some(vrootfs("/projects/hello/src/resources/hippo.dat"))
         );
 
         assert_eq!(
@@ -312,148 +312,3 @@ mod tests {
     }
 }
 
-// TODO
-// MOVE TO PROCESSOR TESTS
-//
-// #[cfg(test)]
-// mod tests {
-
-//     use std::{
-//         collections::HashMap,
-//         env, io,
-//         path::{Path, PathBuf},
-//     };
-
-//     use pretty_assertions::assert_eq;
-
-//     use crate::{context::{FileProvider, HeaderFileCache, PreprocessResult}, native_file_provider::NativeFileProvider, token::TokenWithLocation};
-
-//     fn build_test_provider() -> NativeFileProvider {
-//         let test_resources_path = get_test_resources_path();
-
-//         let project_root_path = test_resources_path.join("projects/test");
-//         let user_include_dirs = vec![
-//             project_root_path.join("include"),
-//             project_root_path.join("header"),
-//             project_root_path.join("resources"),
-//             project_root_path.join("src/common"),
-//         ];
-
-//         let system_include_path = test_resources_path.join("usr/include");
-//         let system_include_dirs = vec![system_include_path];
-
-//         NativeFileProvider::new(&user_include_dirs, &system_include_dirs)
-//     }
-
-//     fn resolve_source_file_canonical_path(relative_file_path: &Path) -> Result<PathBuf, io::Error> {
-//         let test_resources_path = get_test_resources_path();
-//         let project_root_path = test_resources_path.join("projects/test");
-
-//         let full_path = project_root_path.join(relative_file_path);
-//         let canonical_full_path = full_path.canonicalize()?;
-//         Ok(canonical_full_path)
-//     }
-
-//     fn print_tokens(token_with_location: &[TokenWithLocation]) -> String {
-//         token_with_location
-//             .iter()
-//             .map(|TokenWithLocation { token, .. }| token.to_string())
-//             .collect::<Vec<_>>()
-//             .join(" ")
-//     }
-
-//     fn process<T>(
-//         source_file_path_name: &Path,
-//         file_provider: &T,
-//         file_cache: &mut HeaderFileCache,
-//         predefinitions: &HashMap<String, String>,
-//         source_file_number: usize,
-//     ) -> PreprocessResult
-//     where
-//         T: FileProvider,
-//     {
-
-//         process_source_file(
-//             file_provider,
-//             file_cache,
-//             &C23_KEYWORDS,
-//             predefinitions,
-//             false,
-//             source_file_number,
-//             source_file_path_name,
-//             &resolve_source_file_canonical_path(source_file_path_name).unwrap(),
-//         )
-//         .unwrap()
-//     }
-
-//     #[test]
-//     fn test_native_file_provider() {
-//         let mut file_cache = HeaderFileCache::new();
-//         let file_provider = build_test_provider();
-//         let predefinitions = HashMap::new();
-
-//         let file_data_c = Path::new("src/data.c");
-//         let file_data_c_result = process(
-//             file_data_c,
-//             &file_provider,
-//             &mut file_cache,
-//             &predefinitions,
-//             FILE_NUMBER_SOURCE_FILE_BEGIN,
-//         );
-
-//         assert_eq!(
-//             print_tokens(&file_data_c_result.output),
-//             "\
-//             int sum ( ) ; \
-//             char data [ ] = { 0x01 , 0x02 , 0x03 , 0x04 , 0x05 , 0x06 , 0x07 , 0x08 , 0x09 , 0x0a } ; \
-//             int sum ( ) { \
-//                 int total = 0 ; \
-//                 for ( int i = 0 ; i < sizeof ( data ) ; i ++ ) { \
-//                     total += data [ i ] ; \
-//                 } return total ; \
-//             }"
-//         );
-
-//         let file_lib_c = Path::new("src/lib.c");
-//         let file_lib_c_result = process(
-//             file_lib_c,
-//             &file_provider,
-//             &mut file_cache,
-//             &predefinitions,
-//             FILE_NUMBER_SOURCE_FILE_BEGIN + 1,
-//         );
-//         assert_eq!(
-//             print_tokens(&file_lib_c_result.output),
-//             "\
-//             int add ( int , int ) ; \
-//             int add ( int a , int b ) { \
-//                 return a + b ; \
-//             }"
-//         );
-
-//         let file_main_c = Path::new("src/main.c");
-//         let file_main_c_result = process(
-//             file_main_c,
-//             &file_provider,
-//             &mut file_cache,
-//             &predefinitions,
-//             FILE_NUMBER_SOURCE_FILE_BEGIN + 1,
-//         );
-//         assert_eq!(
-//             print_tokens(&file_main_c_result.output),
-//             "\
-//             int puts ( const char * s ) ; \
-//             int printf ( const char * format , ... ) ; \
-//             int sum ( ) ; \
-//             int add ( int , int ) ; \
-//             int main ( ) { \
-//                 puts ( \"Hello, world!\" ) ; \
-//                 int result = add ( 1 , 2 ) ; \
-//                 printf ( \"1 + 2 = %d\\n\" , result ) ; \
-//                 int total = sum ( ) ; \
-//                 printf ( \"Sum of data: %d\\n\" , total ) ; \
-//                 return 0 ; \
-//             }"
-//         );
-//     }
-// }

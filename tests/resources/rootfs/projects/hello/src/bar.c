@@ -11,7 +11,7 @@
 // In GCC, the file path is resolved relative to the source file location,
 // effectively ignoring user include paths specified with the `-I ...` option.
 char data[] = {
-#embed "resources/hippo.png"
+#embed "hippo.dat" limit(5)
 };
 
 int bar()

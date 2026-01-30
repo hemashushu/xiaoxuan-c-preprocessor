@@ -22,10 +22,10 @@
 
 int main()
 {
-    puts("Hello, world!");
+    puts("Hello, World!");
 
     int value = hello();
-    printf("Output value is: %d\n", value);
+    printf("Value: %d\n", value);
 
     return EXIT_SUCCESS;
 }
