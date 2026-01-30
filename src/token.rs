@@ -114,7 +114,7 @@ pub enum Token {
     DirectiveEnd,
 
     // The stringizing operator.
-    // It is pound (`#`) used in macro definitions.
+    // It is pound (`#`) used in macro replacement.
     //
     // Stringizing is used to produce a string literal and can only be applied to
     // macro parameters (includes `__VA_ARGS__`).
@@ -123,12 +123,12 @@ pub enum Token {
 
     // The token concatenation operator.
     //
-    // It is pound-pound (`##`) used in macro definitions.
+    // It is pound-pound (`##`) used in macro replacement.
     //
     // Token concatenation joins two or more tokens into a single identifier.
     // The tokens are concatenated without any whitespace in between, and the tokens
     // are not expanded before concatenation.
-    // Token concatenation can only be used in macro definitions (both object-like and function-like).
+    // Token concatenation can only be used in function-like macro replacement.
     //
     // The result of _Token concatenation_ operator (`##`) must be a valid C identifier:
     // the first token must be an identifier, and the remaining tokens must be either
@@ -432,7 +432,7 @@ impl Display for Token {
             }
             Token::Punctuator(p) => write!(f, "{}", p),
             Token::DirectiveStart => write!(f, "#"),
-            Token::DirectiveEnd => write!(f, "\n"),
+            Token::DirectiveEnd => writeln!(f),
             Token::Pound => write!(f, "#"),
             Token::PoundPound => write!(f, "##"),
             Token::FilePath(s, angle_bracket) => {

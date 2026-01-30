@@ -135,7 +135,7 @@ mod tests {
     };
 
     use crate::{
-        context::{FileProvider, ResolvedResult},
+        context::{FileProvider, FilePathResolveResult},
         native_file_provider::NativeFileProvider,
     };
 
@@ -243,7 +243,7 @@ mod tests {
                 &vrootfs("/projects/hello/src/main.c"),
                 true
             ),
-            Some(ResolvedResult::new(
+            Some(FilePathResolveResult::new(
                 vrootfs("/projects/hello/src/header/foo.h"),
                 false
             ))
@@ -256,7 +256,7 @@ mod tests {
                 &vrootfs("/projects/hello/src/main.c"),
                 true
             ),
-            Some(ResolvedResult::new(vrootfs("/usr/include/stdlib.h"), true))
+            Some(FilePathResolveResult::new(vrootfs("/usr/include/stdlib.h"), true))
         );
 
         // Test resolving user header files with fallback (enable relative path)
@@ -266,7 +266,7 @@ mod tests {
                 &vrootfs("/projects/hello/src/main.c"),
                 true
             ),
-            Some(ResolvedResult::new(
+            Some(FilePathResolveResult::new(
                 vrootfs("/projects/hello/src/lib.c"),
                 false
             ))

@@ -222,7 +222,7 @@ SAY_HELLO                       // Expands to: `puts("Hello, World!\n");`
 int arr[] = DATA;               // Expands to: `int arr[] = {1, 2, 3, 4, 5};`
 ```
 
-If the replacement contains multiple lines, you can use the backslash `\` at the end of each line to indicate that the macro definition continues on the next line.
+If the replacement contains multiple lines, you can use the backslash `\` at the end of each line to indicate that the macro replacement continues on the next line.
 
 ```c
 #define ASSERT_ARG if (arg != 0) { \
@@ -326,7 +326,7 @@ Unfortunately, preprocessors can not detect such issues because they do not anal
 
 **Self-referential macros**
 
-A self-referential macro is one whose name appears in its definition. By convention, self-referential macros will **NOT** lead to infinite recursion because one macro is only expanded once per occurrence in the source code.
+A self-referential macro is one whose name appears in its replacement. By convention, self-referential macros will **NOT** lead to infinite recursion because one macro is only expanded once per occurrence in the source code.
 
 ```c
 #define FOO (4 + FOO)
@@ -411,7 +411,7 @@ if ((foo) != 0) {
 }
 ```
 
-> Function-like macros work as "code generators", the definition specifies a template for generating code snippets. Function-like macros can greatly improve code maintainability by avoiding repetitive code.
+> Function-like macros work as "code generators", the replacement specifies a template for generating code snippets. Function-like macros can greatly improve code maintainability by avoiding repetitive code.
 
 You may also notice that in the above examples, the parameters in the replacement text are wrapped in parentheses, sometimes the whole replacement is also wrapped in parentheses. This is a common practice to preserve correct operator precedence after macro expansion because the arguments are textually substituted. The following example illustrates the issue:
 
@@ -1243,7 +1243,7 @@ char buffer[1024];
 int len = read(buffer, 1024);
 ```
 
-As you can see, the resulting code would look like merging the contents of `my_header.h` into `main.c` and resolving all directives, including macro definitions and conditional compilation.
+As you can see, the resulting code would look like merging the contents of `my_header.h` into `main.c` and resolving all directives, including macro expansion and conditional compilation.
 
 The `#include` directive also accepts a macro that expands to a file path:
 
@@ -1446,6 +1446,8 @@ Note that the escape sequences are allowed in the file path when a string litera
 #embed BINARY_FILE              // Backslash is escaped in string literal
 ```
 
+> There is no "include guards" for resource files, each `#embed` directive always embeds the contents of the specified resource file.
+
 **Parameters of `#embed`**
 
 Directive `embed` supports parameters:
@@ -1470,7 +1472,7 @@ const uint8_t random_data[] =
 };
 ```
 
-> These parameters can also be written as `__limit__(NUMBER)`, `__prefix__(BYTE_SEQUENCE)`, `__suffix__(BYTE_SEQUENCE)` and `__if_empty__(BYTE_SEQUENCE)`.
+> In traditional C preprocessors parameters can also be written as `__limit__(NUMBER)`, `__prefix__(BYTE_SEQUENCE)`, `__suffix__(BYTE_SEQUENCE)` and `__if_empty__(BYTE_SEQUENCE)`, but ANCPP only supports the standard form.
 
 `[ANCPP RESTRICTION]`: The value of parameter `limit` must be a non-negative integer number, an expression even if it evaluates to a non-negative integer is not allowed.
 
@@ -1548,7 +1550,7 @@ This pragma is used to prevent multiple inclusions of the current source file, i
 
 Since ANCPP always ensures that a source file is only included once even if it does not have include guards or `#pragma once`, this pragma has no effect in ANCPP, but it is supported for compatibility with existing code.
 
-The `__Pragma(string-literal)` operator is effectively equivalent to `#pragma ...` but it can be used in macro definitions. ANCPP supports it though it has no effect.
+The `__Pragma(string-literal)` operator is effectively equivalent to `#pragma ...` but it can be used in macro replacement. ANCPP supports it though it has no effect.
 
 ## 4. Unsupported Directives
 

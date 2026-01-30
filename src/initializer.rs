@@ -55,7 +55,12 @@ pub fn initialize(source_text: &str) -> Result<Vec<CharWithPosition>, Preprocess
 /// - string literals
 /// - character constants
 /// - comments (although comments are removed in a later step)
-/// or there are spaces/tabs between the backslash and the newline.
+///
+/// If there are whitespaces between the backslash and the newline, e.g.,
+/// - `...\    \n`
+/// - `...\    \r\n`
+///
+/// These whitespaces are ignored as per most preprocessor implementations.
 fn merge_continued_lines(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
@@ -132,15 +137,18 @@ fn remove_comments(
 
                 // Found a line comment:
                 // Consume all characters until the end of the line.
-                while let Some(next_char_with_position) = chars.next() {
+                for next_char_with_position in chars.by_ref() {
+                    // while let Some(next_char_with_position) = chars.next() {
                     if next_char_with_position.character == '\n' {
                         break; // Stop at the end of the line
                     }
                 }
 
-                // Insert a space in place of the line comment.
+                // Insert a new-line in place of the line comment.
+                // Do not insert a space, because the "directive start" token
+                // must be at the beginning of a line. e.g., `\n#define ...`
                 output.push(CharWithPosition {
-                    character: ' ',
+                    character: '\n',
                     position: char_with_position.position,
                 });
             }
@@ -296,7 +304,7 @@ mod tests {
                 CharWithPosition::new('1', Position::new(1, 0, 1)),
                 CharWithPosition::new('2', Position::new(2, 0, 2)),
                 CharWithPosition::new(' ', Position::new(3, 0, 3)),
-                CharWithPosition::new(' ', Position::new(4, 0, 4)), // in place of line comment
+                CharWithPosition::new('\n', Position::new(4, 0, 4)), // in place of line comment
                 // line 1
                 CharWithPosition::new('1', Position::new(11, 1, 0)),
                 CharWithPosition::new('2', Position::new(12, 1, 1)),

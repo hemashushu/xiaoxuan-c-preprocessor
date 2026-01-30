@@ -13,8 +13,12 @@ pub struct Program {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
-    Define(Define),
-    Undef(String, Range),
+    Define(Define, /* directive_range */ Range),
+    Undef(
+        String,
+        /* directive_range */ Range,
+        /* identifier_range */ Range,
+    ),
 
     // Source file inclusion
     //
@@ -32,7 +36,10 @@ pub enum Statement {
     //
     // See also:
     // https://en.cppreference.com/w/c/preprocessor/include.html
-    Include(/* components */ Vec<TokenWithRange>),
+    Include(
+        /* components */ Vec<TokenWithRange>,
+        /* directive_range */ Range,
+    ),
 
     // Binary resource inclusion (since C23)
     //
@@ -48,7 +55,6 @@ pub enum Statement {
     // - `__has_embed ( < h-char-sequence > embed-parameter-sequence (optional) )`  (4)
     // - `__has_embed ( string-literal pp-balanced-token-sequence (optional) )`
     // - `__has_embed ( < h-pp-tokens > pp-balanced-token-sequence (optional) )`    (5)
-    //
     //
     // Optional embed parameters can be specified after the required filename argument:
     //
@@ -72,33 +78,44 @@ pub enum Statement {
     // The components can be parsed into a struct like:
     //
     // ```rust
-    // FilePath {
+    // Embed {
     //     file_path: (String, Range),
     //
     //     /* If true, the file path is enclosed in angle brackets `<...>`, */
     //     /* otherwise in double quotes `"..."`. */
-    //     angle_bracket: bool,
+    //     is_system_file: bool,
     //
     //     /* Specifies the maximum number of bytes to output from the resource. */
     //     /* This limit does not include the prefix or suffix, and does not limit the numbers of bytes of `if_empty`. */
     //     limit: Option<usize>,
     //
     //     /* Sequence to append to the output if the resource is not empty. */
-    //     suffix: Vec<u8>,
+    //     suffix: Option<Vec<u8>>,
     //
     //     /* Sequence to prepend to the output if the resource is not empty. */
-    //     prefix: Vec<u8>,
+    //     prefix: Option<Vec<u8>>,
     //
     //     /* Sequence to output if the resource is empty. */
     //     if_empty: Option<Vec<u8>>,
     // }
     // ```
-    Embed(/* components */ Vec<TokenWithRange>),
+    Embed(
+        /* components */ Vec<TokenWithRange>,
+        /* directive_range */ Range,
+    ),
 
     If(If),
-    Error(String, /* message_range */ Range),
-    Warning(String, /* message_range */ Range),
-    Pragma(Pragma),
+    Error(
+        String,
+        /* directive_range */ Range,
+        /* message_range */ Range,
+    ),
+    Warning(
+        String,
+        /* directive_range */ Range,
+        /* message_range */ Range,
+    ),
+    Pragma(Pragma, /* directive_range */ Range),
 
     // Regular C code (non-directive)
     Code(Vec<TokenWithRange>),
@@ -169,13 +186,16 @@ pub enum Define {
 #[derive(Debug, PartialEq, Clone)]
 pub struct If {
     pub branches: Vec<Branch>,
-    pub alternative: Option<Vec<Statement>>,
+    pub alternative: Option<(Vec<Statement>, Range)>, // `#else` branch
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Branch {
     pub condition: Condition,
     pub consequence: Vec<Statement>,
+
+    // Range of the `#if`, `#ifdef`, `#ifndef`, `#elif`, `#elifdef`, or `#elifndef` directive
+    pub directive_range: Range,
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -24,14 +24,14 @@ const PEEK_BUFFER_LENGTH_EXPRESSION_PARSE: usize = 3;
 /// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
 /// must be expanded before constructing this expression.
 #[derive(Debug, PartialEq)]
-pub enum Expression {
+enum Expression {
     Number(u64, Location),
     Binary(BinaryOperator, Location, Box<Expression>, Box<Expression>),
     Unary(UnaryOperator, Location, Box<Expression>),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum BinaryOperator {
+enum BinaryOperator {
     // Arithmetic operators
     Add,      // '+'
     Subtract, // '-'
@@ -60,7 +60,7 @@ pub enum BinaryOperator {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum UnaryOperator {
+enum UnaryOperator {
     Plus,       // '+', does not change the operand's value (included for symmetry with `Minus`)
     Minus,      // '-', negation
     LogicalNot, // '!'
@@ -151,7 +151,7 @@ impl Display for UnaryOperator {
     }
 }
 
-pub fn print_expression<W: Write>(writer: &mut W, expression: &Expression) -> std::io::Result<()> {
+fn print_expression<W: Write>(writer: &mut W, expression: &Expression) -> std::io::Result<()> {
     match expression {
         Expression::Number(number, _) => write!(writer, "{number}"),
         Expression::Binary(operator, _, left, right) => {
@@ -170,7 +170,7 @@ pub fn print_expression<W: Write>(writer: &mut W, expression: &Expression) -> st
 }
 
 #[allow(dead_code)]
-pub fn print_expression_to_string(expression: &Expression) -> String {
+fn print_expression_to_string(expression: &Expression) -> String {
     let mut output = Vec::new();
     print_expression(&mut output, expression).unwrap();
     String::from_utf8(output).unwrap()
@@ -209,7 +209,7 @@ pub fn print_expression_to_string(expression: &Expression) -> String {
 ///
 /// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
 /// must be expanded before constructing this expression.
-pub fn parse_expression(
+fn parse_expression(
     token_with_locations: &[TokenWithLocation],
 
     // The file number where the expression is located.
@@ -243,14 +243,14 @@ pub fn parse_expression(
     Ok(expression)
 }
 
-pub struct ExpressionParser<'a> {
+struct ExpressionParser<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
 
     // The file number where the original expression is located.
     current_file_number: usize,
 
     // The location of the last consumed token.
-    pub last_location: Location,
+    last_location: Location,
 }
 
 impl<'a> ExpressionParser<'a> {
@@ -521,7 +521,7 @@ impl ExpressionParser<'_> {
                     Err(PreprocessFileError::new(
                         location.file_number,
                         PreprocessError::MessageWithRange(
-                            "Expect a macro, integer number, or operator.".to_string(),
+                            "Expect a macro, an integer number, or an operator.".to_string(),
                             location.range,
                         ),
                     ))
@@ -585,6 +585,7 @@ fn evaluate_binary_expression(
     }
 
     let right = evaluate_expression(right_exp)?;
+
     let result = match operator {
         // Arithmetic operators
         BinaryOperator::Add => left + right,

@@ -5,7 +5,7 @@
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
 mod char_with_position;
-// mod expression;
+mod expression;
 mod initializer;
 mod lexer;
 mod location;

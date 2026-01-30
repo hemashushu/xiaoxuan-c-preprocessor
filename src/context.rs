@@ -90,6 +90,7 @@ impl<'a, T> Context<'a, T>
 where
     T: FileProvider,
 {
+    #[allow(clippy::too_many_arguments)]
     #[allow(dead_code)]
     pub fn new(
         file_provider: &'a T,
@@ -219,10 +220,12 @@ impl FilePathSource {
     }
 }
 
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct MacroMap {
     macros: HashMap<String, MacroDefinition>,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum MacroDefinition {
     ObjectLike(Vec<TokenWithLocation>),
     FunctionLike(Vec<String>, Vec<TokenWithLocation>),
@@ -278,22 +281,22 @@ pub trait FileProvider {
         target_file_relative_path: &Path,
         source_file_canonical_full_path: &Path,
         resolve_relative_path_within_current_file: bool,
-    ) -> Option<ResolvedResult> {
+    ) -> Option<FilePathResolveResult> {
         if resolve_relative_path_within_current_file
             && let Some(resolved_path) = self.resolve_user_file_relative_to_current_file(
                 target_file_relative_path,
                 source_file_canonical_full_path,
             )
         {
-            return Some(ResolvedResult::new(resolved_path, false));
+            return Some(FilePathResolveResult::new(resolved_path, false));
         }
 
         if let Some(resolved_path) = self.resolve_user_file(target_file_relative_path) {
-            return Some(ResolvedResult::new(resolved_path, false));
+            return Some(FilePathResolveResult::new(resolved_path, false));
         }
 
         if let Some(resolved_path) = self.resolve_system_file(target_file_relative_path) {
-            return Some(ResolvedResult::new(resolved_path, true));
+            return Some(FilePathResolveResult::new(resolved_path, true));
         }
 
         None
@@ -324,19 +327,19 @@ pub trait FileProvider {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct ResolvedResult {
+pub struct FilePathResolveResult {
     /// The canonical path of the resolved file.
     pub canonical_full_path: PathBuf,
 
     /// Indicates whether the resolved file is a system header file.
-    pub is_system_header_file: bool,
+    pub is_system_file: bool,
 }
 
-impl ResolvedResult {
-    pub fn new(canonical_full_path: PathBuf, is_system_header_file: bool) -> Self {
+impl FilePathResolveResult {
+    pub fn new(canonical_full_path: PathBuf, is_system_file: bool) -> Self {
         Self {
             canonical_full_path,
-            is_system_header_file,
+            is_system_file,
         }
     }
 }
@@ -437,27 +440,6 @@ impl HeaderFileCache {
             .find(|item| item.canonical_full_path == canonical_full_path)
     }
 
-    // pub fn get_file_number(&self, canonical_full_path: &Path) -> Option<usize> {
-    //     self.items
-    //         .iter()
-    //         .position(|item| item.canonical_full_path == canonical_full_path)
-    //         .map(|index| index + 1) // File number starts from 1
-    // }
-
-    // pub fn get_text_content(&self, canonical_full_path: &Path) -> Option<&String> {
-    //     self.items
-    //         .iter()
-    //         .find(|item| item.canonical_full_path == canonical_full_path)
-    //         .map(|item| &item.text_content)
-    // }
-
-    // pub fn get_program(&self, canonical_full_path: &Path) -> Option<&Program> {
-    //     self.items
-    //         .iter()
-    //         .find(|item| item.canonical_full_path == canonical_full_path)
-    //         .map(|item| &item.program)
-    // }
-
     /// Checks if a file with the given canonical path exists in the cache.
     pub fn exists(&self, canonical_full_path: &Path) -> bool {
         self.items
@@ -469,12 +451,8 @@ impl HeaderFileCache {
     /// For example, the first item will be `(1, "/path/to/file.h")`.
     ///
     /// The file number for the first item is 1, since 0 is reserved for predefined macros.
-    pub fn get_cache_file_list(&self) -> Vec<(usize, PathBuf)> {
-        self.items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| (index + 1, item.canonical_full_path.clone()))
-            .collect()
+    pub fn get_cache_file_list(&self) -> &[HeaderFileCacheItem] {
+        &self.items
     }
 }
 

@@ -17,11 +17,10 @@ use crate::context::{FileProvider, normalize_path};
 /// The in-memory file provider simulates a file system with the following structure:
 /// - `/projects/test` — project root directory
 /// - `/projects/hello/src` — source directory
-/// - `/projects/hello/src/common` — internal shared code such as project's configuration
-/// - `/projects/hello/include` — public header directory
 /// - `/projects/hello/header` — internal header directory
-/// - `/projects/hello/share` — public binary files directory
-/// - `/projects/hello/resources` — internal binary files directory
+/// - `/projects/hello/src/common` — internal shared code such as project's configuration
+/// - `/projects/hello/src/include` — public header directory
+/// - `/projects/hello/src/resources` — internal binary files directory
 /// - `/usr/include` — system header directory
 pub struct MemoryFileProvider {
     /// Maps canonical file paths to their contents.
@@ -212,7 +211,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        context::{FileProvider, ResolvedResult},
+        context::{FileProvider, FilePathResolveResult},
         memory_file_provider::MemoryFileProvider,
     };
 
@@ -307,7 +306,7 @@ mod tests {
                 Path::new("/projects/hello/src/main.c"),
                 true
             ),
-            Some(ResolvedResult::new(
+            Some(FilePathResolveResult::new(
                 PathBuf::from("/projects/hello/src/header/foo.h"),
                 false
             ))
@@ -320,7 +319,7 @@ mod tests {
                 Path::new("/projects/hello/src/main.c"),
                 true
             ),
-            Some(ResolvedResult::new(
+            Some(FilePathResolveResult::new(
                 PathBuf::from("/usr/include/stdlib.h"),
                 true
             ))
@@ -333,7 +332,7 @@ mod tests {
                 Path::new("/projects/hello/src/main.c"),
                 true
             ),
-            Some(ResolvedResult::new(
+            Some(FilePathResolveResult::new(
                 PathBuf::from("/projects/hello/src/lib.c"),
                 false
             ))

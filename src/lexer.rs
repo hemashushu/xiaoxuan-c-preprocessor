@@ -49,7 +49,7 @@ pub fn lex_from_clean_str(
 /// - In the `#include` and `#embed` directives, and the `has_include` and `has_embed`
 ///   operators, the file path is not a string literal.
 /// - Whitespaces are not allowed between the macro identifier
-///   and the opening parenthesis `(` in function-like macro definitions,
+///   and the opening parenthesis `(` in function-like macro replacement.
 ///
 /// When implementing the lexer, these inconsistencies need to be taken into account.
 struct Lexer<'a> {
@@ -58,14 +58,14 @@ struct Lexer<'a> {
     // The position of the last consumed character by `next_char()`.
     pub last_position: Position,
 
-    // The token index of the last newline character.
+    // The token 1-based index of the last newline character.
     //
     // It is used to determine if the current `#` token is a directive start token.
     // When the `#` token appears immediately after a newline character,
     // it is considered as the start of a preprocessor directive.
     //
     // Initialized to 0 to make the `#` as directive start token if it is the first token.
-    pub last_newline_index: usize,
+    pub last_newline_token_index_1_based: usize,
 
     // The line index of last directive line.
     //
@@ -87,7 +87,7 @@ impl<'a> Lexer<'a> {
         Self {
             upstream,
             last_position: Position::default(),
-            last_newline_index: 0, // to make the `#` as directive start token if it is the first token
+            last_newline_token_index_1_based: 0, // to make the `#` as directive start token if it is the first token
             last_directive_line_index: None, // no directive line at initialization
             position_stack: vec![],
         }
@@ -185,7 +185,7 @@ impl Lexer<'_> {
                     }
 
                     // Update the `last_newline_index` to the current output length.
-                    self.last_newline_index = output.len();
+                    self.last_newline_token_index_1_based = output.len();
                 }
                 '\n' => {
                     self.next_char(); // consume '\n'
@@ -200,7 +200,7 @@ impl Lexer<'_> {
                     }
 
                     // Update the `last_newline_index` to the current output length.
-                    self.last_newline_index = output.len();
+                    self.last_newline_token_index_1_based = output.len();
                 }
                 '\'' => {
                     // Char literal token
@@ -803,7 +803,7 @@ impl Lexer<'_> {
                         Range::new(&self.pop_position_from_stack(), &self.last_position),
                     ));
                 }
-                '#' if output.len() == self.last_newline_index => {
+                '#' if output.len() == self.last_newline_token_index_1_based => {
                     // `#` at the beginning of a line or after a newline
                     self.next_char(); // consume '#'
 
