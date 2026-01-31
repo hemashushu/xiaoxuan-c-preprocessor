@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::context::FileProvider;
+use crate::context::{FileProvider, normalize_path};
 
 pub struct NativeFileProvider {
     /// Directories to search for system headers.
@@ -44,11 +44,10 @@ impl FileProvider for NativeFileProvider {
     fn resolve_user_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
         for dir in &self.user_include_directories {
             let full_path = dir.join(relative_file_path);
-            if let Ok(canonical_full_path) = full_path.canonicalize() {
-                // Check if the file exists and is a regular file
-                if canonical_full_path.is_file() && canonical_full_path.exists() {
-                    return Some(canonical_full_path);
-                }
+            let canonical_full_path = normalize_path(&full_path);
+            // Check if the file exists and is a regular file
+            if canonical_full_path.is_file() && canonical_full_path.exists() {
+                return Some(canonical_full_path);
             }
         }
         None
@@ -61,11 +60,10 @@ impl FileProvider for NativeFileProvider {
     ) -> Option<PathBuf> {
         let source_file_directory = source_file_canonical_full_path.parent().unwrap();
         let full_path = source_file_directory.join(relative_file_path);
-        if let Ok(canonical_full_path) = full_path.canonicalize() {
-            // Check if the file exists and is a regular file
-            if canonical_full_path.is_file() && canonical_full_path.exists() {
-                return Some(canonical_full_path);
-            }
+        let canonical_full_path = normalize_path(&full_path);
+        // Check if the file exists and is a regular file
+        if canonical_full_path.is_file() && canonical_full_path.exists() {
+            return Some(canonical_full_path);
         }
 
         None
@@ -74,11 +72,10 @@ impl FileProvider for NativeFileProvider {
     fn resolve_system_file(&self, relative_file_path: &Path) -> Option<PathBuf> {
         for dir in &self.system_include_directories {
             let full_path = dir.join(relative_file_path);
-            if let Ok(canonical_full_path) = full_path.canonicalize() {
-                // Check if the file exists and is a regular file
-                if canonical_full_path.is_file() && canonical_full_path.exists() {
-                    return Some(canonical_full_path);
-                }
+            let canonical_full_path = normalize_path(&full_path);
+            // Check if the file exists and is a regular file
+            if canonical_full_path.is_file() && canonical_full_path.exists() {
+                return Some(canonical_full_path);
             }
         }
         None
@@ -135,7 +132,7 @@ mod tests {
     };
 
     use crate::{
-        context::{FileProvider, FilePathResolveResult},
+        context::{FilePathResolveResult, FileProvider},
         native_file_provider::NativeFileProvider,
     };
 
@@ -166,8 +163,9 @@ mod tests {
 
         let provider = NativeFileProvider::new(&user_include_dirs, &system_include_dirs);
 
-        let vrootfs =
-            |file_path_str: &str| -> PathBuf { rootfs_path.join(file_path_str.trim_start_matches('/')) };
+        let vrootfs = |file_path_str: &str| -> PathBuf {
+            rootfs_path.join(file_path_str.trim_start_matches('/'))
+        };
 
         // Test resolving user header files
         assert_eq!(
@@ -256,7 +254,10 @@ mod tests {
                 &vrootfs("/projects/hello/src/main.c"),
                 true
             ),
-            Some(FilePathResolveResult::new(vrootfs("/usr/include/stdlib.h"), true))
+            Some(FilePathResolveResult::new(
+                vrootfs("/usr/include/stdlib.h"),
+                true
+            ))
         );
 
         // Test resolving user header files with fallback (enable relative path)
@@ -311,4 +312,3 @@ mod tests {
         );
     }
 }
-

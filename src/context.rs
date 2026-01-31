@@ -357,11 +357,16 @@ pub struct PreprocessResult {
 /// Returns a new `PathBuf` with the normalized path.
 pub fn normalize_path(src: &Path) -> PathBuf {
     let mut output = PathBuf::new();
-
+println!("normalize_path: src = {:?}", src);
     let components = src.components();
     for component in components {
+        println!("  component: {:?}", component);
         match component {
-            Component::Prefix(..) => unimplemented!("todo: handle prefix components"),
+            Component::Prefix(disk) =>
+            {
+                output.push(disk.as_os_str());
+                // unimplemented!("todo: handle prefix components"),
+            }
             Component::RootDir => {
                 output.push(component.as_os_str());
             }
