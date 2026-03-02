@@ -1,15 +1,16 @@
 [package]
 name = "ancpp"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "A C preprocessor compliant with C23 standard implemented in Rust."
 license = "MPL-2.0"
 homepage = "https://github.com/hemashushu/xiaoxuan-c-preprocessor"
 repository = "https://github.com/hemashushu/xiaoxuan-c-preprocessor"
-#authors = ["Hemashushu <hippospark@gmail.com>"]
+keywords = ["c", "preprocessor", "cpp", "c23"]
+categories = ["development-tools", "parser-implementations"]
 
 [dependencies]
 hexfloat2 = "0.2.0"
-chrono = "0.4.43"
+chrono = "0.4.44"
 pretty_assertions = "1.4.1"
 unicode-normalization = "0.1.25"
