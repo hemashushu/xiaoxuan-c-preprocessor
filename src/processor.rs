@@ -965,7 +965,7 @@ where
 
         while let Some(current_token_with_location) = code_parser.next_token_with_location() {
             match &current_token_with_location.token {
-                _ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => {
+                _ if code_parser.peek_token_and_equals(0, &Token::_PoundPound) => {
                     // Process token concatenation (the `##` operator).
                     //
                     // Token concatenation joins two or more tokens into a single identifier.
@@ -991,7 +991,7 @@ where
                     components.push(current_token_with_location);
 
                     // Consume `##` and collect following tokens.
-                    while code_parser.peek_token_and_equals(0, &Token::PoundPound) {
+                    while code_parser.peek_token_and_equals(0, &Token::_PoundPound) {
                         code_parser.next_token(); // consume `##`
 
                         if let Some(next_token_with_location) =
@@ -1286,7 +1286,7 @@ where
                         }
                     }
                 }
-                Token::Pound => {
+                Token::_Pound => {
                     // _Stringizing_ (the `#` operator).
                     //
                     // Stringizing is used to produce a string literal and can only be applied to
@@ -1411,7 +1411,7 @@ where
                         });
                     }
                 }
-                Token::PoundPound => {
+                Token::_PoundPound => {
                     // Token concatenation (the `##` operator)
                     // The token concatenation operator has already been handled in the
                     // `_ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => { ... }` branch above.
@@ -1990,7 +1990,7 @@ where
                         }
                     }
                 }
-                Token::Pound => {
+                Token::_Pound => {
                     // _Stringizing_ (the `#` operator).
                     // This operator is handled in the argument substitution step above.
 
@@ -2003,7 +2003,7 @@ where
                         ),
                     });
                 }
-                Token::PoundPound => {
+                Token::_PoundPound => {
                     // Token concatenation (the `##` operator)
                     // This operator is handled in the argument substitution step above.
 
@@ -2462,7 +2462,7 @@ where
 
         while let Some(current_token_with_location) = code_parser.next_token_with_location() {
             match &current_token_with_location.token {
-                Token::FilePath(path_name, angle_bracket) => {
+                Token::_FilePath(path_name, angle_bracket) => {
                     // Case 1 and 2: A single `Token::FilePath`
                     is_system_file = *angle_bracket;
                     file_path = PathBuf::from(path_name);
@@ -2671,7 +2671,7 @@ where
 
         while let Some(current_token_with_location) = code_parser.next_token_with_location() {
             match &current_token_with_location.token {
-                Token::FilePath(path_name, angle_bracket) => {
+                Token::_FilePath(path_name, angle_bracket) => {
                     // Case 1 and 2: A single `Token::FilePath`
                     is_system_file = *angle_bracket;
                     file_path = PathBuf::from(path_name);

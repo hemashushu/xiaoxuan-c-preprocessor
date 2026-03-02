@@ -90,7 +90,7 @@ pub enum Token {
 
     // Directive start token.
     // It is the pound sign (`#`) at the beginning of a line indicates a preprocessing directive.
-    DirectiveStart,
+    _DirectiveStart,
 
     // Directive end token.
     // It is literally the `newline` (representing either '\n' or '\r\n') in the directive line.
@@ -111,7 +111,7 @@ pub enum Token {
     // The null directive (# followed by a line break) is allowed and has no effect.
     // But ANCPP disallows empty directive lines to avoid confusion.
     // See: https://en.cppreference.com/w/c/preprocessor.html
-    DirectiveEnd,
+    _DirectiveEnd,
 
     // The stringizing operator.
     // It is pound (`#`) used in macro replacement.
@@ -119,7 +119,7 @@ pub enum Token {
     // Stringizing is used to produce a string literal and can only be applied to
     // macro parameters (includes `__VA_ARGS__`).
     // For example, `#define FOO(x) #x` will expand `FOO(abc)` to `"abc"` and `FOO(123)` to `"123"`.
-    Pound,
+    _Pound,
 
     // The token concatenation operator.
     //
@@ -134,14 +134,14 @@ pub enum Token {
     // the first token must be an identifier, and the remaining tokens must be either
     // identifiers or integer numbers. For example, `foo ## bar` and `sprite ## 2 ## b` are valid,
     // while `9 ## s` and `+ ## =` are invalid.
-    PoundPound,
+    _PoundPound,
 
     // The file path of the directive `#include` and `#embed`,
     // and the operator `__has_include` and `__has_embed`.
     //
     // Note that file path is not a string literal,
     // because it does not support escape sequences like `\x40` and `\"`.
-    FilePath(String, /* angle-bracket */ bool),
+    _FilePath(String, /* angle-bracket */ bool),
 
     // The identifier of a function-like macro definition.
     //
@@ -169,7 +169,7 @@ pub enum Token {
     // - `#define foo (...) ...` defines an object-like macro.
     //
     // This is an inconsistency in the preprocessor design of C/C++ languages.
-    FunctionLikeMacroIdentifier(String),
+    _FunctionLikeMacroIdentifier(String),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -431,18 +431,18 @@ impl Display for Token {
                 write!(f, "{}{}'", prefix, escaped)
             }
             Token::Punctuator(p) => write!(f, "{}", p),
-            Token::DirectiveStart => write!(f, "#"),
-            Token::DirectiveEnd => writeln!(f),
-            Token::Pound => write!(f, "#"),
-            Token::PoundPound => write!(f, "##"),
-            Token::FilePath(s, angle_bracket) => {
+            Token::_DirectiveStart => write!(f, "#"),
+            Token::_DirectiveEnd => writeln!(f),
+            Token::_Pound => write!(f, "#"),
+            Token::_PoundPound => write!(f, "##"),
+            Token::_FilePath(s, angle_bracket) => {
                 if *angle_bracket {
                     write!(f, "<{}>", s)
                 } else {
                     write!(f, "\"{}\"", s)
                 }
             }
-            Token::FunctionLikeMacroIdentifier(s) => write!(f, "{}", s),
+            Token::_FunctionLikeMacroIdentifier(s) => write!(f, "{}", s),
         }
     }
 }

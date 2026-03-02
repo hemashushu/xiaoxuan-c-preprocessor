@@ -177,11 +177,49 @@ The loaded header file list can be obtained by calling the `get_cache_file_list`
 
 ## 3. How preprocessor works
 
-The preprocessor is works as a separate phase before the actual compilation of C source code. The purpose of a preprocessor is to modify the C source code with a "tiny language", the preprocessing language, which is consists of **preprocessor directives** that are embedded in the C source code. Each directive occurs on a separate line, which begin with the `#` character (possibly preceded by whitespace), and continue until the end of the line.
+The preprocessor is works as a separate phase before the actual compilation of C source code. The purpose of a preprocessor is to modify the C source code with a "tiny language" - the preprocessing language, which is consists of **preprocessor directives** that are embedded in the C source code. Each directive occurs on a separate line, which begin with the `#` character (possibly preceded by whitespace), and continue until the end of the line. For example:
 
-The directive lines are the "code" of the preprocessor, while the rest of the C source code is treated as "data" to be processed.
+```c
+#include <stdio.h>
+#define PI 3.14159
 
-Directives performs various operations such as macro expansion, conditional compilation, and file inclusion. ANCPP supports almost all of the C23 standard preprocessor directives, operators, and built-in macros.
+int main() {
+    #ifdef FP
+        float c = 2 * PI * r;
+        printf("Circumference: %f\n", c);
+        return 0;
+    #else
+        printf("Floating point not supported.\n");
+        return 1;
+    #endif
+}
+```
+
+In the view of the preprocessor, the directive lines are the "code" of the preprocessor, while the rest of the C source code is treated as "text" to be processed. Thus, the above example can be conceptually represented as:
+
+```c
+#include <stdio.h>
+#define PI 3.14159
+"..."
+#ifdef FP
+    "..."
+#else
+    "..."
+#endif
+"..."
+```
+
+Directives performs various operations such as macro expansion, conditional compilation, and file inclusion. After preprocessing, all directive lines are removed and the final text is generated (note that the content of `stdio.h` is omitted for brevity):
+
+```c
+...
+int main() {
+    printf("Floating point not supported.\n");
+    return 1;
+}
+```
+
+This is the brief overview of how the preprocessor works. ANCPP supports almost all of the C23 standard preprocessor directives, operators, and built-in macros.
 
 > Preprocessor operates as a textual substitution, which makes it extremely "flexible" because it has no knowledge of C syntax or semantics. This flexibility can result in code that does not conform to C syntax or disrupts control flow, often due to unintentional mistakes by developers that are difficult to detect. ANCPP intentionally disable some features by default to make it more suitable for modern C application programming. The limitations and constraints are described with the mark `[ANCPP RESTRICTION]` in the following sections.
 

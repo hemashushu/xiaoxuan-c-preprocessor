@@ -342,7 +342,7 @@ mod tests {
 
         // Test for including with a system file path
         let include_with_system_header = vec![TokenWithRange::new(
-            Token::FilePath("stdio.h".to_owned(), true),
+            Token::_FilePath("stdio.h".to_owned(), true),
             Range::default(),
         )];
 
@@ -357,7 +357,7 @@ mod tests {
 
         // Test for including with a quoted file path
         let include_with_quoted_header = vec![TokenWithRange::new(
-            Token::FilePath("my_header.h".to_owned(), false),
+            Token::_FilePath("my_header.h".to_owned(), false),
             Range::default(),
         )];
 
@@ -384,7 +384,7 @@ mod tests {
 
         // Test for embedding with a system file path
         let embed_with_system_header = vec![TokenWithRange::new(
-            Token::FilePath("hippo.bin".to_owned(), true),
+            Token::_FilePath("hippo.bin".to_owned(), true),
             Range::default(),
         )];
 
@@ -396,7 +396,7 @@ mod tests {
 
         // Test for embedding with a quoted file path
         let embed_with_quoted_header = vec![TokenWithRange::new(
-            Token::FilePath("spark.png".to_owned(), false),
+            Token::_FilePath("spark.png".to_owned(), false),
             Range::default(),
         )];
 
@@ -409,7 +409,7 @@ mod tests {
         // Test for embedding with `limit`, `suffix`, `prefix`, and `if_empty` parameters
         let embed_with_params = vec![
             TokenWithRange::new(
-                Token::FilePath("/dev/random".to_string(), true),
+                Token::_FilePath("/dev/random".to_string(), true),
                 Range::default(),
             ),
             // limit(100)
@@ -658,7 +658,7 @@ mod tests {
                 ),
                 Statement::Include(
                     vec![TokenWithRange::new(
-                        Token::FilePath("stdio.h".to_string(), true),
+                        Token::_FilePath("stdio.h".to_string(), true),
                         Range::default(),
                     )],
                     Range::default(),

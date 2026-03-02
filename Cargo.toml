@@ -2,11 +2,11 @@
 name = "ancpp"
 version = "0.1.1"
 edition = "2024"
-#authors = ["Hemashushu <hippospark@gmail.com>"]
-description = "A C preprocessor implementation in Rust."
+description = "A C preprocessor compliant with C23 standard implemented in Rust."
 license = "MPL-2.0"
 homepage = "https://github.com/hemashushu/xiaoxuan-c-preprocessor"
 repository = "https://github.com/hemashushu/xiaoxuan-c-preprocessor"
+#authors = ["Hemashushu <hippospark@gmail.com>"]
 
 [dependencies]
 hexfloat2 = "0.2.0"

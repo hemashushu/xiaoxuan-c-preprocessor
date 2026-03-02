@@ -21,9 +21,12 @@ use crate::{
 
 use unicode_normalization::UnicodeNormalization;
 
-// Buffer sizes for lookahead in `PeekableIter`.
-const PEEK_BUFFER_LENGTH_LEX: usize = 4;
+// Buffer length for peeking characters in the lexer.
+// It should be at least 3 to support peeking up to 2 characters for
+// multi-character punctuators (e.g., `...`).
+const PEEK_BUFFER_LENGTH_LEX: usize = 3;
 
+/// Lexes the source text into a token stream with ranges.
 pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
     let chars = initialize(source_text)?;
     let mut chars_iter = chars.into_iter();
@@ -32,9 +35,15 @@ pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, Preprocess
     tokenizer.lex()
 }
 
-pub fn lex_from_clean_str(
-    clean_source_text: &str,
-) -> Result<Vec<TokenWithRange>, PreprocessError> {
+/// Lexes the clean source text (post initialization) into a token stream with ranges.
+///
+/// Initialization includes:
+/// - Lines ending with a backslash ('\') are joined with the following line.
+/// - All comments are replaced by a single space character.
+/// - Remove the shebang (`#!`) line. (ANCPP new added)
+///
+/// See `initialize()` for more details.
+pub fn lex_from_clean_str(clean_source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
     let mut chars = clean_source_text.chars();
     let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
     let mut peekable_char_iter = PeekableIter::new(&mut char_position_iter, PEEK_BUFFER_LENGTH_LEX);
@@ -56,7 +65,7 @@ struct Lexer<'a> {
     upstream: &'a mut PeekableIter<'a, CharWithPosition>,
 
     // The position of the last consumed character by `next_char()`.
-    pub last_position: Position,
+    last_position: Position,
 
     // The token 1-based index of the last newline character.
     //
@@ -65,7 +74,7 @@ struct Lexer<'a> {
     // it is considered as the start of a preprocessor directive.
     //
     // Initialized to 0 to make the `#` as directive start token if it is the first token.
-    pub last_newline_token_index_1_based: usize,
+    last_newline_token_index_1_based: usize,
 
     // The line index of last directive line.
     //
@@ -74,7 +83,7 @@ struct Lexer<'a> {
     // a `DirectiveEnd` token is emitted.
     //
     // Initialized to `None` to indicate no directive line at initialization.
-    pub last_directive_line_index: Option<usize>,
+    last_directive_line_index: Option<usize>,
 
     // Stack of positions.
     // It is used to store the positions of characters when consuming them in sequence,
@@ -88,7 +97,7 @@ impl<'a> Lexer<'a> {
             upstream,
             last_position: Position::default(),
             last_newline_token_index_1_based: 0, // to make the `#` as directive start token if it is the first token
-            last_directive_line_index: None, // no directive line at initialization
+            last_directive_line_index: None,     // no directive line at initialization
             position_stack: vec![],
         }
     }
@@ -120,12 +129,19 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Checks if the character at the given offset matches the expected character.
+    /// It is a convenient method for checking the next few characters without consuming them.
+    /// Returns `true` if the character at the given offset matches the expected character,
+    /// otherwise returns `false`.
     fn peek_char_and_equals(&self, offset: usize, expected_char: char) -> bool {
         matches!(
             self.upstream.peek(offset),
             Some(CharWithPosition { character, .. }) if character == &expected_char)
     }
 
+    /// Checks if the character at the given offset matches any of the expected characters.
+    /// Returns `true` if the character at the given offset matches any of the expected characters,
+    /// otherwise returns `false`.
     fn peek_char_and_anyof(&self, offset: usize, expected_chars: &[char]) -> bool {
         matches!(
             self.upstream.peek(offset),
@@ -172,6 +188,7 @@ impl Lexer<'_> {
                 }
                 '\r' if self.peek_char_and_equals(1, '\n') => {
                     // Convert Windows-style line ending "\r\n" to a single '\n'.
+                    self.push_peek_position_into_stack();
                     self.next_char(); // consume '\r'
                     self.next_char(); // consume '\n'
 
@@ -179,8 +196,8 @@ impl Lexer<'_> {
                     // `# ... \r\n`
                     if self.in_directive_line() {
                         output.push(TokenWithRange::new(
-                            Token::DirectiveEnd,
-                            Range::from_single_position(&self.last_position),
+                            Token::_DirectiveEnd,
+                            Range::new(&self.pop_position_from_stack(), &self.last_position),
                         ));
                     }
 
@@ -194,7 +211,7 @@ impl Lexer<'_> {
                     // `# ... \n`
                     if self.in_directive_line() {
                         output.push(TokenWithRange::new(
-                            Token::DirectiveEnd,
+                            Token::_DirectiveEnd,
                             Range::from_single_position(&self.last_position),
                         ));
                     }
@@ -799,7 +816,7 @@ impl Lexer<'_> {
                     self.next_char(); // consume '#'
 
                     output.push(TokenWithRange::new(
-                        Token::PoundPound,
+                        Token::_PoundPound,
                         Range::new(&self.pop_position_from_stack(), &self.last_position),
                     ));
                 }
@@ -810,7 +827,7 @@ impl Lexer<'_> {
                     self.last_directive_line_index = Some(self.last_position.line);
 
                     output.push(TokenWithRange::new(
-                        Token::DirectiveStart,
+                        Token::_DirectiveStart,
                         Range::from_single_position(&self.last_position),
                     ));
                 }
@@ -819,7 +836,7 @@ impl Lexer<'_> {
                     self.next_char(); // consume '#'
 
                     output.push(TokenWithRange::new(
-                        Token::Pound,
+                        Token::_Pound,
                         Range::from_single_position(&self.last_position),
                     ));
                 }
@@ -904,7 +921,7 @@ impl Lexer<'_> {
                         } = token_with_range
                         {
                             let function_like_macro_identifier =
-                                Token::FunctionLikeMacroIdentifier(id);
+                                Token::_FunctionLikeMacroIdentifier(id);
                             output.push(TokenWithRange::new(function_like_macro_identifier, range));
                         } else {
                             unreachable!()
@@ -956,12 +973,12 @@ impl Lexer<'_> {
                     // This has a fixed numerical definition: code points are in the range 0 to 0x10FFFF,
                     // inclusive. Surrogate code points, used by UTF-16, are in the range 0xD800 to 0xDFFF.
                     //
-                    // See:
+                    // check out:
                     // https://doc.rust-lang.org/std/primitive.char.html
                     //
-                    // the range of CJK chars is '\u{4e00}'..='\u{9fff}',
-                    // for complete CJK chars, check out Unicode standard "Ch. 18.1 Han - CJK Unified Ideographs".
-                    // this is "Table 18-1. Blocks Containing Han Ideographs":
+                    // CJK chars: '\u{4e00}'..='\u{9fff}'
+                    // for complete CJK chars, check out Unicode standard
+                    // Ch. 18.1 Han CJK Unified Ideographs
                     //
                     // | Block                                   | LocRange    | Comment |
                     // |-----------------------------------------|-------------|---------|
@@ -977,7 +994,8 @@ impl Lexer<'_> {
                     // | CJK Compatibility Ideographs            | F900–FAFF   | Duplicates, unifiable variants, corporate characters |
                     // | CJK Compatibility Ideographs Supplement | 2F800–2FA1F | Unifiable variants             |
                     //
-                    // see:
+                    // see also:
+                    //
                     // - https://www.unicode.org/versions/Unicode15.0.0/ch18.pdf
                     // - https://en.wikipedia.org/wiki/CJK_Unified_Ideographs
                     // - https://www.unicode.org/versions/Unicode15.0.0/
@@ -1028,24 +1046,31 @@ impl Lexer<'_> {
         // |________// current char, validated
         //
         // T = terminator chars || EOF
-        //
-        // Examples:
-        // - 123
-        // - 3.14
-        // - 2.99e8
-        // - 2.99e+8
-        // - 6.672e-34
         // ```
 
         let mut number_buffer = String::new();
-        let mut found_point = leading_dot; // to indicated whether char '.' is found
-        let mut found_e = false; // to indicated whether char 'e' is found
+
+        // A flag to indicate whether '.' is found.
+        // The presence of '.' indicates a floating-point number.
+        let mut found_point = leading_dot;
+
+        // A flag to indicate whether 'e' is found.
+        // The presence of 'e' indicates a floating-point number.
+        let mut found_e = false;
 
         let mut is_unsigned = false;
         let mut integer_number_width = IntegerNumberWidth::Default;
 
         let mut is_decimal = false; // suffix 'dd', 'df', and 'dl'.
         let mut floating_point_number_width = FloatingPointNumberWidth::Default; // default floating-point number type is `double`
+
+        // Decimal number samples:
+        //
+        // 123
+        // 3.14
+        // 2.99e8
+        // 2.99e+8
+        // 6.672e-34
 
         self.push_peek_position_into_stack();
 
@@ -1072,9 +1097,12 @@ impl Lexer<'_> {
                             *self.peek_position(0).unwrap(),
                         ));
                     } else {
+                        // Examples of decimal floating-point numbers with '.':
+                        // 3.14
+                        // 271.828
+
                         found_point = true;
                         number_buffer.push(*current_char);
-
                         self.next_char(); // consumes '.'
                     }
                 }
@@ -1085,8 +1113,12 @@ impl Lexer<'_> {
                             *self.peek_position(0).unwrap(),
                         ));
                     } else {
-                        found_e = true;
+                        // Examples of decimal floating-point numbers with 'e':
+                        // 123e45
+                        // 123e+45
+                        // 123e-45
 
+                        found_e = true;
                         if self.peek_char_and_equals(1, '-') {
                             number_buffer.push_str("e-");
                             self.next_char(); // consumes 'e' or 'E'
@@ -1148,7 +1180,8 @@ impl Lexer<'_> {
             ));
         }
 
-        // normalize
+        // check syntax
+
         if number_buffer.ends_with('.') {
             // if the number ends with a dot, e.g. `1.`, then we should add a trailing zero
             number_buffer.push('0');
@@ -1185,7 +1218,8 @@ impl Lexer<'_> {
         // |________// current char, validated
         //
         // T = terminator chars || EOF
-        //
+        // ```
+
         // Examples:
         // - 0x1a2b
         // - 0xBEEF
@@ -1193,11 +1227,16 @@ impl Lexer<'_> {
         // - 0x0.123p+45
         // - 0x0.123p-45
         // - 0x12p3
-        // ```
 
         let mut number_buffer = String::new();
-        let mut found_point: bool = false; // to indicated whether char '.' is found
-        let mut found_p: bool = false; // to indicated whether char 'p' is found
+
+        // A flag to indicate whether '.' is found.
+        // The presence of '.' indicates a floating-point number.
+        let mut found_point: bool = false;
+
+        // A flag to indicate whether 'p' is found.
+        // The presence of 'p' indicates a hexadecimal floating-point number.
+        let mut found_p: bool = false;
 
         let mut is_unsigned = false;
         let mut integer_number_width = IntegerNumberWidth::Default;
@@ -1242,15 +1281,16 @@ impl Lexer<'_> {
                             *self.peek_position(0).unwrap(),
                         ));
                     } else {
-                        // going to be hex floating point literal mode
-                        found_point = true;
+                        // Examples of hexadecimal floating-point numbers with '.':
+                        // 0x1.9
+                        // 0x12.bc
 
+                        found_point = true;
                         if number_buffer.len() == 2 {
                             // if the number starts with a dot, e.g. `0x.5`, then we should add a leading zero
                             number_buffer.push('0');
                         }
                         number_buffer.push(*current_char);
-
                         self.next_char(); // consumes '.'
                     }
                 }
@@ -1266,6 +1306,11 @@ impl Lexer<'_> {
                             *self.peek_position(0).unwrap(),
                         ));
                     } else {
+                        // Examples of hexadecimal floating-point numbers with 'p':
+                        // 0x0.123p45
+                        // 0x0.123p+45
+                        // 0x0.123p-45
+
                         found_p = true;
 
                         // normalize
@@ -1472,12 +1517,12 @@ impl Lexer<'_> {
         // T = terminator chars || EOF
         // ```
 
-        // Save the start position of the octal number (i.e. the first '0')
-        self.push_peek_position_into_stack();
-
         let mut number_buffer = String::new();
         let mut is_unsigned = false;
         let mut integer_number_width = IntegerNumberWidth::Default;
+
+        // Save the start position of the octal number (i.e. the first '0')
+        self.push_peek_position_into_stack();
 
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
@@ -1731,8 +1776,8 @@ impl Lexer<'_> {
                         // - https://en.cppreference.com/w/c/language/escape.html
                         // - https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
                         let escaped_char = match self.next_char() {
-                            Some(current_char2) => {
-                                match current_char2 {
+                            Some(escape_type) => {
+                                match escape_type {
                                     'a' => '\x07', // bell (BEL, ascii 7)
                                     'b' => '\x08', // backspace (BS, ascii 8)
                                     't' => '\t',   // horizontal tabulation (HT, ascii 9)
@@ -1754,7 +1799,7 @@ impl Lexer<'_> {
                                         const MAX_OCTAL_DIGITS: usize = 3; // max 3 octal digits
 
                                         let mut buffer = String::new();
-                                        buffer.push(current_char2);
+                                        buffer.push(escape_type);
 
                                         while let Some(next_char) = self.peek_char(0) {
                                             match next_char {
@@ -1812,7 +1857,7 @@ impl Lexer<'_> {
                                         //   format: `\Uhhhhhhhh`.
                                         //
                                         // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Universal_character_names
-                                        let length = if current_char2 == 'u' {
+                                        let length = if escape_type == 'u' {
                                             4 // 4 hex digits
                                         } else {
                                             8 // 8 hex digits
@@ -1838,7 +1883,7 @@ impl Lexer<'_> {
                                             return Err(PreprocessError::MessageWithRange(
                                                 format!(
                                                     "Invalid unicode escape sequence '\\{}{}'. Expected {} hex digits.",
-                                                    current_char2, buffer, length
+                                                    escape_type, buffer, length
                                                 ),
                                                 Range::new(
                                                     &self.pop_position_from_stack(),
@@ -1856,7 +1901,7 @@ impl Lexer<'_> {
                                                     return Err(PreprocessError::MessageWithRange(
                                                         format!(
                                                             "Invalid unicode code point '\\{}{}'.",
-                                                            current_char2, buffer
+                                                            escape_type, buffer
                                                         ),
                                                         Range::new(
                                                             &self.pop_position_from_stack(),
@@ -1869,7 +1914,7 @@ impl Lexer<'_> {
                                                 return Err(PreprocessError::MessageWithRange(
                                                     format!(
                                                         "Invalid unicode escape sequence '\\{}{}'.",
-                                                        current_char2, buffer
+                                                        escape_type, buffer
                                                     ),
                                                     Range::new(
                                                         &self.pop_position_from_stack(),
@@ -1935,10 +1980,7 @@ impl Lexer<'_> {
                                     _ => {
                                         // Unexpected escape char.
                                         return Err(PreprocessError::MessageWithPosition(
-                                            format!(
-                                                "Invalid escape character '{}'.",
-                                                current_char2
-                                            ),
+                                            format!("Invalid escape character '{}'.", escape_type),
                                             self.last_position,
                                         ));
                                     }
@@ -2017,10 +2059,10 @@ impl Lexer<'_> {
         // |_______// current char, validated
         // ```
 
-        // save the start position of the string literal (i.e. the first '"')
+        // Save the start position of the string literal (i.e. the first '"')
         self.push_peek_position_into_stack();
 
-        // consume the prefix characters, e.g. 'L', 'u', 'U', "u8"
+        // Consumes the prefix characters, e.g. 'L', 'u', 'U', "u8"
         for _ in 0..prefix_length {
             self.next_char();
         }
@@ -2042,8 +2084,8 @@ impl Lexer<'_> {
                             // - https://en.cppreference.com/w/c/language/escape.html
                             // - https://en.wikipedia.org/wiki/Escape_sequences_in_C#Escape_sequences
                             let escaped_char = match self.next_char() {
-                                Some(current_char2) => {
-                                    match current_char2 {
+                                Some(escape_type) => {
+                                    match escape_type {
                                         'a' => '\x07', // bell (BEL, ascii 7)
                                         'b' => '\x08', // backspace (BS, ascii 8)
                                         't' => '\t',   // horizontal tabulation (HT, ascii 9)
@@ -2066,7 +2108,7 @@ impl Lexer<'_> {
 
                                             // Octal escape sequence buffer
                                             let mut buffer = String::new();
-                                            buffer.push(current_char2);
+                                            buffer.push(escape_type);
 
                                             while let Some(next_char) = self.peek_char(0) {
                                                 match next_char {
@@ -2126,7 +2168,7 @@ impl Lexer<'_> {
                                             //   format: `\Uhhhhhhhh`.
                                             //
                                             // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Universal_character_names
-                                            let length = if current_char2 == 'u' {
+                                            let length = if escape_type == 'u' {
                                                 4 // 4 hex digits
                                             } else {
                                                 8 // 8 hex digits
@@ -2153,7 +2195,7 @@ impl Lexer<'_> {
                                                 return Err(PreprocessError::MessageWithRange(
                                                     format!(
                                                         "Invalid unicode escape sequence '\\{}{}'. Expected {} hex digits.",
-                                                        current_char2, buffer, length
+                                                        escape_type, buffer, length
                                                     ),
                                                     Range::new(
                                                         &self.pop_position_from_stack(),
@@ -2172,7 +2214,7 @@ impl Lexer<'_> {
                                                             PreprocessError::MessageWithRange(
                                                                 format!(
                                                                     "Invalid unicode code point '\\{}{}'.",
-                                                                    current_char2, buffer
+                                                                    escape_type, buffer
                                                                 ),
                                                                 Range::new(
                                                                     &self.pop_position_from_stack(),
@@ -2186,7 +2228,7 @@ impl Lexer<'_> {
                                                     return Err(PreprocessError::MessageWithRange(
                                                         format!(
                                                             "Invalid unicode escape sequence '\\{}{}'.",
-                                                            current_char2, buffer
+                                                            escape_type, buffer
                                                         ),
                                                         Range::new(
                                                             &self.pop_position_from_stack(),
@@ -2255,7 +2297,7 @@ impl Lexer<'_> {
                                             return Err(PreprocessError::MessageWithPosition(
                                                 format!(
                                                     "Invalid escape character '{}'.",
-                                                    current_char2
+                                                    escape_type
                                                 ),
                                                 self.last_position,
                                             ));
@@ -2345,7 +2387,7 @@ impl Lexer<'_> {
         let file_path_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         Ok(TokenWithRange::new(
-            Token::FilePath(file_path_buffer, false),
+            Token::_FilePath(file_path_buffer, false),
             file_path_range,
         ))
     }
@@ -2392,7 +2434,7 @@ impl Lexer<'_> {
         let file_path_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         Ok(TokenWithRange::new(
-            Token::FilePath(file_path_buffer, true),
+            Token::_FilePath(file_path_buffer, true),
             file_path_range,
         ))
     }
@@ -2410,7 +2452,7 @@ impl Lexer<'_> {
             && matches!(
                 token_with_ranges.get(length - 2),
                 Some(TokenWithRange {
-                    token: Token::DirectiveStart,
+                    token: Token::_DirectiveStart,
                     ..
                 })
             )
@@ -2438,7 +2480,7 @@ impl Lexer<'_> {
             && matches!(
                 token_with_ranges.get(length - 2),
                 Some(TokenWithRange {
-                    token: Token::DirectiveStart,
+                    token: Token::_DirectiveStart,
                     ..
                 })
             )
@@ -4784,12 +4826,12 @@ xyz
             .unwrap(),
             vec![
                 Token::new_identifier("abc"),
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("define"),
                 Token::new_identifier("FOO"),
-                Token::DirectiveEnd,
+                Token::_DirectiveEnd,
                 Token::new_identifier("xyz"),
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("define"),
                 Token::new_identifier("BAR"),
             ]
@@ -4806,28 +4848,28 @@ xyz
             )
             .unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("define"),
-                Token::FunctionLikeMacroIdentifier("FOO".to_owned()),
+                Token::_FunctionLikeMacroIdentifier("FOO".to_owned()),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::new_identifier("x"),
                 Token::Punctuator(Punctuator::ParenthesisClose),
-                Token::Pound,
+                Token::_Pound,
                 Token::new_identifier("x"),
-                Token::DirectiveEnd,
+                Token::_DirectiveEnd,
                 //
                 Token::new_identifier("abc"),
                 //
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("define"),
-                Token::FunctionLikeMacroIdentifier("BAR".to_owned()),
+                Token::_FunctionLikeMacroIdentifier("BAR".to_owned()),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::new_identifier("y"),
                 Token::Punctuator(Punctuator::ParenthesisClose),
                 Token::new_identifier("y"),
-                Token::PoundPound,
+                Token::_PoundPound,
                 Token::new_integer_number(2),
-                Token::DirectiveEnd,
+                Token::_DirectiveEnd,
                 //
                 Token::new_identifier("xyz"),
             ]
@@ -4836,9 +4878,9 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip("#foo # bar").unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("foo"),
-                Token::Pound,
+                Token::_Pound,
                 Token::new_identifier("bar")
             ]
         );
@@ -4846,16 +4888,16 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip("#foo ###").unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("foo"),
-                Token::PoundPound,
-                Token::Pound
+                Token::_PoundPound,
+                Token::_Pound
             ]
         );
 
         assert_eq!(
             lex_from_str_with_range_strip("#\n").unwrap(),
-            vec![Token::DirectiveStart, Token::DirectiveEnd,]
+            vec![Token::_DirectiveStart, Token::_DirectiveEnd,]
         );
     }
 
@@ -4887,18 +4929,18 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#include <foo.h>"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("include"),
-                Token::FilePath("foo.h".to_owned(), true),
+                Token::_FilePath("foo.h".to_owned(), true),
             ]
         );
 
         assert_eq!(
             lex_from_str_with_range_strip(r#"#embed <hippo.png>"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("embed"),
-                Token::FilePath("hippo.png".to_owned(), true),
+                Token::_FilePath("hippo.png".to_owned(), true),
             ]
         );
 
@@ -4919,11 +4961,11 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#if __has_include(<foo.h>)"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_include"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("foo.h".to_owned(), true),
+                Token::_FilePath("foo.h".to_owned(), true),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -4945,11 +4987,11 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#if __has_embed(<hippo.png>)"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_embed"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("hippo.png".to_owned(), true),
+                Token::_FilePath("hippo.png".to_owned(), true),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -4967,18 +5009,18 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#include "bar.h""#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("include"),
-                Token::FilePath("bar.h".to_owned(), false),
+                Token::_FilePath("bar.h".to_owned(), false),
             ]
         );
 
         assert_eq!(
             lex_from_str_with_range_strip(r#"#embed "spark.png""#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("embed"),
-                Token::FilePath("spark.png".to_owned(), false),
+                Token::_FilePath("spark.png".to_owned(), false),
             ]
         );
 
@@ -4995,11 +5037,11 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#if __has_include("spark.png")"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_include"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("spark.png".to_owned(), false),
+                Token::_FilePath("spark.png".to_owned(), false),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -5017,11 +5059,11 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#if __has_embed("spark.png")"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("if"),
                 Token::new_identifier("__has_embed"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
-                Token::FilePath("spark.png".to_owned(), false),
+                Token::_FilePath("spark.png".to_owned(), false),
                 Token::Punctuator(Punctuator::ParenthesisClose),
             ]
         );
@@ -5030,9 +5072,9 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#include <path\to\header.h>"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("include"),
-                Token::FilePath("path\\to\\header.h".to_owned(), true),
+                Token::_FilePath("path\\to\\header.h".to_owned(), true),
             ]
         );
 
@@ -5040,13 +5082,13 @@ xyz
         assert_eq!(
             lex_from_str("#include <path/to/header.h>").unwrap(),
             vec![
-                TokenWithRange::new(Token::DirectiveStart, Range::from_detail(0, 0, 0, 1)),
+                TokenWithRange::new(Token::_DirectiveStart, Range::from_detail(0, 0, 0, 1)),
                 TokenWithRange::new(
                     Token::new_identifier("include"),
                     Range::from_detail(1, 0, 1, 7)
                 ),
                 TokenWithRange::new(
-                    Token::FilePath("path/to/header.h".to_owned(), true),
+                    Token::_FilePath("path/to/header.h".to_owned(), true),
                     Range::from_detail(9, 0, 9, 18)
                 )
             ]
@@ -5096,7 +5138,7 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#define foo (a)"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("define"),
                 Token::new_identifier("foo"),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
@@ -5108,9 +5150,9 @@ xyz
         assert_eq!(
             lex_from_str_with_range_strip(r#"#define foo(a)"#).unwrap(),
             vec![
-                Token::DirectiveStart,
+                Token::_DirectiveStart,
                 Token::new_identifier("define"),
-                Token::FunctionLikeMacroIdentifier("foo".to_owned()),
+                Token::_FunctionLikeMacroIdentifier("foo".to_owned()),
                 Token::Punctuator(Punctuator::ParenthesisOpen),
                 Token::new_identifier("a"),
                 Token::Punctuator(Punctuator::ParenthesisClose),

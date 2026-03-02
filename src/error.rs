@@ -17,8 +17,34 @@ pub enum PreprocessError {
 }
 
 impl Display for PreprocessError {
-    fn fmt(&self, _f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        unimplemented!()
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            PreprocessError::Message(msg) => f.write_str(msg),
+            PreprocessError::UnexpectedEndOfDocument(detail) => {
+                writeln!(f, "Unexpected to reach the end of document.")?;
+                write!(f, "{}", detail)
+            }
+            PreprocessError::MessageWithPosition(detail, position) => {
+                writeln!(
+                    f,
+                    "Error at line: {} column: {}",
+                    position.line + 1,
+                    position.column + 1
+                )?;
+                write!(f, "{}", detail)
+            }
+            PreprocessError::MessageWithRange(detail, range) => {
+                writeln!(
+                    f,
+                    "Error from line: {} column: {}, to line: {} column: {}",
+                    range.start.line + 1,
+                    range.start.column + 1,
+                    range.end_included.line + 1,
+                    range.end_included.column + 1
+                )?;
+                write!(f, "{}", detail)
+            }
+        }
     }
 }
 

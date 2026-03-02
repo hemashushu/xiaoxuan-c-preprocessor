@@ -6,8 +6,8 @@
 
 use crate::position::Position;
 
-#[derive(Debug, PartialEq)]
 /// Represents a character along with its position in the source text.
+#[derive(Debug, PartialEq)]
 pub struct CharWithPosition {
     /// The character from the source text.
     pub character: char,

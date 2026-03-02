@@ -17,6 +17,63 @@ where
     buffer_size: usize,
 }
 
+impl<'a, T> PeekableIter<'a, T>
+where
+    T: PartialEq,
+{
+    /// Creates a new PeekableIter with the specified buffer size.
+    /// The buffer is pre-filled with elements from the upstream iterator.
+    ///
+    /// `buffer_size` The size of the buffer to use for peeking.
+    /// For example, if `buffer_size` is 2, you can peek with offsets 0 and 1.
+    ///
+    /// The default and minimum buffer size is 1, which allows peeking at the next element only,
+    /// i.e., `peek(0)`.
+    /// The maximum buffer size is `ROUND_QUEUE_LENGTH - 1` (i.e., 7), which allows
+    /// peeking up to 7 elements ahead.
+    pub fn new(upstream: &'a mut dyn Iterator<Item = T>, buffer_size: usize) -> Self {
+        let mut buffer = RoundQueue::new(buffer_size);
+
+        // Pre-fill the buffer with the first `buffer_size` elements from the upstream iterator.
+        for _ in 0..buffer_size {
+            let value = upstream.next();
+            buffer.enqueue(value);
+        }
+
+        Self {
+            upstream,
+            buffer,
+            buffer_size,
+        }
+    }
+
+    /// Returns a reference to the element at the specified offset in the buffer,
+    /// or None if that position is empty. The offset must be less than the buffer size.
+    pub fn peek(&self, offset: usize) -> Option<&T> {
+        assert!(offset < self.buffer_size);
+        self.buffer.peek(offset)
+    }
+}
+
+impl<T> Iterator for PeekableIter<'_, T>
+where
+    T: PartialEq,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Remove and return the next value from the buffer.
+        // The buffer is pre-filled during initialization, so we always dequeue first,
+        // then fetch the next value from the upstream iterator and enqueue it.
+        let value = self.buffer.dequeue();
+
+        let next_value = self.upstream.next();
+        self.buffer.enqueue(next_value);
+
+        value
+    }
+}
+
 /// A fixed-size circular queue used for buffering elements in PeekableIter.
 struct RoundQueue<T>
 where
@@ -80,58 +137,6 @@ where
         }
 
         self.data[position].as_ref()
-    }
-}
-
-impl<'a, T> PeekableIter<'a, T>
-where
-    T: PartialEq,
-{
-    /// Creates a new PeekableIter with the specified buffer size.
-    /// The buffer is pre-filled with elements from the upstream iterator.
-    ///
-    /// `buffer_size` The size of the buffer to use for peeking. For example,
-    /// if `buffer_size` is 2, you can peek with offsets 0 and 1.
-    pub fn new(upstream: &'a mut dyn Iterator<Item = T>, buffer_size: usize) -> Self {
-        let mut buffer = RoundQueue::new(buffer_size);
-
-        // Pre-fill the buffer with the first `buffer_size` elements from the upstream iterator.
-        for _ in 0..buffer_size {
-            let value = upstream.next();
-            buffer.enqueue(value);
-        }
-
-        Self {
-            upstream,
-            buffer,
-            buffer_size,
-        }
-    }
-
-    /// Returns a reference to the element at the specified offset in the buffer,
-    /// or None if that position is empty. The offset must be less than the buffer size.
-    pub fn peek(&self, offset: usize) -> Option<&T> {
-        assert!(offset < self.buffer_size);
-        self.buffer.peek(offset)
-    }
-}
-
-impl<T> Iterator for PeekableIter<'_, T>
-where
-    T: PartialEq,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // Remove and return the next value from the buffer.
-        // The buffer is pre-filled during initialization, so we always dequeue first,
-        // then fetch the next value from the upstream iterator and enqueue it.
-        let value = self.buffer.dequeue();
-
-        let next_value = self.upstream.next();
-        self.buffer.enqueue(next_value);
-
-        value
     }
 }
 

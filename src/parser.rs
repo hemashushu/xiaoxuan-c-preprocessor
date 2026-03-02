@@ -13,8 +13,13 @@ use crate::{
     token::{Punctuator, StringEncoding, Token, TokenWithRange},
 };
 
-// Buffer sizes for lookahead in `PeekableIter`.
-const PEEK_BUFFER_LENGTH_PARSE: usize = 4;
+// Buffer length for peeking tokens in the parser.
+// We need to peek at most 2 tokens in the following cases:
+// - To distinguish between object-like and function-like macro definitions,
+//   we need to peek the token after the macro name to see if it's an opening parenthesis '('.
+// - To detect branches in `#if` structures, we need to peek the
+//   next two tokens to see if they are `#elif` or `#else`.
+const PEEK_BUFFER_LENGTH_PARSE: usize = 2;
 
 pub fn parse_from_str(source_text: &str) -> Result<Program, PreprocessError> {
     let tokens = lex_from_str(source_text)?;
@@ -82,6 +87,9 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // Peek the next token and check if it equals to the expected token,
+    // return false if not equals or no more token,
+    // error if lexing error occurs during peeking.
     fn peek_token_and_equals(&self, offset: usize, expected_token: &Token) -> bool {
         matches!(
             self.peek_token(offset),
@@ -101,7 +109,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume_identifier_and_expect(
+    /// Consume the next token and check if it's an identifier with the expected name,
+    /// return the identifier if it matches, otherwise return an error.
+    fn consume_identifier_and_assert(
         &mut self,
         identifier: &str,
     ) -> Result<String, PreprocessError> {
@@ -131,22 +141,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // fn consume_number(&mut self) -> Result<Number, PreprocessError> {
-    //     match self.next_token() {
-    //         Some(Token::Number(n)) => Ok(n),
-    //         Some(_) => Err(PreprocessError::MessageWithPosition(
-    //             "Expect a number.".to_owned(),
-    //             self.last_range.start,
-    //         )),
-    //         None => Err(PreprocessError::UnexpectedEndOfDocument(
-    //             "Expect a number.".to_owned(),
-    //         )),
-    //     }
-    // }
-
     fn consume_directive_end_or_eof(&mut self) -> Result<(), PreprocessError> {
         match self.next_token() {
-            Some(Token::DirectiveEnd) => Ok(()),
+            Some(Token::_DirectiveEnd) => Ok(()),
             Some(_) => Err(PreprocessError::MessageWithPosition(
                 "Expect a newline.".to_owned(),
                 self.last_range.start,
@@ -157,7 +154,7 @@ impl<'a> Parser<'a> {
 
     fn consume_directive_end(&mut self) -> Result<(), PreprocessError> {
         match self.next_token() {
-            Some(Token::DirectiveEnd) => Ok(()),
+            Some(Token::_DirectiveEnd) => Ok(()),
             _ => Err(PreprocessError::MessageWithPosition(
                 "Expect a newline.".to_owned(),
                 self.last_range.start,
@@ -165,7 +162,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume_token_and_expect(
+    /// Consume the next token and check if it equals to the expected token,
+    /// return Ok(()) if it matches, otherwise return an error.
+    fn consume_token_and_assert(
         &mut self,
         expected_token: &Token,
         token_description: &str,
@@ -188,17 +187,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // expects open parenthesis '(' and consumes it.
     fn consume_opening_paren(&mut self) -> Result<(), PreprocessError> {
-        self.consume_token_and_expect(
+        self.consume_token_and_assert(
             &Token::Punctuator(Punctuator::ParenthesisOpen),
             "opening parenthesis",
         )
     }
 
-    // expects close parenthesis ')' and consumes it.
     fn consume_closing_paren(&mut self) -> Result<(), PreprocessError> {
-        self.consume_token_and_expect(
+        self.consume_token_and_assert(
             &Token::Punctuator(Punctuator::ParenthesisClose),
             "closing parenthesis",
         )
@@ -226,7 +223,7 @@ impl Parser<'_> {
         // ```
 
         let statement = match self.peek_token(0).unwrap() {
-            Token::DirectiveStart => {
+            Token::_DirectiveStart => {
                 self.next_token(); // consume '#'
 
                 if let Some(TokenWithRange {
@@ -341,7 +338,7 @@ impl Parser<'_> {
                 // Collect tokens until we hit a directive start ('#' sign) or EOF.
                 while let Some(token) = self.peek_token(0) {
                     match token {
-                        Token::DirectiveStart => {
+                        Token::_DirectiveStart => {
                             // If we hit a directive start ('#' sign), we stop collecting code tokens.
                             break;
                         }
@@ -434,7 +431,7 @@ impl Parser<'_> {
                 loop {
                     if let Some(token) = parser.peek_token(0) {
                         match token {
-                            Token::DirectiveEnd => {
+                            Token::_DirectiveEnd => {
                                 if bracket_stack.is_empty() {
                                     // Empty definition or balanced brackets/quotes,
                                     // it is safe to stop collecting tokens.
@@ -523,7 +520,7 @@ impl Parser<'_> {
                     definition,
                 }
             }
-            Some(Token::FunctionLikeMacroIdentifier(id)) => {
+            Some(Token::_FunctionLikeMacroIdentifier(id)) => {
                 // Handle function-like macro definition
                 let name = id.clone();
                 let range = *self.peek_range(0).unwrap();
@@ -572,7 +569,7 @@ impl Parser<'_> {
         // Move all tokens to `components` until we hit a newline or EOF.
         while let Some(token) = self.peek_token(0) {
             match token {
-                Token::DirectiveEnd => {
+                Token::_DirectiveEnd => {
                     break;
                 }
                 _ => {
@@ -620,7 +617,7 @@ impl Parser<'_> {
         // Move all tokens to `components` until we hit a newline or EOF.
         while let Some(token) = self.peek_token(0) {
             match token {
-                Token::DirectiveEnd => {
+                Token::_DirectiveEnd => {
                     break;
                 }
                 _ => {
@@ -674,7 +671,7 @@ impl Parser<'_> {
                 // Collect tokens until we hit a newline or EOF.
                 loop {
                     match parser.peek_token(0) {
-                        Some(token) if token == &Token::DirectiveEnd => {
+                        Some(token) if token == &Token::_DirectiveEnd => {
                             break;
                         }
                         Some(_) => {
@@ -698,7 +695,7 @@ impl Parser<'_> {
             // Collect statements until we hit an `#else`, `#elif`, `#elifdef`, `#elifndef` or `#endif`.
             loop {
                 if parser.peek_token(0).is_some() {
-                    if matches!(parser.peek_token(0), Some(Token::DirectiveStart))
+                    if matches!(parser.peek_token(0), Some(Token::_DirectiveStart))
                         && matches!(parser.peek_token(1), Some(Token::Identifier(id)) if
                        ["else", "elif", "elifdef", "elifndef", "endif"].contains(&id.as_str()))
                     {
@@ -782,7 +779,7 @@ impl Parser<'_> {
 
             // Continue to the next iteration if we encounter
             // `#elif`, `#elifdef` or `#elifndef` directives.
-            if matches!(self.peek_token(0), Some(Token::DirectiveStart))
+            if matches!(self.peek_token(0), Some(Token::_DirectiveStart))
                 && matches!(self.peek_token(1), Some(Token::Identifier(id)) if
                ["elif", "elifdef", "elifndef"].contains(&id.as_str()))
             {
@@ -795,7 +792,7 @@ impl Parser<'_> {
         }
 
         // If we hit an `#else`, we collect the alternative statements.
-        if matches!(self.peek_token(0), Some(Token::DirectiveStart))
+        if matches!(self.peek_token(0), Some(Token::_DirectiveStart))
             && matches!(self.peek_token(1), Some(Token::Identifier(id)) if id.as_str() == "else")
         {
             self.next_token(); // consumes '#'
@@ -809,8 +806,8 @@ impl Parser<'_> {
         }
 
         // Finally, we expect an `#endif` to close the `if` block.
-        self.consume_token_and_expect(&Token::DirectiveStart, "directive start punctuator `#`")?;
-        self.consume_identifier_and_expect("endif")?;
+        self.consume_token_and_assert(&Token::_DirectiveStart, "directive start punctuator `#`")?;
+        self.consume_identifier_and_assert("endif")?;
         self.consume_directive_end_or_eof()?;
 
         let if_ = If {
@@ -835,7 +832,7 @@ impl Parser<'_> {
         // Move all tokens to `components` until we hit a newline or EOF.
         while let Some(token) = self.peek_token(0) {
             match token {
-                Token::DirectiveEnd => {
+                Token::_DirectiveEnd => {
                     break;
                 }
                 _ => {
