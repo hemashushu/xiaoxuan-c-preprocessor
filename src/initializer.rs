@@ -10,11 +10,6 @@ use crate::{
     peekable_iter::PeekableIter,
 };
 
-// Buffer sizes for lookahead in `PeekableIter`.
-const PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES: usize = 2;
-const PEEK_BUFFER_LENGTH_REMOVE_COMMENTS: usize = 2;
-const PEEK_BUFFER_LENGTH_REMOVE_SHEBANG: usize = 3;
-
 /// Preprocessing steps before tokenization.
 ///
 /// References:
@@ -29,20 +24,15 @@ const PEEK_BUFFER_LENGTH_REMOVE_SHEBANG: usize = 3;
 pub fn initialize(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessError> {
     let mut chars = source_text.chars();
     let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
-    let mut peekable_char_position_iter = PeekableIter::new(
-        &mut char_position_iter,
-        PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES,
-    );
+    let mut peekable_char_position_iter = PeekableIter::new(&mut char_position_iter);
 
     let merged = merge_continued_lines(&mut peekable_char_position_iter)?;
     let mut merged_iter = merged.into_iter();
-    let mut peekable_merged_iter =
-        PeekableIter::new(&mut merged_iter, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS);
+    let mut peekable_merged_iter = PeekableIter::new(&mut merged_iter);
 
     let clean = remove_comments(&mut peekable_merged_iter)?;
     let mut clean_iter = clean.into_iter();
-    let mut peekable_clean_iter =
-        PeekableIter::new(&mut clean_iter, PEEK_BUFFER_LENGTH_REMOVE_SHEBANG);
+    let mut peekable_clean_iter = PeekableIter::new(&mut clean_iter);
 
     remove_shebang(&mut peekable_clean_iter)
 }
@@ -227,11 +217,7 @@ fn remove_shebang(
 mod tests {
     use crate::{
         char_with_position::{CharWithPosition, CharsWithPositionIter},
-        initializer::{
-            PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS,
-            PEEK_BUFFER_LENGTH_REMOVE_SHEBANG, initialize, merge_continued_lines, remove_comments,
-            remove_shebang,
-        },
+        initializer::{initialize, merge_continued_lines, remove_comments, remove_shebang},
         peekable_iter::PeekableIter,
         position::Position,
     };
@@ -244,10 +230,7 @@ mod tests {
 
         let mut chars = source_text.chars();
         let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
-        let mut iter = PeekableIter::new(
-            &mut char_position_iter,
-            PEEK_BUFFER_LENGTH_MERGE_CONTINUED_LINES,
-        );
+        let mut iter = PeekableIter::new(&mut char_position_iter);
 
         let merged = merge_continued_lines(&mut iter).unwrap();
 
@@ -291,8 +274,7 @@ mod tests {
 
         let mut chars = source_text.chars();
         let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
-        let mut iter =
-            PeekableIter::new(&mut char_position_iter, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS);
+        let mut iter = PeekableIter::new(&mut char_position_iter);
 
         let clean = remove_comments(&mut iter).unwrap();
 
@@ -327,13 +309,11 @@ mod tests {
 
         let mut chars = source_text.chars();
         let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
-        let mut peekable_chars =
-            PeekableIter::new(&mut char_position_iter, PEEK_BUFFER_LENGTH_REMOVE_COMMENTS);
+        let mut peekable_chars = PeekableIter::new(&mut char_position_iter);
 
         let clean = remove_comments(&mut peekable_chars).unwrap();
         let mut clean_iter = clean.into_iter();
-        let mut peekable_clean_iter =
-            PeekableIter::new(&mut clean_iter, PEEK_BUFFER_LENGTH_REMOVE_SHEBANG);
+        let mut peekable_clean_iter = PeekableIter::new(&mut clean_iter);
         let pure = remove_shebang(&mut peekable_clean_iter).unwrap();
 
         assert_eq!(

@@ -13,9 +13,6 @@ use crate::{
     token::{Number, Punctuator, Token, TokenWithLocation},
 };
 
-// Buffer sizes for lookahead in `PeekableIter`.
-const PEEK_BUFFER_LENGTH_EXPRESSION_PARSE: usize = 3;
-
 /// Expanded expressions used in `#if` and `#elif` directives
 ///
 /// This expression can only contain integer constants, binary operators,
@@ -224,7 +221,7 @@ fn parse_expression(
 ) -> Result<Expression, PreprocessFileError> {
     let mut token_iter = token_with_locations.iter().cloned();
     let mut peekable_token_iter =
-        PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_EXPRESSION_PARSE);
+        PeekableIter::new(&mut token_iter);
     let mut parser = ExpressionParser::new(&mut peekable_token_iter, file_number);
 
     let expression = parser.parse_expression()?;

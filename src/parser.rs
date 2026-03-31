@@ -13,18 +13,10 @@ use crate::{
     token::{Punctuator, StringEncoding, Token, TokenWithRange},
 };
 
-// Buffer length for peeking tokens in the parser.
-// We need to peek at most 2 tokens in the following cases:
-// - To distinguish between object-like and function-like macro definitions,
-//   we need to peek the token after the macro name to see if it's an opening parenthesis '('.
-// - To detect branches in `#if` structures, we need to peek the
-//   next two tokens to see if they are `#elif` or `#else`.
-const PEEK_BUFFER_LENGTH_PARSE: usize = 2;
-
 pub fn parse_from_str(source_text: &str) -> Result<Program, PreprocessError> {
     let tokens = lex_from_str(source_text)?;
     let mut token_iter = tokens.into_iter();
-    let mut peekable_token_iter = PeekableIter::new(&mut token_iter, PEEK_BUFFER_LENGTH_PARSE);
+    let mut peekable_token_iter = PeekableIter::new(&mut token_iter);
     let mut parser = Parser::new(&mut peekable_token_iter);
     parser.parse_program()
 }

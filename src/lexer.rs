@@ -21,16 +21,11 @@ use crate::{
 
 use unicode_normalization::UnicodeNormalization;
 
-// Buffer length for peeking characters in the lexer.
-// It should be at least 3 to support peeking up to 2 characters for
-// multi-character punctuators (e.g., `...`).
-const PEEK_BUFFER_LENGTH_LEX: usize = 3;
-
 /// Lexes the source text into a token stream with ranges.
 pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
     let chars = initialize(source_text)?;
     let mut chars_iter = chars.into_iter();
-    let mut peekable_char_iter = PeekableIter::new(&mut chars_iter, PEEK_BUFFER_LENGTH_LEX);
+    let mut peekable_char_iter = PeekableIter::new(&mut chars_iter);
     let mut tokenizer = Lexer::new(&mut peekable_char_iter);
     tokenizer.lex()
 }
@@ -46,7 +41,7 @@ pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, Preprocess
 pub fn lex_from_clean_str(clean_source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
     let mut chars = clean_source_text.chars();
     let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
-    let mut peekable_char_iter = PeekableIter::new(&mut char_position_iter, PEEK_BUFFER_LENGTH_LEX);
+    let mut peekable_char_iter = PeekableIter::new(&mut char_position_iter);
     let mut tokenizer = Lexer::new(&mut peekable_char_iter);
     tokenizer.lex()
 }

@@ -31,9 +31,6 @@ use crate::{
     },
 };
 
-const PEEK_BUFFER_LENGTH_CODE_PARSE: usize = 2;
-const PEEK_BUFFER_LENGTH_CONCATENATE_STRING: usize = 2;
-
 /// Extra operators supported in the conditional directives.
 ///
 /// They can be used in the expressions of `#if` and `#elif` directives.
@@ -171,7 +168,7 @@ where
     } = processor.context;
 
     let mut iter = output.into_iter();
-    let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CONCATENATE_STRING);
+    let mut peekable_iter = PeekableIter::new(&mut iter);
     let concatenated = concatenate_adjacent_strings(&mut peekable_iter)?;
 
     let result = PreprocessResult {
@@ -956,7 +953,7 @@ where
 
         let mut output = Vec::new();
         let mut iter = body.into_iter();
-        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
+        let mut peekable_iter = PeekableIter::new(&mut iter);
         let mut code_parser = CodeParser::new(
             &mut peekable_iter,
             &first_token_with_location.token,
@@ -1455,7 +1452,7 @@ where
 
         let mut output = Vec::new();
         let mut iter = body.into_iter();
-        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
+        let mut peekable_iter = PeekableIter::new(&mut iter);
         let mut code_parser = CodeParser::new(
             &mut peekable_iter,
             &first_token_with_location.token,
@@ -2043,7 +2040,7 @@ where
 
         let mut output = Vec::new();
         let mut iter = body.into_iter();
-        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
+        let mut peekable_iter = PeekableIter::new(&mut iter);
         let mut code_parser = CodeParser::new(
             &mut peekable_iter,
             &first_token_with_location.token,
@@ -2450,7 +2447,7 @@ where
         let first_token_with_location = components.first().unwrap().clone();
 
         let mut iter = components.into_iter();
-        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
+        let mut peekable_iter = PeekableIter::new(&mut iter);
         let mut code_parser = CodeParser::new(
             &mut peekable_iter,
             &first_token_with_location.token,
@@ -2655,7 +2652,7 @@ where
         };
 
         let mut iter = components.into_iter();
-        let mut peekable_iter = PeekableIter::new(&mut iter, PEEK_BUFFER_LENGTH_CODE_PARSE);
+        let mut peekable_iter = PeekableIter::new(&mut iter);
         let mut code_parser = CodeParser::new(
             &mut peekable_iter,
             &first_token_with_location.token,
