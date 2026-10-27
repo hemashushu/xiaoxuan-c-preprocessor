@@ -49,7 +49,7 @@ To use ANCPP, add the following dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ancpp = "1.0.0"
+ancpp = "2.1.0"
 ```
 
 Alternatively, you can add it using the following command:

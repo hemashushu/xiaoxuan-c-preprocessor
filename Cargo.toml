@@ -11,6 +11,6 @@ categories = ["development-tools", "parser-implementations"]
 
 [dependencies]
 hexfloat2 = "0.2.0"
-chrono = "0.4.44"
+chrono = "0.4.45"
 pretty_assertions = "1.4.1"
-unicode-normalization = "0.1.25"
+unicode-normalization = "0.1.26"
