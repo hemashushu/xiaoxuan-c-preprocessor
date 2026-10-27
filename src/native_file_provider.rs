@@ -90,8 +90,7 @@ impl FileProvider for NativeFileProvider {
         canonical_full_path: &Path,
         offset: usize,
 
-        // Read at most this many bytes from the offset, or all remaining bytes
-        // if None. A short read may return fewer bytes than requested.
+        // Read at most this many bytes from the offset, or all remaining bytes if None.
         max_length: Option<usize>,
     ) -> Result<Vec<u8>, io::Error> {
         // Open the file in read-only mode
@@ -100,13 +99,9 @@ impl FileProvider for NativeFileProvider {
         // Move the cursor to the specified offset
         file.seek(io::SeekFrom::Start(offset as u64))?;
 
-        // Read the file into a buffer
         let mut buffer = Vec::new();
         if let Some(length) = max_length {
-            buffer.resize(length, 0);
-
-            let bytes_read = file.read(&mut buffer)?;
-            buffer.truncate(bytes_read);
+            file.take(length as u64).read_to_end(&mut buffer)?;
         } else {
             file.read_to_end(&mut buffer)?;
         }

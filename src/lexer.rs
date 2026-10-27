@@ -1014,7 +1014,11 @@ impl Lexer<'_> {
         let identifier_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
         // Normalize identifiers to NFC before separating an optional attribute scope.
-        let identifier_normalized: String = identifier_buffer.nfc().collect();
+        let identifier_normalized: String = if identifier_buffer.is_ascii() {
+            identifier_buffer
+        } else {
+            identifier_buffer.nfc().collect()
+        };
 
         if let Some(pos) = identifier_normalized.find("::") {
             // NamespaceIdentifier

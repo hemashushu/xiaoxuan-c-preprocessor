@@ -527,13 +527,48 @@ pub fn evaluate(
 
 fn evaluate_expression(expression: &Expression) -> Result<isize, PreprocessFileError> {
     match expression {
-        Expression::Number(value, _) => Ok(*value as isize),
+        Expression::Number(value, location) => isize::try_from(*value).map_err(|_| {
+            arithmetic_error(location, "Integer literal is too large for #if evaluation.")
+        }),
         Expression::Binary(operator, operator_location, left_exp, right_exp) => {
             evaluate_binary_expression(operator, operator_location, left_exp, right_exp)
         }
         Expression::Unary(operator, operator_location, exp) => {
             evaluate_unary_expression(operator, operator_location, exp)
         }
+    }
+}
+
+fn arithmetic_error(location: &Location, message: &str) -> PreprocessFileError {
+    PreprocessFileError::new(
+        location.file_number,
+        PreprocessError::MessageWithRange(message.to_owned(), location.range),
+    )
+}
+
+fn checked_result(
+    value: Option<isize>,
+    location: &Location,
+) -> Result<isize, PreprocessFileError> {
+    value.ok_or_else(|| arithmetic_error(location, "Arithmetic overflow in #if expression."))
+}
+
+fn checked_shift(
+    left: isize,
+    right: isize,
+    location: &Location,
+    shift_left: bool,
+) -> Result<isize, PreprocessFileError> {
+    let amount = u32::try_from(right)
+        .ok()
+        .filter(|amount| *amount < isize::BITS)
+        .ok_or_else(|| arithmetic_error(location, "Invalid shift amount in #if expression."))?;
+
+    if shift_left {
+        let shifted = left.checked_shl(amount);
+        checked_result(shifted.filter(|value| value >> amount == left), location)
+    } else {
+        checked_result(left.checked_shr(amount), location)
     }
 }
 
@@ -558,9 +593,9 @@ fn evaluate_binary_expression(
 
     let result = match operator {
         // Arithmetic operators
-        BinaryOperator::Add => left + right,
-        BinaryOperator::Subtract => left - right,
-        BinaryOperator::Multiply => left * right,
+        BinaryOperator::Add => checked_result(left.checked_add(right), operator_location)?,
+        BinaryOperator::Subtract => checked_result(left.checked_sub(right), operator_location)?,
+        BinaryOperator::Multiply => checked_result(left.checked_mul(right), operator_location)?,
         BinaryOperator::Divide => {
             if right == 0 {
                 return Err(PreprocessFileError::new(
@@ -571,7 +606,7 @@ fn evaluate_binary_expression(
                     ),
                 ));
             }
-            left / right
+            checked_result(left.checked_div(right), operator_location)?
         }
         BinaryOperator::Modulo => {
             if right == 0 {
@@ -583,7 +618,7 @@ fn evaluate_binary_expression(
                     ),
                 ));
             }
-            left % right
+            checked_result(left.checked_rem(right), operator_location)?
         }
         // Relational operators
         BinaryOperator::Equal => {
@@ -647,21 +682,21 @@ fn evaluate_binary_expression(
         BinaryOperator::BitwiseAnd => left & right,
         BinaryOperator::BitwiseOr => left | right,
         BinaryOperator::BitwiseXor => left ^ right,
-        BinaryOperator::ShiftLeft => left << right,
-        BinaryOperator::ShiftRight => left >> right,
+        BinaryOperator::ShiftLeft => checked_shift(left, right, operator_location, true)?,
+        BinaryOperator::ShiftRight => checked_shift(left, right, operator_location, false)?,
     };
     Ok(result)
 }
 
 fn evaluate_unary_expression(
     operator: &UnaryOperator,
-    _operator_location: &Location,
+    operator_location: &Location,
     exp: &Expression,
 ) -> Result<isize, PreprocessFileError> {
     let value = evaluate_expression(exp)?;
     match operator {
         UnaryOperator::Plus => Ok(value),
-        UnaryOperator::Minus => Ok(-value),
+        UnaryOperator::Minus => checked_result(value.checked_neg(), operator_location),
         UnaryOperator::LogicalNot => Ok(if value == 0 { 1 } else { 0 }),
         UnaryOperator::BitwiseNot => Ok(!value),
     }
@@ -949,6 +984,39 @@ mod tests {
         assert_eq!(eval("0x2a"), 42);
         assert_eq!(eval("0b101010"), 42);
         assert_eq!(eval("052"), 42);
+    }
+
+    #[test]
+    fn test_evaluate_expression_invalid_arithmetic() {
+        let evaluate_str = |s: &str| {
+            let tokens = lex_from_str(s)
+                .unwrap()
+                .iter()
+                .map(|item| TokenWithLocation {
+                    token: item.token.clone(),
+                    location: Location::new(1, &item.range),
+                })
+                .collect::<Vec<_>>();
+            evaluate(&tokens, 1)
+        };
+
+        for expression in [
+            "9223372036854775807 + 1",
+            "-9223372036854775807 - 2",
+            "9223372036854775807 * 2",
+            "-(-9223372036854775807 - 1)",
+            "(-9223372036854775807 - 1) / -1",
+            "(-9223372036854775807 - 1) % -1",
+            "1 << 64",
+            "1 << -1",
+            "1 >> 64",
+            "18446744073709551615",
+        ] {
+            assert!(evaluate_str(expression).is_err(), "{expression}");
+        }
+
+        assert_eq!(evaluate_str("0 && (1 / 0)").unwrap(), 0);
+        assert_eq!(evaluate_str("1 || (1 << 64)").unwrap(), 1);
     }
 
     #[test]

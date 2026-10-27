@@ -49,7 +49,7 @@ To use ANCPP, add the following dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ancpp = "2.1.0"
+ancpp = "2.2"
 ```
 
 Alternatively, you can add it using the following command:
@@ -1257,7 +1257,7 @@ Parentheses can be used to control grouping:
 
 > Identifiers `false` and `true` in conditional expressions are expanded to 0 and 1 respectively.
 
-`[ANCPP RESTRICTION]`: The conditional operator `?:` is unsupported. Integer literals are parsed as `u64` and then evaluated using the host's signed `isize` arithmetic. ANCPP does not implement the full C preprocessing `intmax_t`/`uintmax_t` model or preserve suffix signedness during evaluation, so large values and unsigned comparisons can differ from standard C.
+`[ANCPP RESTRICTION]`: The conditional operator `?:` is unsupported. Integer literals are evaluated using the host's signed `isize` arithmetic. Literals that do not fit, arithmetic overflow, and invalid shift amounts are reported as errors. ANCPP does not implement the full C preprocessing `intmax_t`/`uintmax_t` model or preserve suffix signedness during evaluation, so unsigned comparisons can differ from standard C.
 
 **Attribute testing**
 

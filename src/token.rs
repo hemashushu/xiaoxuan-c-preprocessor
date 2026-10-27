@@ -460,7 +460,7 @@ pub fn escape_char(c: char) -> String {
 }
 
 pub fn escape_string(s: &str) -> String {
-    s.chars().map(escape_char).collect::<Vec<String>>().join("")
+    s.chars().map(escape_char).collect()
 }
 
 impl Display for Number {

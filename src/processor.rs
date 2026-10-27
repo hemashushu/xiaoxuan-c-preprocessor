@@ -182,6 +182,9 @@ where
     T: FileProvider,
 {
     context: Context<'a, T>,
+
+    // Source line of the outermost macro invocation, used by __LINE__ in replacements.
+    macro_invocation_line: Option<usize>,
 }
 
 impl<'a, T> Processor<'a, T>
@@ -216,7 +219,10 @@ where
             error,
         })?;
 
-        Ok(Self { context })
+        Ok(Self {
+            context,
+            macro_invocation_line: None,
+        })
     }
 }
 
@@ -1375,8 +1381,10 @@ where
                                     // ```
 
                                     // Reject __VA_ARGS__ outside a variadic macro.
-                                    if !matches!(parameter.last(), Some(FunctionParameter::Variadic))
-                                    {
+                                    if !matches!(
+                                        parameter.last(),
+                                        Some(FunctionParameter::Variadic)
+                                    ) {
                                         return Err(PreprocessFileError {
                                             file_number: next_token_with_location.location.file_number,
                                             error: PreprocessError::MessageWithRange(
@@ -1512,13 +1520,33 @@ where
         macros_expansion_stack: &[MacroExpansionStackItem],
         body: Vec<TokenWithLocation>,
     ) -> Result<Vec<TokenWithLocation>, PreprocessFileError> {
+        let mut output = Vec::new();
+        let mut pending = body;
+        while !pending.is_empty() {
+            pending = self.expand_macros_until_rescan(
+                expansion_type,
+                macros_expansion_stack,
+                pending,
+                &mut output,
+            )?;
+        }
+        Ok(output)
+    }
+
+    // Returns unscanned tokens when a trailing function-like macro name needs a following `(`.
+    fn expand_macros_until_rescan(
+        &mut self,
+        expansion_type: ExpansionType,
+        macros_expansion_stack: &[MacroExpansionStackItem],
+        body: Vec<TokenWithLocation>,
+        output: &mut Vec<TokenWithLocation>,
+    ) -> Result<Vec<TokenWithLocation>, PreprocessFileError> {
         if body.is_empty() {
             return Ok(vec![]);
         }
 
         let first_token_with_location = body.first().unwrap().clone();
 
-        let mut output = Vec::new();
         let mut iter = body.into_iter();
         let mut peekable_iter = PeekableIter::new(&mut iter);
         let mut code_parser = CodeParser::new(
@@ -1548,7 +1576,14 @@ where
                         }
                         "__LINE__" => {
                             // Expand to the one-based source line number as an integer constant.
-                            let value = current_token_with_location.location.range.start.line + 1;
+                            let line = if macros_expansion_stack.is_empty() {
+                                current_token_with_location.location.range.start.line
+                            } else {
+                                self.macro_invocation_line.unwrap_or(
+                                    current_token_with_location.location.range.start.line,
+                                )
+                            };
+                            let value = line + 1;
                             let token = TokenWithLocation::new(
                                 Token::Number(Number::Integer(IntegerNumber::new(
                                     value.to_string(),
@@ -1637,8 +1672,7 @@ where
                                 return Err(PreprocessFileError {
                                     file_number: current_token_with_location.location.file_number,
                                     error: PreprocessError::MessageWithRange(
-                                        "_Pragma can only be used in macro definitions."
-                                            .to_owned(),
+                                        "_Pragma can only be used in macro definitions.".to_owned(),
                                         current_token_with_location.location.range,
                                     ),
                                 });
@@ -1766,9 +1800,7 @@ where
                             let macro_item = self.context.macro_map.get(name);
 
                             match macro_item {
-                                Some(MacroDefinition::ObjectLike(object_definition))
-                                    if !is_invocation =>
-                                {
+                                Some(MacroDefinition::ObjectLike(object_definition)) => {
                                     // Defence: check for self-reference to prevent infinite recursion.
                                     if contains_self_reference(macros_expansion_stack, name, false)
                                     {
@@ -1785,6 +1817,16 @@ where
                                         new_macros_expansion_stack
                                             .push(MacroExpansionStackItem::Object(name.to_owned()));
 
+                                        if macros_expansion_stack.is_empty() {
+                                            self.macro_invocation_line = Some(
+                                                current_token_with_location
+                                                    .location
+                                                    .range
+                                                    .start
+                                                    .line,
+                                            );
+                                        }
+
                                         let expanded_tokens = self.expand_replacement(
                                             ExpansionType::ObjectLikeDefinition,
                                             &new_macros_expansion_stack,
@@ -1793,7 +1835,22 @@ where
                                             object_definition.to_owned(),
                                         )?;
 
+                                        let rescan_with_following_tokens = is_invocation
+                                            && self.ends_with_unsuppressed_function_macro(
+                                                &expanded_tokens,
+                                                &new_macros_expansion_stack,
+                                            );
                                         output.extend(expanded_tokens);
+
+                                        if rescan_with_following_tokens {
+                                            let mut rest = vec![output.pop().unwrap()];
+                                            while let Some(token) =
+                                                code_parser.next_token_with_location()
+                                            {
+                                                rest.push(token);
+                                            }
+                                            return Ok(rest);
+                                        }
                                     }
                                 }
                                 Some(MacroDefinition::FunctionLike(
@@ -1853,12 +1910,12 @@ where
                                                             group_level -= 1;
                                                         }
                                                     }
-                                                    Token::Punctuator(Punctuator::Comma) => {
-                                                        if group_level == 0 {
-                                                            // If we reach a comma at group level 0,
-                                                            // it indicates the end of the current argument.
-                                                            break;
-                                                        }
+                                                    Token::Punctuator(Punctuator::Comma)
+                                                        if group_level == 0 =>
+                                                    {
+                                                        // If we reach a comma at group level 0,
+                                                        // it indicates the end of the current argument.
+                                                        break;
                                                     }
                                                     _ => {}
                                                 }
@@ -1928,6 +1985,22 @@ where
                                         }
 
                                         code_parser.consume_closing_paren()?; // Consumes ')'
+
+                                        if argument_token_with_locationss.iter().any(Vec::is_empty)
+                                        {
+                                            return Err(PreprocessFileError {
+                                                file_number: current_token_with_location
+                                                    .location
+                                                    .file_number,
+                                                error: PreprocessError::MessageWithRange(
+                                                    format!(
+                                                        "Macro '{}' is invoked with an empty argument.",
+                                                        name
+                                                    ),
+                                                    current_token_with_location.location.range,
+                                                ),
+                                            });
+                                        }
 
                                         // Check that each argument consists of exactly one token.
                                         let mut multiple_tokens_argument_found = false;
@@ -2060,6 +2133,16 @@ where
                                             MacroExpansionStackItem::Function(name.to_owned()),
                                         );
 
+                                        if macros_expansion_stack.is_empty() {
+                                            self.macro_invocation_line = Some(
+                                                current_token_with_location
+                                                    .location
+                                                    .range
+                                                    .start
+                                                    .line,
+                                            );
+                                        }
+
                                         let expanded_tokens = self.expand_replacement(
                                             ExpansionType::FunctionLikeDefinition,
                                             &new_macros_expansion_stack,
@@ -2068,7 +2151,25 @@ where
                                             function_definition,
                                         )?;
 
+                                        let rescan_with_following_tokens =
+                                            code_parser.peek_token_and_equals(
+                                                0,
+                                                &Token::Punctuator(Punctuator::ParenthesisOpen),
+                                            ) && self.ends_with_unsuppressed_function_macro(
+                                                &expanded_tokens,
+                                                &new_macros_expansion_stack,
+                                            );
                                         output.extend(expanded_tokens);
+
+                                        if rescan_with_following_tokens {
+                                            let mut rest = vec![output.pop().unwrap()];
+                                            while let Some(token) =
+                                                code_parser.next_token_with_location()
+                                            {
+                                                rest.push(token);
+                                            }
+                                            return Ok(rest);
+                                        }
                                     }
                                 }
                                 _ => {
@@ -2113,7 +2214,20 @@ where
             }
         }
 
-        Ok(output)
+        Ok(vec![])
+    }
+
+    fn ends_with_unsuppressed_function_macro(
+        &self,
+        tokens: &[TokenWithLocation],
+        macros_expansion_stack: &[MacroExpansionStackItem],
+    ) -> bool {
+        matches!(
+            tokens.last(),
+            Some(TokenWithLocation { token: Token::Identifier(name), .. })
+                if matches!(self.context.macro_map.get(name), Some(MacroDefinition::FunctionLike(..)))
+                    && !contains_self_reference(macros_expansion_stack, name, true)
+        )
     }
 
     /// Processes `__has_include`, `__has_embed`, `__has_c_attribute`, `true`, and `false`.
@@ -3406,8 +3520,8 @@ impl<'a> CodeParser<'a> {
 }
 
 /// Concatenates adjacent string literals into a single string literal token.
-    /// ANCPP requires identical encoding prefixes; standard C also permits
-    /// combining an unprefixed literal with a prefixed one in specified cases.
+/// ANCPP requires identical encoding prefixes; standard C also permits
+/// combining an unprefixed literal with a prefixed one in specified cases.
 /// For example, `"abc" "def"` becomes `"abcdef"`, but `u8"abc" "def"` is not allowed.
 ///
 /// See:
@@ -3755,6 +3869,79 @@ __STDC_EMBED_EMPTY__;
                 r#""src/main.c" ; 2 ; "{}" ; "{}" ; 0 ; 1 ; 2 ;"#,
                 date_string, time_string
             )
+        );
+
+        let tokens = process_with_predefinitions(
+            "\
+#define CURRENT_LINE __LINE__
+#define LINE_OF(x) __LINE__
+CURRENT_LINE
+LINE_OF(a)",
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "3 4");
+    }
+
+    #[test]
+    fn test_process_rescan_with_following_tokens() {
+        let predefinitions = HashMap::new();
+        let tokens = process_with_predefinitions(
+            "\
+#define malloc my_malloc
+#define f(x) [x]
+#define g f
+malloc(10);
+g(1);",
+            &predefinitions,
+        );
+
+        assert_eq!(print_tokens(&tokens), "my_malloc ( 10 ) ; [ 1 ] ;");
+
+        // C23 6.10.5.5 example: rescanning may consume tokens after the invocation.
+        let tokens = process_with_permissive(
+            "\
+#define f(a) a*g
+#define g(a) f(a)
+f(2)(9)",
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "2 * 9 * g");
+
+        let tokens = process_with_predefinitions(
+            "\
+#define h(x) x h
+h(1)(2)",
+            &predefinitions,
+        );
+        assert_eq!(print_tokens(&tokens), "1 h ( 2 )");
+    }
+
+    #[test]
+    fn test_process_empty_argument_with_permissive_mode() {
+        let predefinitions = HashMap::new();
+        assert!(
+            process_with_permissive_and_result(
+                "\
+#define SUBTRACT(a, b) (a) - (b)
+SUBTRACT(, 1)",
+                &predefinitions,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_lint_source_message_field_order() {
+        let lint = crate::linter::Lint::Message(
+            crate::linter::LintLevel::Warn,
+            "directive_warn".to_owned(),
+            FILE_NUMBER_SOURCE_FILE_BEGIN,
+            "message".to_owned(),
+        );
+
+        assert_eq!(
+            lint.source_message("/main.c", ""),
+            "Warn: message\nFile: /main.c\nLint: directive_warn\n"
         );
     }
 

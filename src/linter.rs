@@ -71,14 +71,14 @@ impl Lint {
         source_text_content: &str,
     ) -> String {
         match self {
-            Lint::Message(suppress_name, lint_level, _, msg) => {
+            Lint::Message(lint_level, suppress_name, _, msg) => {
                 let title = format!("{}: {}", lint_level, msg);
                 let file = format!("File: {}", source_file_canonical_full_path);
                 let name = format!("Lint: {}", suppress_name);
 
                 format!("{}\n{}\n{}\n", title, file, name)
             }
-            Lint::MessageWithPosition(suppress_name, lint_level, _, msg, position) => {
+            Lint::MessageWithPosition(lint_level, suppress_name, _, msg, position) => {
                 let title = format!("{}:", lint_level);
                 let message =
                     attach_with_snippet_by_position(source_text_content, position.index, msg);
@@ -92,7 +92,7 @@ impl Lint {
 
                 format!("{}\n{}\n{}\n{}\n{}\n", title, message, location, file, name)
             }
-            Lint::MessageWithRange(suppress_name, lint_level, _, msg, range) => {
+            Lint::MessageWithRange(lint_level, suppress_name, _, msg, range) => {
                 let title = format!("{}:", lint_level);
 
                 let message = attach_with_snippet_by_range(
