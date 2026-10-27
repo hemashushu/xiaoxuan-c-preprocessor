@@ -27,7 +27,7 @@ pub fn parse_from_str(source_text: &str) -> Result<Program, PreprocessError> {
 pub struct Parser<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithRange>,
 
-    /// The range of the last consumed token by `next_token` or `next_token_with_range`.
+    /// Range of the last token consumed by `next_token` or `next_token_with_range`.
     pub last_range: Range,
 }
 
@@ -82,9 +82,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // Peek the next token and check if it equals to the expected token,
-    // return false if not equals or no more token,
-    // error if lexing error occurs during peeking.
+    // Compare the token at the given lookahead offset, returning false at EOF.
     fn peek_token_and_equals(&self, offset: usize, expected_token: &Token) -> bool {
         matches!(
             self.peek_token(offset),
@@ -104,8 +102,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Consume the next token and check if it's an identifier with the expected name,
-    /// return the identifier if it matches, otherwise return an error.
+    /// Consumes the expected identifier, or returns an error.
     fn consume_identifier_and_assert(
         &mut self,
         identifier: &str,
@@ -157,8 +154,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Consume the next token and check if it equals to the expected token,
-    /// return Ok(()) if it matches, otherwise return an error.
+    /// Consumes the expected token, or returns an error.
     fn consume_token_and_assert(
         &mut self,
         expected_token: &Token,
@@ -341,9 +337,7 @@ impl Parser<'_> {
                         }
                     }
                 } else {
-                    // If there's no token after `#`, it's an null directive,
-                    // while it is valid in syntax, it is not allowed in ANCPP
-                    // because it's likely a coding mistake.
+                    // Standard C permits null directives, but ANCPP rejects them.
                     return Err(PreprocessError::MessageWithPosition(
                         "Null preprocessor directives are not allowed; expected a directive after `#`.".to_owned(),
                         self.peek_range(0).unwrap().start,
@@ -387,8 +381,7 @@ impl Parser<'_> {
 
         self.next_token(); // consumes "define"
 
-        // Collect parameter names.
-        // The parameter name for the variadic macro is "...".
+        // Collect named parameters and a possible final `Variadic` entry for `...`.
         let parse_parameters =
             |parser: &mut Parser| -> Result<Vec<FunctionParameter>, PreprocessError> {
                 let mut parameters = vec![];
@@ -420,7 +413,7 @@ impl Parser<'_> {
                         break;
                     }
 
-                    // If the last parameter is variadic, it must be the last one, we should break the loop here.
+                    // An ellipsis must be the final parameter.
                     if parameters.last() == Some(&FunctionParameter::Variadic) {
                         break;
                     }
@@ -446,9 +439,8 @@ impl Parser<'_> {
 
         let parse_balanced_definition =
             |parser: &mut Parser| -> Result<Vec<TokenWithRange>, PreprocessError> {
-                // for collecting balanced brackets and quotes
-                // e.g., `(...)`, `[...]`, `{...}`, `"..."`, and `'...'`
-                // If this stack is empty, it indicates that we are not inside any brackets or quotes.
+                // Track balanced parentheses, brackets, and braces. Literals are
+                // already complete tokens, so their quotes are not tracked here.
                 let mut bracket_stack: Vec<Punctuator> = vec![];
 
                 // Move all tokens to `tokens` until we hit a newline or EOF.
@@ -459,8 +451,7 @@ impl Parser<'_> {
                         match token {
                             Token::_DirectiveEnd => {
                                 if bracket_stack.is_empty() {
-                                    // Empty definition or balanced brackets/quotes,
-                                    // it is safe to stop collecting tokens.
+                                    // The replacement is empty or all delimiters are balanced.
                                     break;
                                 } else {
                                     return Err(PreprocessError::MessageWithPosition(
@@ -720,7 +711,7 @@ impl Parser<'_> {
         let collect_consequence = |parser: &mut Parser| -> Result<Vec<Statement>, PreprocessError> {
             let mut consequence = vec![];
 
-            // Collect statements until we hit an `#else`, `#elif`, `#elifdef`, `#elifndef` or `#endif`.
+            // Collect statements until #else, #elif, #elifdef, #elifndef, or #endif.
             loop {
                 if parser.peek_token(0).is_some() {
                     if matches!(parser.peek_token(0), Some(Token::_DirectiveStart))
@@ -825,7 +816,7 @@ impl Parser<'_> {
             }
         }
 
-        // If we hit an `#else`, we collect the alternative statements.
+        // Collect the alternative statements if #else follows.
         if matches!(self.peek_token(0), Some(Token::_DirectiveStart))
             && matches!(self.peek_token(1), Some(Token::Identifier(id)) if id.as_str() == "else")
         {
@@ -842,7 +833,7 @@ impl Parser<'_> {
             });
         }
 
-        // Finally, we expect an `#endif` to close the `if` block.
+        // Require #endif to close the conditional group.
         self.consume_token_and_assert(&Token::_DirectiveStart, "directive start punctuator `#`")?;
         self.consume_identifier_and_assert("endif")?;
         self.consume_directive_end_or_eof()?;
@@ -1071,15 +1062,13 @@ mod tests {
             ))
         ));
 
-        // Error: unbalanced double quote in definition
-        // The actual error is that the parser expects the end of the string literal
+        // Error: the lexer reaches EOF before the string literal's closing quote.
         assert!(matches!(
             parse_from_str("#define FOO \"a\n"),
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
-        // Error: unbalanced double quote in definition
-        // The actual error is that the parser expects the end of the character literal
+        // Error: the lexer reaches EOF before the character literal's closing quote.
         assert!(matches!(
             parse_from_str("#define FOO 'a\n"),
             Err(PreprocessError::MessageWithPosition(

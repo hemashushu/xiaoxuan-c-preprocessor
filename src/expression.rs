@@ -13,13 +13,9 @@ use crate::{
     token::{Number, Punctuator, Token, TokenWithLocation},
 };
 
-/// Expanded expressions used in `#if` and `#elif` directives
-///
-/// This expression can only contain integer constants, binary operators,
-/// unary operators and grouping parentheses.
-///
-/// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
-/// must be expanded before constructing this expression.
+/// A parsed integer expression for #if or #elif, after macro and feature-test
+/// expansion. Only integer literals, supported unary/binary operators, and
+/// grouping parentheses are accepted; the conditional operator ?: is unsupported.
 #[derive(Debug, PartialEq)]
 enum Expression {
     Number(u64, Location),
@@ -49,7 +45,7 @@ enum BinaryOperator {
     Or,  // '||'
 
     // Bitwise operators
-    BitwiseAnd, // '&', also used as the `AddressOf` operator
+    BitwiseAnd, // '&'; address-of expressions are not accepted here
     BitwiseOr,  // '|'
     BitwiseXor, // '^'
     ShiftLeft,  // '<<'
@@ -173,23 +169,23 @@ fn print_expression_to_string(expression: &Expression) -> String {
     String::from_utf8(output).unwrap()
 }
 
-// C Operator Precedence
+// Supported Operator Precedence
 // ---------------------
 //
-// The following table lists the precedence and associativity of C operators.
-// Operators are listed top to bottom, in descending precedence.
+// Supported operators in descending precedence. Binary operators are
+// left-associative; unary operators group from right to left.
 //
-// 1: `()` Function call
+// 1: `()` Grouping parentheses, not function calls
 // 2:
-//    - `+ -` Unary plus and minus
-//    - `! ~` Logical NOT and bitwise NOT
-// 3: `* / %` Multiplication, division, and remainder
-// 4: `+ -` Addition and subtraction
-// 5: `<< >>` Bitwise left shift and right shift
+//    - `+ -` Unary plus and minus
+//    - `! ~` Logical NOT and bitwise NOT
+// 3: `* / %` Multiplication, division, and remainder
+// 4: `+ -` Addition and subtraction
+// 5: `<< >>` Bitwise left shift and right shift
 // 6:
-//    - `< <=` For relational operators < and ≤ respectively
-//    - `> >=` For relational operators > and ≥ respectively
-// 7: `== !=` For relational = and ≠ respectively
+//    - `< <=` Less than and less than or equal to
+//    - `> >=` Greater than and greater than or equal to
+// 7: `== !=` Equal to and not equal to
 // 8: `&` Bitwise AND
 // 9: `^` Bitwise XOR (exclusive or)
 // 10: `|` Bitwise OR (inclusive or)
@@ -199,24 +195,13 @@ fn print_expression_to_string(expression: &Expression) -> String {
 // See:
 // https://en.cppreference.com/w/c/language/operator_precedence.html
 
-/// Parse an expanded integer expression used in `#if` and `#elif` directives.
-///
-/// This expression can only contain integer constants, binary operators,
-/// unary operators and grouping parentheses.
-///
-/// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
-/// must be expanded before constructing this expression.
+/// Parses an integer expression after macros, defined, and feature-test operators
+/// have been expanded. Accepts the operators represented by this module only.
 fn parse_expression(
     token_with_locations: &[TokenWithLocation],
 
-    // The file number where the expression is located.
-    // Used for error reporting.
-    //
-    // Because the expression consists of tokens that may be
-    // expanded from macros defined in other files, although
-    // `token_with_locations` contains location information, but
-    // we do not know which file the expression is originally from,
-    // we need to pass the current file number explicitly.
+    // The expression's original file, used as a fallback for diagnostics.
+    // Expanded tokens may carry locations from macro definitions in other files.
     file_number: usize,
 ) -> Result<Expression, PreprocessFileError> {
     let mut token_iter = token_with_locations.iter().cloned();
@@ -427,19 +412,8 @@ impl ExpressionParser<'_> {
                 // Consume the operator token.
                 self.next_token();
 
-                // Parse the right-hand side expression.
-                // This implementation assumes the operator is left-to-right associative.
-                //
-                // For right-to-left associative operators, you should implement a separate function,
-                // such as `parse_binary_expression_right`. In that case, replace `next_parse_function`
-                // below with `parse_expression` and remove the `loop`.
-                //
-                // About associativity:
-                // Consider the expression `a + b + c + d`:
-                // - If the operator is left-to-right associative, it is parsed as:
-                //   `((a + b) + c) + d`
-                // - If the operator is right-to-left associative, it is parsed as:
-                //   `a + (b + (c + d))`
+                // Parse the next higher-precedence operand and fold to the left:
+                // a + b + c becomes (a + b) + c.
                 let right_expression = next_parse_function(self)?;
 
                 // Create a binary expression node.
@@ -537,13 +511,12 @@ impl ExpressionParser<'_> {
     }
 }
 
-/// Evaluate an expanded expression used in `#if` and `#elif` directives.
+/// Evaluates a pre-expanded #if or #elif expression using host-sized signed
+/// arithmetic (`isize`), with short-circuit evaluation for && and ||.
 ///
-/// This expression can only contain integer constants, binary operators,
-/// unary operators and grouping parentheses.
-///
-/// Which means all macros, operators (`defined(...)`, `__has_include(...)` etc.)
-/// must be expanded before constructing this expression.
+/// Macros, defined, and feature-test operators must already be expanded. Literal
+/// magnitudes are parsed as u64 and cast to isize; C suffix signedness and the
+/// standard intmax_t/uintmax_t preprocessing model are not preserved.
 pub fn evaluate(
     token_with_locations: &[TokenWithLocation],
     file_number: usize,

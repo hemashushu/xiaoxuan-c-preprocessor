@@ -39,12 +39,9 @@ use crate::{
     },
 };
 
-/// Extra operators supported in conditional directives.
+/// Feature-test operators accepted in `#if` and `#elif` expressions.
 ///
-/// They can be used in the expressions of `#if` and `#elif` directives.
-/// `#if __has_include("header.h")`
-///
-/// Their names also are used for checking if these operators are defined:
+/// Their names also test as defined in existence checks:
 /// - `#ifdef __has_include`
 /// - `#ifdef __has_embed`
 /// - `#ifdef __has_c_attribute`
@@ -52,75 +49,75 @@ const EXTRA_OPERATORS: [&str; 3] = ["__has_include", "__has_embed", "__has_c_att
 
 /// Preprocesses a C source file.
 ///
-/// - This function is used to preprocess C source files only, not header files.
-/// - Relevant header files will be loaded and processed automatically during preprocessing, and
-///   they will be cached in `header_file_cache` to avoid redundant parsing. Note that only header files
-///   (e.g. `header.h`) are cached, not source files (e.g. `main.c`).
+/// The caller supplies the main file of a translation unit. Included headers
+/// are loaded automatically, and their source text and parsed preprocessing ASTs
+/// are cached in `header_file_cache`. The main file is not cached. Each resolved
+/// header is included at most once per call, even without an include guard.
 ///
-/// see also:
-/// - https://en.cppreference.com/w/c/language.html
-/// - https://en.cppreference.com/w/c/preprocessor.html
-/// - https://en.cppreference.com/w/c/language/translation_phases.html
+/// See also:
+/// - <https://en.cppreference.com/w/c/language.html>
+/// - <https://en.cppreference.com/w/c/preprocessor.html>
+/// - <https://en.cppreference.com/w/c/language/translation_phases.html>
 #[allow(clippy::too_many_arguments)]
 pub fn process_source_file<T>(
     // The file provider used to load source and header files.
     file_provider: &T,
 
-    // The cache for header files to avoid redundant parsing.
-    // Only header files (`*.h`) are cached, not source files (`*.c`).
+    // Parsed included files, reusable across calls. Caching depends on how a file
+    // is included, not on its extension; the main file is not cached.
     header_file_cache: &mut HeaderFileCache,
 
-    // Identifiers which are used to prevent defining macros with these names.
-    // They are usually C keywords, such as `int`, `return`, `if`, `else`, etc.
-    // You may simply use `token::C23_KEYWORD_STRS`.
+    // Identifiers that cannot be defined as macros. To reserve ANCPP's selected
+    // keyword spellings, pass `consts::C23_KEYWORD_STRS`.
     reserved_identifiers: &[&str],
 
-    // The compile-time features to be used during preprocessing.
+    // Runtime preprocessing options, not Cargo feature flags.
     //
     // The supported features include:
     // - `resolve_header_file_relative_to_current_file`
     // - `macro_invocation_single_argument_multiple_tokens`
     //
-    // The absent of a feature in this set is equivalent to the feature being set to false.
+    // An absent entry is equivalent to false.
     compile_features: &HashMap<String, bool>,
 
     // The set of lints to be suppressed during preprocessing.
     //
     // The supported lints include:
-    // - `warn_directive`
-    // - `include_guard_not_found`
-    // - `prefer_pragma_once`
+    // - `directive_warn`
+    // - `include_guard_absent`
+    // - `traditional_include_guard`
     // - `unconventional_include_guard`
+    // - `macro_invocation_single_argument_multiple_tokens`
+    // - `identical_redefinition`
+    // - `undef_nonexistent_macro`
     //
-    // The absent of a lint in this set means the lint is not suppressed
-    // and will be reported to the user if triggered.
+    // Lints absent from this set are reported when triggered.
     suppress_lints: &HashSet<String>,
 
     // The predefined macros to be used during preprocessing.
-    // Such as `__STDC__` and `__STDC_VERSION__` which are provided by the compiler.
+    // For example, the compiler supplies `__STDC__` and `__STDC_VERSION__`.
     // Note that some macros like `__FILE__`, `__LINE__`, `__DATE__`, and `__TIME__`
     // are defined by the preprocessor and do not need to be included here.
     //
-    // see:
+    // See:
     // - https://gcc.gnu.org/onlinedocs/cpp/Standard-Predefined-Macros.html
     // - https://en.cppreference.com/w/c/preprocessor/replace.html
     predefinitions: &HashMap<String, String>,
 
     // The number of the source file, used for error reporting.
-    // It should begin with `FILE_NUMBER_SOURCE_FILE_BEGIN` (which default to 65536)
-    // and incremented by 1 for each source file.
+    // Start at `FILE_NUMBER_SOURCE_FILE_BEGIN` (65536) and increment by 1 for
+    // each main source file to avoid conflicts with header file numbers.
     //
-    // Note that the term "source file" refer only to the C source file (e.g. `main.c`),
-    // it does not include the header files (e.g. `header.h`).
+    // Here, "source file" means the translation unit's main file, not a header.
     source_file_number: usize,
 
     // The path name of the source file.
-    // It is used to generate the value of the `__FILE__` macro and the parser wouldn't use it to load the file.
-    // Usually, it's value is the relative path to the project root directory.
+    // This sets `__FILE__` for the main file; it is not used to load the file.
+    // It is usually relative to the project root.
     source_file_path_name: &Path,
 
     // The canonical full path of the source file.
-    // This is used to load the source file content actually.
+    // This path is used to load the source file.
     source_file_canonical_full_path: &Path,
 ) -> Result<PreprocessResult, PreprocessFileError>
 where
@@ -138,8 +135,7 @@ where
         source_file_canonical_full_path,
     )?;
 
-    // Add source file to the `included_files` list to
-    // prevent self-inclusion or reversive inclusion.
+    // Mark the main file as included to prevent direct or indirect self-inclusion.
     processor.context.included_files.push(FileLocation::new(
         FilePathSource::from_source_file(source_file_path_name),
         source_file_canonical_full_path,
@@ -164,7 +160,7 @@ where
 
     processor.process_program(&program)?;
 
-    // concatenates adjacent string literals
+    // Concatenate adjacent string literals.
     // e.g. "hello" " " "world" -> "hello world"
     // see: https://en.cppreference.com/w/c/language/translation_phases.html
     let Context { lints, output, .. } = processor.context;
@@ -615,8 +611,7 @@ where
         components: &[TokenWithRange],
         directive_range: &Range,
     ) -> Result<(), PreprocessFileError> {
-        // The `embed` directive output a sequence of `u8` numbers separated by commas,
-        // which represent the bytes of the file.
+        // Emit integer tokens for resource bytes, separated by commas.
         //
         // e.g.
         //
@@ -628,8 +623,8 @@ where
         // 0x68, 0x69, 0x70, 0x70, 0x6F     // hexadecimal
         // ```
         //
-        // The content in the parameters `prefix`, `suffix`, and `if_empty` are
-        // output with the same format.
+        // Convert `prefix`, `suffix`, and `if_empty` to byte sequences too.
+        // Unlike standard C token insertion, ANCPP adds separator commas itself.
 
         // Convert TokenWithRange to TokenWithLocation
         let tokens = components
@@ -797,8 +792,7 @@ where
     }
 
     fn process_if(&mut self, if_: &If) -> Result<(), PreprocessFileError> {
-        // Indicates whether any branch has been taken.
-        // To skip the alternative block if a branch is already taken.
+        // Skip the alternative block once a conditional branch has been taken.
         let mut hit_branch = false;
 
         for branch in &if_.branches {
@@ -912,14 +906,9 @@ where
         _pragma: &Pragma,
         _directive_range: &Range,
     ) -> Result<(), PreprocessFileError> {
-        // Supported pragmas are:
-        // - `#pragma once`: Include guard to prevent multiple inclusions of the same file.
-        // - `#pragma STDC FENV_ACCESS arg`: Where arg is either ON or OFF or DEFAULT
-        // - `#pragma STDC FP_CONTRACT arg`
-        // - `#pragma STDC CX_LIMITED_RANGE arg`
-
-        // Pragmas are compiler-specific options, not preprocessor directives.
-        // Therefore, ANCPP does not process pragmas currently.
+        // Pragmas are preprocessing directives, but no pragma tokens or compiler
+        // settings are forwarded. `#pragma once` is recognized separately by the
+        // header-guard linter; once-only inclusion does not depend on it.
         Ok(())
     }
 
@@ -948,7 +937,7 @@ where
         Ok(())
     }
 
-    /// Expand replacements.
+    /// Expands tokens for a macro replacement or another preprocessing context.
     ///
     /// This function handles the expansion of:
     /// - Object-like macro replacement.
@@ -957,7 +946,7 @@ where
     /// - Tokens in the `#include` and `#embed` directives.
     /// - Tokens in code statements.
     ///
-    /// This produre consists of several steps:
+    /// Expansion proceeds in three stages:
     /// 1. If expanding a function-like macro definition, substitute the parameters
     ///    with the provided arguments.
     /// 2. Expand macros within the replacement text.
@@ -982,22 +971,15 @@ where
         // inclusions, conditional expressions), this stack is empty.
         macros_expansion_stack: &[MacroExpansionStackItem],
 
-        // The parameter names of the function-like macro.
-        // If the macro is variadic, the last parameter name is `...`.
+        // Function-like macro parameters, ending in `Variadic` for `...`.
         //
-        // For non-function-like macros, this map is empty.
+        // Empty outside function-like macro expansion.
         parameters: &[FunctionParameter],
 
-        // The actual arguments of function-like macros invocations.
-        // All values should be the expanded first.
-        //
-        // The argument expansion is taken place **after** passing the arguments
-        // and **before** substituting them into the replacement text.
-        //
-        // If the macro is variadic, the last parameter is the rest parameters,
-        // which contains all remaining arguments, possibly empty.
-        //
-        // For non-function-like macros, this map is empty.
+        // Arguments retain both original tokens for #/## and pre-expanded tokens
+        // for ordinary substitution. Arguments are identified before expansion.
+        // A final variadic entry holds the remaining arguments and may be empty.
+        // Empty outside function-like macro expansion.
         actual_arguments: &[Argument],
 
         // The tokens to be expanded.
@@ -1027,8 +1009,7 @@ where
         Ok(output)
     }
 
-    /// Substitute macro parameters in the function-likemacro body with
-    /// the provided arguments.
+    /// Substitutes arguments for parameters in a function-like macro replacement.
     ///
     /// Invoke this function only when expanding a function-like macro definition.
     fn substitute_macro_parameters(
@@ -1057,14 +1038,10 @@ where
                 _ if code_parser.peek_token_and_equals(0, &Token::_PoundPound) => {
                     // Process token concatenation (the `##` operator).
                     //
-                    // Token concatenation joins two or more tokens into a single identifier.
-                    // The tokens are concatenated without any whitespace in between, and the tokens
-                    // are not expanded before concatenation.
-                    // Token concatenation can only be used in function-like macro replacements.
-                    //
-                    // The result of _Token concatenation_ operator (`##`) must be a valid C identifier:
-                    // the first character  must be an alphabet or underscore, and the remaining characters
-                    // must be either alphabet, underscore or integer numbers.
+                    // Paste original argument tokens without prior expansion.
+                    // ANCPP restricts the result to an ASCII identifier: a letter
+                    // or underscore followed by letters, digits, or underscores.
+                    // Standard C also permits other valid preprocessing tokens.
                     //
                     // e.g.:
                     //
@@ -1243,7 +1220,7 @@ where
                             // see:
                             // https://en.cppreference.com/w/c/preprocessor/replace.html
 
-                            // Defence: __VA_ARGS__ can only be used in variadic function-like macros.
+                            // Reject __VA_ARGS__ outside a variadic macro.
                             if !matches!(parameter.last(), Some(FunctionParameter::Variadic)) {
                                 return Err(PreprocessFileError {
                                     file_number: current_token_with_location.location.file_number,
@@ -1255,8 +1232,7 @@ where
                                 });
                             }
 
-                            // In the variadic function, the rest arguments are stored
-                            // in the last parameter named `...`.
+                            // The final argument entry contains the variadic arguments.
                             let Some(Argument::Rest(argument_values)) = actual_arguments.last()
                             else {
                                 unreachable!()
@@ -1283,7 +1259,7 @@ where
                             // `__VA_OPT__ ( content )` is replaced by content if __VA_ARGS__ is non-empty,
                             // and expands to nothing otherwise.
 
-                            // Defence: __VA_OPT__ can only be used in variadic function-like macros.
+                            // Reject __VA_OPT__ outside a variadic macro.
                             if !matches!(parameter.last(), Some(FunctionParameter::Variadic)) {
                                 return Err(PreprocessFileError {
                                     file_number: current_token_with_location.location.file_number,
@@ -1326,17 +1302,15 @@ where
                                 components.push(next_token_with_location);
                             }
 
-                            // The closing parenthesis has already been consumed by the loop above.
-                            // Do not need to consume it again.
+                            // The loop already consumed the matching closing parenthesis.
 
-                            // In the variadic function, the rest arguments are stored
-                            // in the last parameter named `...`.
+                            // The final argument entry contains the variadic arguments.
                             let Some(Argument::Rest(argument_values)) = actual_arguments.last()
                             else {
                                 unreachable!()
                             };
 
-                            // `__VA_OPT__( content )` is only expanded if variadic arguments are provided.
+                            // Emit the optional content when variadic argument entries are present.
                             if !argument_values.is_empty() {
                                 let expanded_tokens = self.substitute_macro_parameters(
                                     parameter,
@@ -1381,8 +1355,8 @@ where
                 Token::_Pound => {
                     // _Stringizing_ (the `#` operator).
                     //
-                    // Stringizing is used to produce a string literal and can only be applied to
-                    // macro parameters (includes `__VA_ARGS__`).
+                    // Stringize original argument tokens, not their expansions.
+                    // Only parameters, including __VA_ARGS__, can follow #.
                     // For example, `#define FOO(x) #x` will expand `FOO(abc)` to `"abc"` and `FOO(123)` to `"123"`.
 
                     // expect `# parameter`
@@ -1396,11 +1370,11 @@ where
                                     //
                                     // ```c
                                     // #define SHOW_ALL(...) puts(#__VA_ARGS__);
-                                    // SHOW_ALL(1, 2, foo, "bar");     // Expands to: `puts("1, 2, foo, \"bar\"");`
-                                    // SHOW_ALL();                     // Expands to: `puts("");`
+                                    // SHOW_ALL(1, 2, foo, "bar")      // Expands to: `puts("1, 2, foo, \"bar\"");`
+                                    // SHOW_ALL()                      // Expands to: `puts("");`
                                     // ```
 
-                                    // Defence: __VA_ARGS__ can only be used in variadic function-like macros.
+                                    // Reject __VA_ARGS__ outside a variadic macro.
                                     if !matches!(parameter.last(), Some(FunctionParameter::Variadic))
                                     {
                                         return Err(PreprocessFileError {
@@ -1413,8 +1387,7 @@ where
                                         });
                                     }
 
-                                    // In the variadic function, the rest arguments are stored
-                                    // in the last parameter named `...`.
+                                    // The final argument entry contains the variadic arguments.
                                     let Some(Argument::Rest(argument_values)) =
                                         actual_arguments.last()
                                     else {
@@ -1507,10 +1480,8 @@ where
                 }
                 Token::_PoundPound => {
                     // Token concatenation (the `##` operator)
-                    // The token concatenation operator has already been handled in the
-                    // `_ if code_parser.peek_token_and_equals(0, &Token::PoundPound) => { ... }` branch above.
-                    //
-                    // If the code reaches here, it means the `##` operator is not preceded by an identifier.
+                    // Valid pasting was handled by the preceding-token branch.
+                    // Reaching this branch means ## has no left operand.
 
                     // e.g.,
                     // `#define FOO(x) ##x`
@@ -1534,7 +1505,7 @@ where
         Ok(output)
     }
 
-    /// Expand macros in the given tokens.
+    /// Expands macros in the given tokens.
     fn expand_macros_within_replacement(
         &mut self,
         expansion_type: ExpansionType,
@@ -1567,7 +1538,7 @@ where
                                 FilePathSource::SystemHeader(path_buf) => path_buf,
                             };
 
-                            // expands to the name of the current file, as a character string literal
+                            // Expand to the current file's display path as a string literal.
                             let value = file_path.to_string_lossy().to_string();
                             let token = TokenWithLocation::new(
                                 Token::String(value, StringEncoding::Default),
@@ -1576,7 +1547,7 @@ where
                             output.push(token);
                         }
                         "__LINE__" => {
-                            // expands to the source file line number, an integer constant
+                            // Expand to the one-based source line number as an integer constant.
                             let value = current_token_with_location.location.range.start.line + 1;
                             let token = TokenWithLocation::new(
                                 Token::Number(Number::Integer(IntegerNumber::new(
@@ -1589,9 +1560,8 @@ where
                             output.push(token);
                         }
                         "__DATE__" => {
-                            // expands to the date of translation, a character string literal of the form “Mmm dd yyyy”.
-                            // The name of the month is as if generated by asctime() and
-                            // the first character of “dd” is a space if the day of the month is less than 10
+                            // Expand to the local date as "Mmm dd yyyy", with a space-padded day.
+                            // The clock is read for each expansion, not once per translation unit.
                             let now = Local::now();
 
                             // Format the date as "Mmm dd yyyy", see:
@@ -1604,8 +1574,7 @@ where
                             output.push(token);
                         }
                         "__TIME__" => {
-                            // expands to the time of translation, a character string literal of the form “hh:mm:ss”,
-                            // as in the time generated by asctime()
+                            // Expand to the current local time as "hh:mm:ss".
                             let now = Local::now();
 
                             // Format the time as "hh:mm:ss", see:
@@ -1653,14 +1622,13 @@ where
                                 Location::default(),
                             ));
                         }
-                        "__Pragma" => {
-                            // `__Pragma(string-literal)` is an operator that has the same effect
-                            // as a `#pragma ...` directive. The difference is that `__Pragma` can
-                            // be used inside macros.
-                            // see:
+                        "_Pragma" => {
+                            // Standard _Pragma permits pragma directives through macro expansion.
+                            // ANCPP accepts it only in macro replacements and discards it without
+                            // applying pragma semantics or forwarding it to the compiler.
+                            // See:
                             // https://gcc.gnu.org/onlinedocs/cpp/Pragmas.html
                             //
-                            // ANCPP just ignores the pragmas for now.
                             if !matches!(
                                 expansion_type,
                                 ExpansionType::ObjectLikeDefinition
@@ -1669,7 +1637,7 @@ where
                                 return Err(PreprocessFileError {
                                     file_number: current_token_with_location.location.file_number,
                                     error: PreprocessError::MessageWithRange(
-                                        "__Pragma can only be used in macro definitions."
+                                        "_Pragma can only be used in macro definitions."
                                             .to_owned(),
                                         current_token_with_location.location.range,
                                     ),
@@ -1686,7 +1654,7 @@ where
                                     return Err(PreprocessFileError {
                                         file_number: code_parser.last_location.file_number,
                                         error: PreprocessError::MessageWithRange(
-                                            "__Pragma must be followed by a string literal."
+                                            "_Pragma must be followed by a string literal."
                                                 .to_owned(),
                                             code_parser.last_location.range,
                                         ),
@@ -1698,7 +1666,7 @@ where
                                             .location
                                             .file_number,
                                         error: PreprocessError::MessageWithRange(
-                                            "__Pragma must be followed by a string literal."
+                                            "_Pragma must be followed by a string literal."
                                                 .to_owned(),
                                             current_token_with_location.location.range,
                                         ),
@@ -1973,7 +1941,7 @@ where
                                         }
 
                                         if multiple_tokens_argument_found {
-                                            // Check `enable_macro_single_argument_multiple_tokens` flag
+                                            // Check the `macro_invocation_single_argument_multiple_tokens` option.
                                             if self
                                             .is_compile_feature_enabled(COMPILE_FEATURE_MACRO_INVOCATION_SINGLE_ARGUMENT_MULTIPLE_TOKENS)
                                             {
@@ -2148,10 +2116,9 @@ where
         Ok(output)
     }
 
-    /// Process operators `__has_include`, `__has_embed` and `__has_c_attribute`,
-    /// and the `true` and `false` keywords.
+    /// Processes `__has_include`, `__has_embed`, `__has_c_attribute`, `true`, and `false`.
     ///
-    /// Invoke this function only when expanding the conditional expression.
+    /// Called only when expanding a conditional expression.
     fn process_conditional_expression_operators(
         &mut self,
         body: Vec<TokenWithLocation>,
@@ -2211,8 +2178,8 @@ where
                             // - `__has_include(<file>)`
                             // - `__has_include(file)`
                             //
-                            // The __has_include expression evaluates to 1 if the search for the source file
-                            // succeeds, and to ​0​ if the search fails.
+                            // Yield 1 if the header search succeeds, or 0 otherwise.
+                            // This does not validate the header's contents.
                             //
                             // see:
                             // https://en.cppreference.com/w/c/preprocessor/include.html
@@ -2319,12 +2286,10 @@ where
                             // - `__has_embed(<file>)`
                             // - `__has_embed(file)`
                             //
-                            // Returns:
-                            // - `__STDC_EMBED_FOUND__` (1_isize) if the search for the resource succeeds,
-                            //   the resource is non empty and all the parameters are supported.
-                            // - `__STDC_EMBED_EMPTY__` (2_isize) if the resource is empty and all the parameters are supported.
-                            // - `__STDC_EMBED_NOT_FOUND__` (0_isize) if the search fails or one of the parameters
-                            //    passed is not supported by the implementation.
+                            // Yield FOUND (1) for an available nonempty resource, EMPTY (2)
+                            // for an empty resource, or NOT_FOUND (0) if unavailable.
+                            // C23 also tests embed parameters here; ANCPP rejects parameters
+                            // rather than returning NOT_FOUND for unsupported ones.
 
                             // Collect the tokens for `__has_embed(...)` and resolve it later.
                             let mut components = vec![];
@@ -2477,11 +2442,12 @@ where
                             // maybe_unused     [[maybe_unused]]    201904L     (C23)
                             // nodiscard        [[nodiscard]]       202003L     (C23)
                             // noreturn         [[noreturn]]        202202L     (C23)
-                            // _Noreturn        [[_Noreturn]]       202202L     (C23)
+                            // _Noreturn        [[_Noreturn]]       202202L     (ANCPP-only alias)
                             // unsequenced      [[unsequenced]]     202207L     (C23)
                             // reproducible     [[reproducible]]    202207L     (C23)
                             //
-                            // see:
+                            // Values are hard-coded, not queried from the downstream compiler.
+                            // See:
                             // https://en.cppreference.com/w/c/language/attributes.html#Attribute_testing
 
                             code_parser.consume_opening_paren()?; // Consumes '('
@@ -2489,7 +2455,6 @@ where
                             let attribute_name = match code_parser.next_token() {
                                 Some(Token::Identifier(id)) => id.to_owned(),
                                 Some(_) => {
-                                    // let location = code_parser.peek_location(0).unwrap();
                                     return Err(PreprocessFileError {
                                         file_number: code_parser.last_location.file_number,
                                         error: PreprocessError::MessageWithRange(
@@ -2563,9 +2528,9 @@ where
     ) -> Result<IncludeResolveResult, PreprocessFileError> {
         // The `components` are expanded tokens following `#include` directive or `__has_include` operator.
         //
-        // There are three possible forms in the file path:
-        // 1. One `Token::FilePath` which is a path enclosed in angle brackets `<...>`
-        // 2. One `Token::FilePath` which is a path enclosed in double quotes `"..."`
+        // There are four possible path forms:
+        // 1. One `Token::_FilePath` enclosed in angle brackets `<...>`
+        // 2. One `Token::_FilePath` enclosed in double quotes `"..."`
         // 3. One `Token::String` which is a path enclosed in double quotes `"..."`
         // 4. A sequence of tokens beginning with '<' and ending with '>' and forming a valid file path.
         //
@@ -2587,7 +2552,7 @@ where
         while let Some(current_token_with_location) = code_parser.next_token_with_location() {
             match &current_token_with_location.token {
                 Token::_FilePath(path_name, angle_bracket) => {
-                    // Case 1 and 2: A single `Token::FilePath`
+                    // Cases 1 and 2: a single `Token::_FilePath`.
                     is_system_file = *angle_bracket;
                     file_path = PathBuf::from(path_name);
                 }
@@ -2658,9 +2623,9 @@ where
     ) -> Result<EmbedResolveResult, PreprocessFileError> {
         // The `components` are expanded tokens following `#embed` directive or `__has_embed` operator.
         //
-        // There are three possible forms in the file path:
-        // 1. One `Token::FilePath` which is a path enclosed in angle brackets `<...>`
-        // 2. One `Token::FilePath` which is a path enclosed in double quotes `"..."`
+        // There are four possible path forms:
+        // 1. One `Token::_FilePath` enclosed in angle brackets `<...>`
+        // 2. One `Token::_FilePath` enclosed in double quotes `"..."`
         // 3. One `Token::String` which is a path enclosed in double quotes `"..."`
         // 4. A sequence of tokens beginning with '<' and ending with '>' and forming a valid file path.
         //
@@ -2668,8 +2633,8 @@ where
 
         let first_token_with_location = components.first().unwrap().clone();
 
-        // Collect data within `prefix(...), suffix(...), limit(...), if_empty(...)`
-        // The data is consisted of decimal or hexadecimal byte values separated by commas.
+        // Parse `prefix`, `suffix`, or `if_empty` as comma-separated character
+        // or integer literals that fit in a byte. `limit` is parsed separately.
         // e.g.,
         // `prefix(0xCA, 0xFE, 0x03, 0x05)`
 
@@ -2796,7 +2761,7 @@ where
         while let Some(current_token_with_location) = code_parser.next_token_with_location() {
             match &current_token_with_location.token {
                 Token::_FilePath(path_name, angle_bracket) => {
-                    // Case 1 and 2: A single `Token::FilePath`
+                    // Cases 1 and 2: a single `Token::_FilePath`.
                     is_system_file = *angle_bracket;
                     file_path = PathBuf::from(path_name);
                 }
@@ -2950,13 +2915,13 @@ where
         })
     }
 
-    /// Check if the file has `#pragma once` or include guard.
+    /// Checks the file for `#pragma once` or a traditional include guard.
     ///
     /// - If `#pragma once` is present, do nothing.
     /// - If neither is present, suggest adding `#pragma once`.
     /// - If `#pragma once` is not present but an include guard is found:
     ///   + check if the macro follows the naming convention.
-    ///   + suggest adding additional `#pragma once`.
+    ///   + suggest using `#pragma once` (an ANCPP style preference, not a C rule).
     ///
     fn check_pragma_once_and_include_guard(
         &mut self,
@@ -2991,16 +2956,13 @@ where
                 components.first(),
                 Some(TokenWithRange { token: Token::Identifier(name), .. }) if name == "once"))
         {
-            // The file has `#pragma once`, we can skip further checks.
-            // i.e., the traditional include guard is not necessary if `#pragma once` is present,
-            // even though it is a good practice to have both.
+            // A leading #pragma once satisfies this linter; skip further checks.
             return;
         }
 
-        // the suggested include guard macro name is generated based on the relative path of the header file,
-        // which is a common convention for include guard macro names. For example, if the relative
-        // path is `utils/helper.h`, the suggested include guard macro name
-        // should ends with `UTILS_HELPER_H`.
+        // Use the uppercase filename, replacing non-alphanumeric characters with
+        // underscores. For `utils/helper.h`, require a name ending in `HELPER_H`;
+        // a caller-chosen prefix can help avoid collisions.
         let suggested_include_guard_macro_name = relative_path
             .to_string_lossy()
             .trim_start_matches(['/', '-', '.', '_'])
@@ -3103,13 +3065,10 @@ where
 
         is_system_file: bool,
 
-        // The canonical full path of the source file.
-        // This is used to load the source file content actually.
+        // The resolved header path used as its identity and for nested inclusions.
         header_file_canonical_full_path: &Path,
 
-        // The path name of the source file.
-        // It is used to generate the value of the `__FILE__` macro and the parser wouldn't use it to load the file.
-        // Usually, it's value is the relative path to the project root directory.
+        // The header's requested path, used for __FILE__ rather than loading it.
         header_file_path_name: &Path,
 
         program: &Program,
@@ -3141,7 +3100,7 @@ where
     }
 
     fn is_compile_feature_enabled(&self, feature_name: &str) -> bool {
-        // The absent of a feature in this set is equivalent to the feature being set to false.
+        // An absent entry is equivalent to false.
         self.context
             .compile_features
             .get(feature_name)
@@ -3177,10 +3136,10 @@ enum ExpansionType {
     /// Conditional expression, i.e., `#if` and `#elif`.
     ConditionalExpression = 1,
 
-    /// Object-like macro definition, where token concatenation is allowed.
+    /// Expansion of an object-like macro replacement.
     ObjectLikeDefinition = 2,
 
-    /// Function-like macro definition, where stringizing is allowed.
+    /// Function-like replacement, including parameter substitution, #, and ##.
     FunctionLikeDefinition = 3,
 }
 
@@ -3199,7 +3158,7 @@ fn is_valid_identifier(name: &str) -> bool {
     }
 }
 
-/// Convert a token to a string.
+/// Renders a parsed token using ANCPP's canonical spelling.
 fn stringize_token(token_with_location: &TokenWithLocation) -> Result<String, PreprocessFileError> {
     let s = match &token_with_location.token {
         Token::Identifier(_)
@@ -3221,8 +3180,8 @@ fn stringize_token(token_with_location: &TokenWithLocation) -> Result<String, Pr
     Ok(s)
 }
 
-/// Stringify a list of tokens.
-/// Tokens are separated by spaces.
+/// Stringizes parsed tokens, inserting a space between each pair.
+/// Unlike standard C stringizing, original spelling and spacing are not retained.
 fn stringize_tokens(
     token_with_locations: &[TokenWithLocation],
 ) -> Result<String, PreprocessFileError> {
@@ -3245,8 +3204,7 @@ fn stringize_tokens_without_spaces(
     Ok(items.join(""))
 }
 
-/// Stringify a list of arguments.
-/// Arguments are separated by commas.
+/// Stringizes argument token sequences, separating arguments with comma-space.
 fn stringize_arguments(args: &[ArgumentValue]) -> Result<String, PreprocessFileError> {
     let mut outputs = vec![];
     for arg in args {
@@ -3285,18 +3243,18 @@ fn contains_self_reference(
 
 #[derive(Debug, PartialEq)]
 struct ArgumentValue {
-    // The original token value before expansion.
-    // ANCPP only supports single token as argument value.
+    // Original tokens before expansion, used for # and ##. Multiple tokens are
+    // permitted only when the corresponding runtime option is enabled.
     origin: Vec<TokenWithLocation>,
 
-    // The fully expanded tokens.
-    // Only exists if the argument is a macro.
+    // Pre-expanded tokens for ordinary parameter substitution, also retained
+    // when expansion leaves the argument unchanged.
     expanded: Option<Vec<TokenWithLocation>>,
 }
 
 #[derive(Debug, PartialEq)]
 enum Argument {
-    // Poisition argument
+    // Argument for a named parameter.
     Position(ArgumentValue),
 
     // The value list of variadic arguments.
@@ -3448,7 +3406,8 @@ impl<'a> CodeParser<'a> {
 }
 
 /// Concatenates adjacent string literals into a single string literal token.
-/// Only string literals with identical encoding prefixes can be concatenated.
+    /// ANCPP requires identical encoding prefixes; standard C also permits
+    /// combining an unprefixed literal with a prefixed one in specified cases.
 /// For example, `"abc" "def"` becomes `"abcdef"`, but `u8"abc" "def"` is not allowed.
 ///
 /// See:
@@ -3869,7 +3828,7 @@ FOO 11 BAR",
                 )
         ));
 
-        // Error: Redefine without undefine
+        // Error: conflicting redefinition without a preceding #undef.
         assert!(matches!(
             process_with_predefinitions_and_result(
                 "\
@@ -4474,7 +4433,7 @@ CONCAT()",
             })
         ));
 
-        // Error: invalid identifier, through parameter concatenation
+        // Error: parameter substitution produces an invalid pasted identifier.
         assert!(matches!(
             process_with_predefinitions_and_result(
                 "\
@@ -4530,7 +4489,7 @@ CONCAT(hello, \"world\")",
             })
         ));
 
-        // Error: concatenate a multiple tokens argument
+        // Error: paste a multi-token argument.
         assert!(matches!(
             process_with_permissive_and_result(
                 "\
@@ -5331,7 +5290,7 @@ FOO
             "0x01 , 0x02 , 0x03"
         );
 
-        // Load binary with macro that expand to file name and options
+        // Load a resource using a macro that expands to a path and parameters.
         assert_eq!(
             print_tokens(&process_with_headers(
                 r#"
@@ -5597,7 +5556,7 @@ FOO
             .is_empty()
         );
 
-        // include guard is present, suggest adding additional `#pragma once`
+        // A traditional guard triggers ANCPP's preference for #pragma once.
         assert!(matches!(
             process_with_headers_and_result(
                 r#"
@@ -5689,7 +5648,7 @@ FOO
 
     #[test]
     fn test_process_operator_has_include() {
-        // Test `#has_include`
+        // Test the __has_include operator.
         assert_eq!(
             print_tokens(&process_with_headers(
                 r#"
@@ -5723,7 +5682,7 @@ FOO
 
     #[test]
     fn test_process_operator_has_embed() {
-        // Test `#has_embed`
+        // Test the __has_embed operator.
         assert_eq!(
             print_tokens(&process_with_headers(
                 r#"
@@ -5822,7 +5781,7 @@ FOO
 
     #[test]
     fn test_process_operator_has_c_attribute() {
-        // Test `#has_c_attribute`
+        // Test the __has_c_attribute operator.
         assert_eq!(
             print_tokens(&process_with_headers(
                 r#"
@@ -5845,7 +5804,7 @@ FOO
             "11 17"
         );
 
-        // Test `#has_c_attribute` with non-existing attribute
+        // Test __has_c_attribute with an unknown attribute.
         assert_eq!(
             print_tokens(&process_with_headers(
                 r#"
@@ -5956,14 +5915,14 @@ FOO
     fn test_process_pragma() {
         let predefinitions = HashMap::new();
 
-        // pragmas are ignored currently, so the output should be empty.
+        // Discard pragmas and _Pragma, retaining the ordinary `hello world` tokens.
         assert_eq!(
             print_tokens(&process_with_predefinitions(
                 "\
 #pragma STDC FENV_ACCESS ON
 #pragma STDC FP_CONTRACT OFF
 #pragma STDC CX_LIMITED_RANGE DEFAULT
-#define WORLD __Pragma(\"GCC dependency \\\"foo.h\\\"\") world
+#define WORLD _Pragma(\"GCC dependency \\\"foo.h\\\"\") world
 hello
 WORLD
 ",
@@ -6016,7 +5975,7 @@ FOO(
             r#""Hello, World!""#
         );
 
-        // Error: concatenates string literals with different encoding types.
+        // Error: concatenate string literals with different encoding prefixes.
         assert!(matches!(
             process_with_predefinitions_and_result(r#""abc" u8"xyz""#, &predefinitions),
             Err(

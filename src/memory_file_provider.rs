@@ -15,13 +15,13 @@ use crate::context::{FileProvider, normalize_path};
 /// This provider is intended for unit testing only and does not interact with the real file system.
 ///
 /// The in-memory file provider simulates a file system with the following structure:
-/// - `/projects/test` — project root directory
-/// - `/projects/hello/src` — source directory
-/// - `/projects/hello/header` — internal header directory
-/// - `/projects/hello/src/common` — internal shared code such as project's configuration
-/// - `/projects/hello/src/include` — public header directory
-/// - `/projects/hello/src/resources` — internal binary files directory
-/// - `/usr/include` — system header directory
+/// - `/projects/hello`: project root
+/// - `/projects/hello/src`: source files
+/// - `/projects/hello/src/header`: internal headers
+/// - `/projects/hello/src/common`: shared files, such as project configuration
+/// - `/projects/hello/include`: public headers
+/// - `/projects/hello/src/resources`: binary resources
+/// - `/usr/include`: system headers
 pub struct MemoryFileProvider {
     /// Maps canonical file paths to their contents.
     file_content_map: HashMap<PathBuf, FileContent>,
@@ -58,7 +58,7 @@ impl MemoryFileProvider {
 
     /// Adds a file to the in-memory file provider.
     ///
-    /// `source_file_path_name` is the path relative to the project root directory,
+    /// `source_file_path_name` is relative to `/projects/hello`.
     pub fn add_user_text_file(&mut self, source_file_path_name: &Path, content: &str) {
         let path = Path::new("/projects/hello").join(source_file_path_name);
         let normalized_path = normalize_path(&path);
@@ -68,7 +68,7 @@ impl MemoryFileProvider {
 
     /// Adds a binary file to the in-memory file provider.
     ///
-    /// `source_file_path_name` is the path relative to the project root directory.
+    /// `source_file_path_name` is relative to `/projects/hello`.
     pub fn add_user_binary_file(&mut self, source_file_path_name: &Path, content: Vec<u8>) {
         let path = Path::new("/projects/hello").join(source_file_path_name);
         let normalized_path = normalize_path(&path);

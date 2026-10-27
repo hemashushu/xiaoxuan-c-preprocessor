@@ -20,7 +20,7 @@ impl Range {
         }
     }
 
-    /// Creates a Range that represents a single position (i.e., start and end are the same).
+    /// Creates a range whose start and inclusive end are the same position.
     pub fn from_single_position(pos: &Position) -> Self {
         Self {
             start: *pos,
@@ -28,9 +28,8 @@ impl Range {
         }
     }
 
-    /// Creates a Range from a starting position and a length,
-    /// where the end position is calculated based on the length and
-    /// assumes that the range is on the same line (i.e., only the column is incremented).
+    /// Creates a single-line range of `length` characters, including both ends.
+    /// The length must be nonzero; the end index and column advance by length - 1.
     pub fn from_position_and_length(pos: &Position, length: usize) -> Self {
         let inc = length - 1;
         Self {
@@ -39,10 +38,8 @@ impl Range {
         }
     }
 
-    /// Creates a Range from detailed parameters, including the
-    /// starting index, line, column, and length.
-    /// The end position is calculated based on the starting position and length,
-    /// assuming that the range is on the same line.
+    /// Creates a single-line range from a starting index, line, column, and
+    /// nonzero character length. The end position is inclusive.
     pub fn from_detail(index: usize, line: usize, column: usize, length: usize) -> Self {
         let inc = length - 1;
         let start = Position::new(index, line, column);
@@ -53,8 +50,8 @@ impl Range {
         }
     }
 
-    /// Merges two Ranges into a single Range that spans from the start of the left Range
-    /// to the end of the right Range. This is useful for combining adjacent or overlapping ranges
+    /// Spans from `left.start` through `right.end_inclusive`.
+    /// The caller must supply the ranges in source order; no sorting is performed.
     pub fn merge(left: &Self, right: &Self) -> Self {
         Self {
             start: left.start,

@@ -21,7 +21,7 @@ use ancpp::{
     token::TokenWithLocation,
 };
 
-/// Helpers to get the path to the test resources rootfs directory.
+/// Returns the root directory of the filesystem test fixtures.
 fn get_rootfs_path() -> PathBuf {
     // `env::current_dir()` returns the current Rust project's root folder
     let mut dir = env::current_dir().unwrap();
@@ -31,7 +31,7 @@ fn get_rootfs_path() -> PathBuf {
     dir
 }
 
-/// Help function to create a NativeFileProvider for the test project.
+/// Creates a `NativeFileProvider` for the fixture project.
 fn get_file_provider() -> NativeFileProvider {
     let rootfs_path = get_rootfs_path();
 
@@ -49,7 +49,7 @@ fn get_file_provider() -> NativeFileProvider {
     NativeFileProvider::new(&user_include_dirs, &system_include_dirs)
 }
 
-/// Help function to print tokens as a string.
+/// Renders tokens as a space-separated string for assertions.
 fn print_tokens(token_with_location: &[TokenWithLocation]) -> String {
     token_with_location
         .iter()
@@ -58,7 +58,7 @@ fn print_tokens(token_with_location: &[TokenWithLocation]) -> String {
         .join(" ")
 }
 
-/// Help function to process a single source file with given predefinitions.
+/// Preprocesses a fixture source file with the supplied predefined macros.
 fn process_single_source_file(
     source_file_path_within_project_root: &str,
     predefinitions: &HashMap<String, String>,
@@ -84,7 +84,7 @@ fn process_single_source_file(
     )
 }
 
-/// Help function to process a single source file and get the output tokens.
+/// Preprocesses a fixture source file and returns its output tokens.
 fn process_single_source_file_and_get_tokens(
     src: &str,
     predefinitions: &HashMap<String, String>,

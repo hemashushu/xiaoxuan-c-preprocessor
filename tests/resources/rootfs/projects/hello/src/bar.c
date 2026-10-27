@@ -8,8 +8,9 @@
 
 #include "bar.h"
 
-// In GCC, the file path is resolved relative to the source file location,
-// effectively ignoring user include paths specified with the `-I ...` option.
+// GCC searches resource paths configured with --embed-dir, not header paths
+// configured with -I. For this fixture, add --embed-dir=resources when building
+// from this directory.
 char data[] = {
 #embed "hippo.dat" limit(5)
 };

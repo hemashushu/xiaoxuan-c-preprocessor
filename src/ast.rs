@@ -26,7 +26,7 @@ pub enum Statement {
 
     // Source file inclusion
     //
-    // Includes another source file into the current file at the line immediately following the directive.
+    // Replaces the directive with the included file's processed tokens.
     //
     // Syntax:
     //
@@ -67,10 +67,12 @@ pub enum Statement {
     // - `suffix`: A token sequence to append to the integer literal sequence, if not empty.
     // - `if_empty`: A token sequence to use as the expansion if the resource is empty.
     //
-    // Parameter names also can be written as `__limit__`, `__prefix__`,
-    // `__suffix__`, and `__if_empty__`.
+    // Standard C23 also permits `__limit__`, `__prefix__`, `__suffix__`, and
+    // `__if_empty__`; ANCPP accepts only the unadorned names. ANCPP rejects
+    // parameters in `__has_embed`, despite the standard syntax shown above.
     //
-    // ANCPP only supports token sequences consisting of characters or integers separated by commas.
+    // ANCPP converts comma-separated character/integer literals to bytes and
+    // inserts separator commas itself, rather than inserting arbitrary tokens.
     // e.g.,
     //
     // - `#embed "file.txt" prefix(0xEF, 0xBB, 0xBF) suffix('\0')`      // valid,
@@ -141,7 +143,8 @@ pub enum Statement {
 // - `#define identifier( ... ) replacement-list`               (4) (since C99)
 // - `#undef identifier`                                        (5)
 //
-// The definition must be a balanced token sequence.
+// ANCPP requires the replacement to be a balanced token sequence; standard C
+// permits unmatched parentheses, brackets, and braces in replacement lists.
 // "Balanced" means that all parentheses, brackets, and braces are properly matched.
 // e.g.,
 //
@@ -153,7 +156,7 @@ pub enum Statement {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Define {
     ObjectLike {
-        // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
+        // Macro name; `defined` cannot be used as a macro name.
         identifier: String,
         identifier_range: Range,
 
@@ -161,12 +164,11 @@ pub enum Define {
         definition: Vec<TokenWithRange>,
     },
     FunctionLike {
-        // The macro name, string "defined" is treated as a "keyword" and cannot be used as a macro name
+        // Macro name; `defined` cannot be used as a macro name.
         identifier: String,
         identifier_range: Range,
 
-        // The parameter names.
-        // If the macro is variadic, the last parameter name is `...`.
+        // Parameters; the final entry is `Variadic` for `...`.
         parameters: Vec<FunctionParameter>,
 
         // Can be empty, e.g., `#define FOO(x, y)`
@@ -217,7 +219,7 @@ pub struct Branch {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Condition {
     // `#if expression`
-    // Expression never empty
+    // A nonempty expression token sequence.
     Expression(/* expression */ Vec<TokenWithRange>),
 
     // `#ifdef identifier`
@@ -259,7 +261,8 @@ pub struct AlternativeBranch {
 //
 // where `arg` is either ON, OFF, or DEFAULT.
 //
-// Non-standard pragmas (but supported by ANCPP):
+// ANCPP ignores pragma semantics and does not forward pragmas to the compiler.
+// The header-guard linter separately recognizes the non-standard directive:
 //
 // - `#pragma once`
 //

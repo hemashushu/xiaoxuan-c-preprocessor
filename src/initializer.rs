@@ -10,17 +10,18 @@ use crate::{
     peekable_iter::PeekableIter,
 };
 
-/// Preprocessing steps before tokenization.
+/// Prepares source characters for tokenization while retaining source positions.
 ///
 /// References:
-/// - https://gcc.gnu.org/onlinedocs/cpp/Initial-processing.html
-/// - https://en.cppreference.com/w/c/language/translation_phases.html
+/// - <https://gcc.gnu.org/onlinedocs/cpp/Initial-processing.html>
+/// - <https://en.cppreference.com/w/c/language/translation_phases.html>
 ///
-/// 1. The input file is loaded into memory and split into lines. (Skipped)
-/// 2. Trigraph sequences are replaced with their corresponding single characters if enabled. (ANCPP does not support)
-/// 3. Lines ending with a backslash ('\') are joined with the following line.
-/// 4. All comments are replaced by a single space character.
-/// 5. Remove the shebang (`#!`) line. (ANCPP extension)
+/// 1. Splice backslash-continued lines.
+/// 2. Replace block comments with spaces and line comments with newlines.
+/// 3. Remove leading whitespace and an optional shebang (`#!`) line.
+///
+/// Shebang handling is an extension.
+/// Trigraphs are not converted; they were removed from C23.
 pub fn initialize(source_text: &str) -> Result<Vec<CharWithPosition>, PreprocessError> {
     let mut chars = source_text.chars();
     let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
@@ -39,18 +40,13 @@ pub fn initialize(source_text: &str) -> Result<Vec<CharWithPosition>, Preprocess
 
 /// Merges continued lines in the input text.
 /// If a line ends with a backslash ('\'), it is joined with the next line.
-/// Whitespace between the backslash and the newline is also handled.
+/// The newline must immediately follow the backslash.
 ///
 /// This rule is applied even if the backslash is inside:
 /// - string literals
 /// - character constants
 /// - comments (although comments are removed in a later step)
 ///
-/// If there are whitespaces between the backslash and the newline, e.g.,
-/// - `...\    \n`
-/// - `...\    \r\n`
-///
-/// These whitespaces are ignored as per most preprocessor implementations.
 fn merge_continued_lines(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
@@ -58,20 +54,6 @@ fn merge_continued_lines(
     while let Some(char_with_position) = chars.next() {
         match char_with_position.character {
             '\\' => {
-                // Try to consume any whitespace characters between '\' and the newline ('\n' or "\r\n").
-                let mut saved_whitespaces = vec![];
-                while let Some(next_char_with_position) = chars.peek(0) {
-                    // Store all whitespaces (space, tab, vertical tab, form feed) to `saved_whitespaces`.
-                    match next_char_with_position.character {
-                        ' ' | '\t' | '\u{0b}' | '\u{0c}' => {
-                            saved_whitespaces.push(chars.next().unwrap());
-                        }
-                        _ => {
-                            break;
-                        }
-                    }
-                }
-
                 if matches!(
                     chars.peek(0),
                     Some(CharWithPosition {
@@ -85,7 +67,7 @@ fn merge_continued_lines(
                         ..
                     })
                 ) {
-                    // Found a line continuation with "\...\r\n"
+                    // Splice a continuation ending in CRLF.
                     chars.next(); // Consume '\r'
                     chars.next(); // Consume '\n'
                 } else if matches!(
@@ -95,13 +77,10 @@ fn merge_continued_lines(
                         ..
                     })
                 ) {
-                    // Found a line continuation with "\...\n"
+                    // Splice a continuation ending in LF.
                     chars.next(); // Consume '\n'
                 } else {
-                    // No line continuation found.
-                    // Restore the '\' character and the stored whitespaces.
-                    output.push(char_with_position); // Restore '\'
-                    output.extend(saved_whitespaces); // Restore stored whitespaces
+                    output.push(char_with_position);
                 }
             }
             _ => {
@@ -114,29 +93,80 @@ fn merge_continued_lines(
     Ok(output)
 }
 
-/// Replaces both line comments and block comments
-/// with a single space character.
+/// Replaces comments outside quoted literals, preserving literal spelling and
+/// source positions. Apostrophes in preprocessing numbers are digit separators.
 fn remove_comments(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
     let mut output = vec![];
     while let Some(char_with_position) = chars.next() {
         match char_with_position.character {
+            '"' | '\'' => {
+                let quote = char_with_position.character;
+                output.push(char_with_position);
+                while let Some(literal_char) = chars.next() {
+                    let character = literal_char.character;
+                    output.push(literal_char);
+                    if character == '\\' {
+                        if let Some(escaped_char) = chars.next() {
+                            output.push(escaped_char);
+                        }
+                    } else if character == quote || character == '\n' {
+                        break;
+                    }
+                }
+            }
+            character
+                if character.is_ascii_digit()
+                    || (character == '.'
+                        && chars
+                            .peek(0)
+                            .is_some_and(|item| item.character.is_ascii_digit())) =>
+            {
+                let mut previous = character;
+                output.push(char_with_position);
+                while let Some(next_char) = chars.peek(0) {
+                    let character = next_char.character;
+                    if character.is_alphanumeric()
+                        || character == '_'
+                        || character == '.'
+                        || (matches!(character, '+' | '-')
+                            && matches!(previous, 'e' | 'E' | 'p' | 'P'))
+                        || (character == '\''
+                            && chars.peek(1).is_some_and(|item| {
+                                item.character.is_alphanumeric() || item.character == '_'
+                            }))
+                    {
+                        output.push(chars.next().unwrap());
+                        previous = character;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            character if character.is_alphabetic() || character == '_' || character >= '\u{a0}' => {
+                output.push(char_with_position);
+                while chars.peek(0).is_some_and(|item| {
+                    item.character.is_alphanumeric()
+                        || item.character == '_'
+                        || item.character >= '\u{a0}'
+                }) {
+                    output.push(chars.next().unwrap());
+                }
+            }
             '/' if matches!(chars.peek(0), Some(CharWithPosition { character: '/', .. })) => {
                 chars.next(); // Consume '/'
 
                 // Found a line comment:
                 // Consume all characters until the end of the line.
                 for next_char_with_position in chars.by_ref() {
-                    // while let Some(next_char_with_position) = chars.next() {
                     if next_char_with_position.character == '\n' {
                         break; // Stop at the end of the line
                     }
                 }
 
-                // Insert a new-line in place of the line comment.
-                // Do not insert a space, because the "directive start" token
-                // must be at the beginning of a line. e.g., `\n#define ...`
+                // Preserve a logical line boundary so a following directive
+                // is recognized. Associate it with the original comment start.
                 output.push(CharWithPosition {
                     character: '\n',
                     position: char_with_position.position,
@@ -177,12 +207,10 @@ fn remove_comments(
     Ok(output)
 }
 
-/// Removes the shebang line (if present) from the start of the input.
-/// Also removes any leading whitespace (including newlines) before the
-/// shebang line.
+/// Removes leading whitespace and then an optional shebang line.
 ///
-/// Because the comments have already been removed in a previous step,
-/// thus comments are allowed before the shebang line.
+/// Leading whitespace is discarded even without a shebang. Comments have
+/// already been removed, so a shebang may also follow initial comments.
 fn remove_shebang(
     chars: &mut PeekableIter<CharWithPosition>,
 ) -> Result<Vec<CharWithPosition>, PreprocessError> {
@@ -250,6 +278,12 @@ mod tests {
                 CharWithPosition::new('9', Position::new(9, 2, 0)),
                 CharWithPosition::new('0', Position::new(10, 2, 1)),
                 CharWithPosition::new('1', Position::new(11, 2, 2)),
+                CharWithPosition::new('\\', Position::new(12, 2, 3)),
+                CharWithPosition::new(' ', Position::new(13, 2, 4)),
+                CharWithPosition::new(' ', Position::new(14, 2, 5)),
+                CharWithPosition::new(' ', Position::new(15, 2, 6)),
+                CharWithPosition::new(' ', Position::new(16, 2, 7)),
+                CharWithPosition::new('\n', Position::new(17, 2, 8)),
                 // line 3
                 CharWithPosition::new('8', Position::new(18, 3, 0)),
                 CharWithPosition::new('9', Position::new(19, 3, 1)),
@@ -265,6 +299,59 @@ mod tests {
                 CharWithPosition::new('0', Position::new(30, 5, 2)),
             ]
         );
+    }
+
+    #[test]
+    fn test_merge_continued_lines_requires_adjacent_newline() {
+        for newline in ["\n", "\r\n"] {
+            for whitespace in [" ", "\t", "\u{0b}", "\u{0c}", " \t "] {
+                let source_text = format!("first\\{whitespace}{newline}second");
+                let mut chars = source_text.chars();
+                let mut positioned = CharsWithPositionIter::new(&mut chars);
+                let expected = positioned.by_ref().collect::<Vec<_>>();
+                let mut chars = source_text.chars();
+                let mut input = CharsWithPositionIter::new(&mut chars);
+                let mut iter = PeekableIter::new(&mut input);
+
+                assert_eq!(merge_continued_lines(&mut iter).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_remove_comments_preserves_literals() {
+        for (source_text, expected) in [
+            (
+                r#""https://example.com/a/*b*/" /* comment */ '/'"#,
+                r#""https://example.com/a/*b*/"   '/'"#,
+            ),
+            (
+                r#""escaped \" // literal" /* comment */ '/'"#,
+                r#""escaped \" // literal"   '/'"#,
+            ),
+            (r#""\\"/* comment */"// literal""#, r#""\\" "// literal""#),
+            (
+                r#"'\''/* comment */"/* literal */""#,
+                r#"'\'' "/* literal */""#,
+            ),
+            (r#"'"'/* comment */"// literal""#, r#"'"' "// literal""#),
+            ("1'000 /* comment */ 2'000", "1'000   2'000"),
+            ("0xA'B /* comment */ 0xC'D", "0xA'B   0xC'D"),
+        ] {
+            let mut chars = source_text.chars();
+            let mut positioned = CharsWithPositionIter::new(&mut chars);
+            let mut iter = PeekableIter::new(&mut positioned);
+            let clean = remove_comments(&mut iter).unwrap();
+
+            assert_eq!(
+                clean.iter().map(|item| item.character).collect::<String>(),
+                expected
+            );
+            let original = source_text.chars().collect::<Vec<_>>();
+            for item in clean.iter().filter(|item| !item.character.is_whitespace()) {
+                assert_eq!(item.character, original[item.position.index]);
+            }
+        }
     }
 
     #[test]

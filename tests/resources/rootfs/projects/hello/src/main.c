@@ -6,13 +6,13 @@
  * For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
  */
 
-// You can compile this code with a C compiler that supports the C23 standard.
+// Build from this directory with a GCC version that supports C23 #embed:
 //
 // gcc -Wall -g -std=c23 -o main.elf \
 //  -I ../include \
 //  -I ../src/header \
 //  -I ../src/common \
-//  -I ../src/resources \
+//  --embed-dir=resources \
 //  main.c lib.c foo.c bar.c
 
 #include <stdio.h>

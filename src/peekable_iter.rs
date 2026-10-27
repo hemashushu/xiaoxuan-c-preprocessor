@@ -6,8 +6,8 @@
 
 const ROUND_QUEUE_LENGTH: usize = 32;
 
-/// `PeekableIter` extends the functionality of `std::iter::Peekable` by allowing
-/// peeking at elements at any specified offset, not just the next one.
+/// An iterator with fixed lookahead of up to 32 elements.
+/// Unlike `std::iter::Peekable`, it accepts offsets from 0 through 31.
 pub struct PeekableIter<'a, T>
 where
     T: PartialEq,
@@ -20,8 +20,7 @@ impl<'a, T> PeekableIter<'a, T>
 where
     T: PartialEq,
 {
-    /// Creates a new PeekableIter with the specified buffer size.
-    /// The buffer is pre-filled with elements from the upstream iterator.
+    /// Creates an iterator with a fixed 32-slot buffer, prefilled from `upstream`.
     pub fn new(upstream: &'a mut dyn Iterator<Item = T>) -> Self {
         let mut buffer = RoundQueue::new();
 
@@ -34,8 +33,8 @@ where
         Self { upstream, buffer }
     }
 
-    /// Returns a reference to the element at the specified offset in the buffer,
-    /// or None if that position is empty. The offset must be less than the buffer size.
+    /// Returns the element at a zero-based lookahead offset, or `None` at EOF.
+    /// Panics if the offset is 32 or greater.
     pub fn peek(&self, offset: usize) -> Option<&T> {
         assert!(offset < ROUND_QUEUE_LENGTH);
         self.buffer.peek(offset)
@@ -61,7 +60,7 @@ where
     }
 }
 
-/// A fixed-size circular queue used for buffering elements in PeekableIter.
+/// A fixed-size circular queue used for buffering elements in `PeekableIter`.
 struct RoundQueue<T>
 where
     T: PartialEq,
@@ -75,7 +74,7 @@ impl<T> RoundQueue<T>
 where
     T: PartialEq,
 {
-    /// Creates a new RoundQueue.
+    /// Creates an empty `RoundQueue`.
     pub fn new() -> Self {
         Self {
             position_read: 0,
@@ -108,8 +107,8 @@ where
         value
     }
 
-    /// Returns a reference to the value at the given offset from the current read position,
-    /// or None if the slot is empty. The offset must be less than the queue size.
+    /// Returns the value at an offset from the current read position, or `None`
+    /// for an empty slot. Panics if the offset is 32 or greater.
     pub fn peek(&self, offset: usize) -> Option<&T> {
         assert!(offset < ROUND_QUEUE_LENGTH);
 

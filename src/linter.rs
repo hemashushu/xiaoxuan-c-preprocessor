@@ -12,9 +12,9 @@ use crate::{
     source_message::{attach_with_snippet_by_position, attach_with_snippet_by_range},
 };
 
-/// `Lint` is different from `Error`, it is useful messages report to the user,
-/// such as suggestions and warnings. It is not an error that prevents preprocessing,
-/// but it can be helpful for users to understand potential issues or improvements in their code.
+/// A nonfatal diagnostic, such as a warning or suggestion.
+/// Unlike a preprocessing error, a lint does not stop processing and can be
+/// suppressed by its identifier.
 #[derive(Debug, PartialEq)]
 pub enum Lint {
     Message(
@@ -39,28 +39,16 @@ pub enum Lint {
     ),
 }
 
-/// The severity level of a lint message, which can be either `Info` or `Warn`.
+/// Severity of a nonfatal diagnostic: information or a warning.
 ///
-/// - `Info`: A suggestion is a recommendation for improving the code, but it does not indicate a potential issue.
-/// - `Warn`: A warning indicates a potential issue in the code that may lead to unexpected behavior or bugs.
-///
-/// Actually, there are additional lint levels `Error` and `Disable`:
-///
-/// - `Error`: An error indicates a critical issue in the code that must be addressed,
-///   as it may cause the program to fail or produce incorrect results, or
-///   some features that are not supported by the preprocessor, such as `#line`,
-///   can also be reported as errors to inform users that they cannot use these features in their code.
-/// - `Disable`: This level is used to indicate that a specific compile-feature is disabled by default,
-///   however, these features can be reenabled by configuration.
-///
-/// Since these levels messages mean that the preprocessor cannot continue processing the code,
-/// they are reported as errors instead of lints, and they are not included in the `LintLevel` enum.
+/// Unsupported constructs and uses of disabled options are reported separately
+/// as preprocessing errors, not additional lint levels.
 #[derive(Debug, PartialEq)]
 pub enum LintLevel {
-    /// A suggestion is a recommendation for improving the code, but it does not indicate a potential issue.
+    /// An informational message or suggestion, such as a redundant definition.
     Info,
 
-    /// A warning indicates a potential issue in the code that may lead to unexpected behavior or bugs.
+    /// A warning about a potential issue or an explicit #warning directive.
     Warn,
 }
 
@@ -74,8 +62,9 @@ impl Display for LintLevel {
 }
 
 impl Lint {
-    /// Generates a source message for the lint, including the message and the relevant snippet of source code.
-    /// The full path of header file can be obtained from the file number using the `HeaderFileCache`.
+    /// Formats the lint, adding a source snippet when a position or range exists.
+    /// The caller supplies the path and source text. For included files, these
+    /// can be looked up by file number in `HeaderFileCache`.
     pub fn source_message(
         &self,
         source_file_canonical_full_path: &str,

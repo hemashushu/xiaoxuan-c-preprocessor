@@ -8,32 +8,28 @@ use std::fmt::Display;
 
 use crate::{error::PreprocessError, location::Location, range::Range};
 
-/// Represents a token for the C preprocessor.
+/// A token in ANCPP's preprocessing and compiler-facing token model.
 ///
-/// In general, C language tokens are lexed after preprocessing, but
-/// since this ANCPP library is designed to be a part of ANCC (a C compiler),
-/// it is reasonable to lex tokens further as close as possible to the C language,
-/// This design simplifies the integration between the preprocessor and the compiler,
-/// and improves the overall efficiency.
+/// Standard C distinguishes preprocessing tokens from the C tokens produced
+/// later in translation. ANCPP parses numeric literals and decodes string and
+/// character literals early to simplify integration with ANCC's C parser.
 ///
 /// The following tokens are only used during preprocessing and
 /// will not appear in the final token stream:
 ///
-/// - `DirectiveStart`
-/// - `DirectiveEnd`
-/// - `FilePath`
-/// - `FunctionLikeMacroIdentifier`
-/// - `Pound`
-/// - `PoundPound`
-///
-/// The C language parser should filter out these tokens before parsing.
+/// - `_DirectiveStart`
+/// - `_DirectiveEnd`
+/// - `_FilePath`
+/// - `_FunctionLikeMacroIdentifier`
+/// - `_Pound`
+/// - `_PoundPound`
 ///
 /// References:
-/// - https://gcc.gnu.org/onlinedocs/cpp/Tokenization.html
-/// - https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
+/// - <https://gcc.gnu.org/onlinedocs/cpp/Tokenization.html>
+/// - <https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3>
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
-    // A preprocessing identifier, includes:
+    // An identifier token, including:
     //
     // - C Keywords
     // - C Type, Struct, Union and Enum names
@@ -42,8 +38,9 @@ pub enum Token {
     // - Directive names
     // - Object-like macro names
     //
-    // Identifiers consist of a sequence of letters (including non-Latin letters such as Chinese ideograms),
-    // digits, or underscores, starting with a letter or underscore.
+    // ASCII names start with a letter or underscore, followed by letters, digits,
+    // or underscores. The lexer also accepts broad Unicode ranges beyond C23's
+    // XID_Start/XID_Continue rules.
     Identifier(String),
 
     // Identifiers in attribute names may contain namespace separators (`::`), e.g.
@@ -51,25 +48,22 @@ pub enum Token {
     // - `[[some::attribute(123)]]`
     NamespaceIdentifier(String, String),
 
-    // A preprocessing number, which includes all standard integer and floating-point constants in C.
-    // Such numbers may start with an optional period (`.`), must have at least one decimal digit (`0`-`9`),
-    // and can contain letters, digits, underscores, periods, and exponent markers.
-    // Integer constants may have suffixes like `u`, `U`, `l`, `L`, `ll`, `LL`, `wb`, or `WB`.
-    // Floating-point constants may have suffixes like `f`, `F`, `l`, `L`, `dd`, `DD`, `df`, `DF`, `dl`, or `DL`.
-    // A number also may have prefixes like `0x` (hexadecimal), `0b` (binary), or `0o` (octal).
-    // Exponents are two-character sequences like 'e+', 'e-', 'E+', 'E-', 'p+', 'p-', 'P+', or 'P-'.
-    // Exponents beginning with 'p' or 'P' are used for hexadecimal floating-point constants.
+    // A parsed integer or floating-point literal, not an arbitrary preprocessing
+    // number. Integer bases use no prefix (decimal), 0 (octal), 0x (hexadecimal),
+    // or 0b (binary). Floating-point exponents use e/E for decimal notation or
+    // p/P for hexadecimal notation, followed by an optional sign and digits.
+    // Suffix information is stored separately from the value spelling.
     // See: https://en.cppreference.com/w/c/language/floating_constant
     Number(Number),
 
     // A string literal.
-    // String are enclosed in double quotes (`"`), embedded quotes must be escaped with a backslash.
+    // Strings are enclosed in double quotes; embedded quotes must be escaped.
     //
     // Escape sequences supported in string literals include:
     // - Simple escape sequences: `\'`, `\"`, `\?`, `\\`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`
     // - Octal escape sequences: `\nnn` (1 to 3 octal digits)
-    // - Hexadecimal escape sequences: `\xn...`, `\Xn...` (1 or more hexadecimal digits, however,
-    //   only two hexadecimal digits are allowed in ANCPP, e.g., `\x41` for 'A', `\x7A` for 'z')
+    // - Hexadecimal escapes: `\xhh` (exactly two hex digits in ANCPP).
+    //   The lexer also accepts the non-standard uppercase spelling `\Xhh`.
     // - Universal character names: `\unnnn`, `\Unnnnnnnn` (4 or 8 hexadecimal digits)
     //
     // See:
@@ -77,7 +71,7 @@ pub enum Token {
     // https://en.cppreference.com/w/c/language/string_literal.html
     String(String, StringEncoding),
 
-    // A (single) character constant, e.g., 'a', '\t', '文', '\u6587', and '\U2005E'.
+    // A single character constant, e.g., 'a', '\t', '文', '\u6587', or '\U0002005E'.
     // ANCPP does not support multicharacter constants like 'abc', L'abc', '\1\2\3\4'.
     //
     // See:
@@ -85,16 +79,15 @@ pub enum Token {
     // - https://en.cppreference.com/w/c/language/character_constant.html
     Char(char, CharEncoding),
 
-    // A punctuator: any punctuation character meaningful in C or C++,
-    // except for '@', '$', and '`', which are not considered C punctuators.
+    // One of the C punctuators represented by `Punctuator`.
     Punctuator(Punctuator),
 
     // Directive start token.
-    // It is the pound sign (`#`) at the beginning of a line indicates a preprocessing directive.
+    // A `#` at the start of a logical line, possibly preceded by whitespace.
     _DirectiveStart,
 
     // Directive end token.
-    // It is literally the `newline` (representing either '\n' or '\r\n') in the directive line.
+    // A newline terminating a directive after line splicing and normalization.
     //
     // Newlines in C code are treated as whitespace, while newlines in
     // directive lines are special tokens.
@@ -117,8 +110,9 @@ pub enum Token {
     // The stringizing operator.
     // It is pound (`#`) used in macro replacement.
     //
-    // Stringizing is used to produce a string literal and can only be applied to
-    // macro parameters (includes `__VA_ARGS__`).
+    // Stringizing produces a string literal and applies only to macro parameters,
+    // including `__VA_ARGS__`. ANCPP renders parsed tokens with spaces between
+    // them rather than preserving their original spelling and whitespace.
     // For example, `#define FOO(x) #x` will expand `FOO(abc)` to `"abc"` and `FOO(123)` to `"123"`.
     _Pound,
 
@@ -126,19 +120,15 @@ pub enum Token {
     //
     // It is pound-pound (`##`) used in macro replacement.
     //
-    // Token concatenation joins two or more tokens into a single identifier.
-    // The tokens are concatenated without any whitespace in between, and the tokens
-    // are not expanded before concatenation.
-    // Token concatenation can only be used in function-like macro replacement.
-    //
-    // The result of _Token concatenation_ operator (`##`) must be a valid C identifier:
-    // the first token must be an identifier, and the remaining tokens must be either
-    // identifiers or integer numbers. For example, `foo ## bar` and `sprite ## 2 ## b` are valid,
-    // while `9 ## s` and `+ ## =` are invalid.
+    // Arguments adjacent to ## are substituted without prior macro expansion.
+    // ANCPP restricts the result to an ASCII identifier: a letter or underscore
+    // followed by letters, digits, or underscores. For example, `foo ## bar` and
+    // `sprite ## 2 ## b` are valid; `9 ## s` and `+ ## =` are rejected. Standard C
+    // also permits pasting that produces other valid preprocessing tokens.
     _PoundPound,
 
-    // The file path of the directive `#include` and `#embed`,
-    // and the operator `__has_include` and `__has_embed`.
+    // A directly written path in `#include`, `#embed`, `__has_include`, or
+    // `__has_embed`. The boolean indicates angle brackets rather than quotes.
     //
     // Note that file path is not a string literal,
     // because it does not support escape sequences like `\x40` and `\"`.
@@ -159,17 +149,17 @@ pub enum Token {
     // and parenthesis `(` represents an object-like macro identifier,
     // which is a `Token::Identifier`.
     //
-    // This special type of token is needed because whitespaces between the function name
+    // This special token is needed because whitespace between a function name
     // and the opening parenthesis `(` are typically ignored in the C language, e.g.
     //
     // - `int foo (...) {...}` is equivalent to `int foo(...) {...}`.
     // - `int a = foo (...)` is equivalent to `int a = foo(...)`.
     //
-    // But in macro definitions, whitespaces are significant:
+    // In macro definitions, this whitespace is significant:
     // - `#define foo(...) ...` defines a function-like macro.
     // - `#define foo (...) ...` defines an object-like macro.
     //
-    // This is an inconsistency in the preprocessor design of C/C++ languages.
+    // The distinction must be preserved even though other whitespace is discarded.
     _FunctionLikeMacroIdentifier(String),
 }
 
@@ -179,7 +169,7 @@ pub enum Punctuator {
     // --------------------
     Add,      // '+'
     Subtract, // '-'
-    Multiply, // '*', also is operator `Dereference`
+    Multiply, // '*', also the dereference operator and part of pointer declarators
     Divide,   // '/'
     Modulo,   // '%'
     Increase, // '++'
@@ -202,7 +192,7 @@ pub enum Punctuator {
 
     // Bitwise Operators
     // --------------------
-    BitwiseAnd, // '&', also is operator `AddressOf`
+    BitwiseAnd, // '&', also the address-of operator
     BitwiseOr,  // '|'
     BitwiseXor, // '^'
     BitwiseNot, // '~'
@@ -247,11 +237,11 @@ pub enum Punctuator {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CharEncoding {
-    Default, // Default character, e.g., 'a', '1', '文', note that the data type is `int` instead of `char`.
+    Default, // Ordinary character constant, e.g., 'a'; its C type is int, not char.
     Wide,    // Wide character, e.g., L'a', L'文', data type is `wchar_t`
     UTF16,   // UTF-16 character, e.g., u'a', u'文', data type is `char16_t`
     UTF32,   // UTF-32 character, e.g., U'a', U'文', data type is `char32_t`
-    UTF8,    // UTF-8 character, e.g., u8'a', u8'文', data type is `char8_t`
+    UTF8,    // UTF-8 character, e.g., u8'a'; type char8_t. C23 requires one UTF-8 code unit.
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -273,9 +263,10 @@ pub enum Number {
 pub struct IntegerNumber {
     pub value: String,
 
-    // true for unsigned integers, false for signed integers.
+    // Whether an explicit unsigned suffix is present. Without one, the eventual
+    // C type can still be unsigned, depending on the literal's base and value.
     // Suffix `u` or `U` indicates an unsigned integer, e.g., `123u`, `0x1AUL`.
-    // Possible suffix are: `u`, `U`, `ul`, `UL`, `ull`, `ULL`, `uwb`, `UWB`
+    // Example suffixes: `u`, `U`, `ul`, `UL`, `ull`, `ULL`, `uwb`, `UWB`.
     pub unsigned: bool,
 
     pub length: IntegerNumberWidth,
@@ -283,31 +274,29 @@ pub struct IntegerNumber {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum IntegerNumberWidth {
-    Default, // no suffix, e.g., 123, the type of the integer constant is the first type in which the value can fit.
+    Default, // No width suffix; the C type depends on the value, base, and unsigned suffix.
     Long,    // suffix "l", "L", e.g., 123l, 123L
     LongLong, // suffix "ll", "LL", e.g., 123ll, 123LL
-    BitInt,  // suffix "wb", "WB", e.g., 123wb, 123WB
+    BitInt,  // Bit-precise integer suffix "wb" or "WB", e.g., 123wb, 123WB
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FloatingPointNumber {
     pub value: String,
 
-    /// true for decimal floating-point numbers (`_Decimal{32|64|128}`), false for binary floating-point numbers.
-    /// Suffix `d` or `D` indicates a decimal floating-point number, e.g., `1.23dd`, `4.56DF`.
-    /// When it is use alone without combining with `f`, `F`, `l`, or `L`,
-    /// it must be `dd` or `DD`, indicating a decimal double-precision.
-    ///
-    /// Possible suffix are: `dd`, `DD`, `df`, `DF`, `dl`, `DL`
+    /// Whether the literal uses a decimal floating-point type. The suffixes are
+    /// df/DF (_Decimal32), dd/DD (_Decimal64), and dl/DL (_Decimal128).
+    /// A single d/D is not a valid suffix. This flag describes the type family,
+    /// not whether the literal was written in decimal or hexadecimal notation.
     pub decimal: bool,
     pub length: FloatingPointNumberWidth,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum FloatingPointNumberWidth {
-    Default,    // no suffix, e.g., 1.23, an unsuffixed floating constant has type `double`.
-    Float,      // suffix "f", "F", e.g., 1.23f, 1.23F
-    LongDouble, // suffix "l", "L", e.g., 1.23l, 1.23L
+    Default,    // double without a suffix; _Decimal64 with dd/DD
+    Float,      // float with f/F; _Decimal32 with df/DF
+    LongDouble, // long double with l/L; _Decimal128 with dl/DL
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -463,8 +452,7 @@ pub fn escape_char(c: char) -> String {
         '\x0c' => "\\f".to_string(), // \x0c, Form feed
         '\r' => "\\r".to_string(),   // \x0d, Carriage return
         '\u{0}'..='\u{1f}' | '\u{80}'..='\u{ff}' => {
-            // For control characters (non-printable) characters, and extended ASCII codes,
-            // use hexadecimal escape
+            // Render control characters and U+0080..U+00FF with two-digit hex escapes.
             format!("\\x{:02x}", c as u8)
         }
         _ => c.to_string(),

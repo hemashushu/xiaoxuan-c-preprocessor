@@ -30,12 +30,12 @@ pub fn lex_from_str(source_text: &str) -> Result<Vec<TokenWithRange>, Preprocess
     tokenizer.lex()
 }
 
-/// Lexes the clean source text (post initialization) into a token stream with ranges.
+/// Lexes already initialized source text into tokens with ranges.
 ///
 /// Initialization includes:
 /// - Lines ending with a backslash ('\') are joined with the following line.
-/// - All comments are replaced by a single space character.
-/// - Remove the shebang (`#!`) line. (ANCPP extension)
+/// - Block comments become spaces; line comments become newlines.
+/// - Leading whitespace and an optional shebang line are removed (an extension).
 ///
 /// See `initialize()` for more details.
 pub fn lex_from_clean_str(clean_source_text: &str) -> Result<Vec<TokenWithRange>, PreprocessError> {
@@ -46,32 +46,24 @@ pub fn lex_from_clean_str(clean_source_text: &str) -> Result<Vec<TokenWithRange>
     tokenizer.lex()
 }
 
-/// Lexer struct that turns a character stream into a token stream.
+/// Converts positioned characters into ANCPP tokens.
 ///
-/// Note that there are some inconsistencies in C preprocessor syntax:
-///
-/// - In the `#include` and `#embed` directives, and the `has_include` and `has_embed`
-///   operators, the file path is not a string literal.
-/// - Whitespaces are not allowed between the macro identifier
-///   and the opening parenthesis `(` in function-like macro replacement.
-///
-/// When implementing the lexer, these inconsistencies need to be taken into account.
+/// Some constructs require lexical context: directly written paths in `#include`,
+/// `#embed`, `__has_include`, and `__has_embed` are not ordinary string literals.
+/// In a function-like macro definition, whitespace between the name and `(`
+/// changes the definition to an object-like macro; invocation whitespace does not.
 struct Lexer<'a> {
     upstream: &'a mut PeekableIter<'a, CharWithPosition>,
 
     // The position of the last consumed character by `next_char()`.
     last_position: Position,
 
-    // The token 1-based index of the last newline character.
-    //
-    // It is used to determine if the current `#` token is a directive start token.
-    // When the `#` token appears immediately after a newline character,
-    // it is considered as the start of a preprocessor directive.
-    //
-    // Initialized to 0 to make the `#` as directive start token if it is the first token.
+    // Number of emitted tokens at the last newline. A # starts a directive if
+    // no token has been emitted since then; intervening whitespace is allowed.
+    // The initial value 0 also handles directives at the start of the input.
     last_newline_token_index_1_based: usize,
 
-    // The line index of last directive line.
+    // Source line index at which the current directive began, if any.
     //
     // It is used to determine if the current newline character is the end of a directive.
     // When a newline character appears after a directive line,
@@ -143,18 +135,12 @@ impl<'a> Lexer<'a> {
             Some(CharWithPosition { character, .. }) if expected_chars.contains(character))
     }
 
-    /// Saves the last position to the stack.
-    ///
-    /// Where the last position is identical to position of
-    /// the character consumed by `next_char()`.
+    /// Pushes the position of the last character consumed by `next_char()`.
     fn push_last_position_into_stack(&mut self) {
         self.position_stack.push(self.last_position);
     }
 
-    /// Saves the current position to the stack.
-    ///
-    /// Where the current position is identical to the value returned by
-    /// `self.peek_position(0)`.
+    /// Pushes the next character's position, returned by `self.peek_position(0)`.
     fn push_peek_position_into_stack(&mut self) {
         let position = *self.peek_position(0).unwrap();
         self.position_stack.push(position);
@@ -177,7 +163,7 @@ impl Lexer<'_> {
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 ' ' | '\t' | '\u{0b}' | '\u{0c}' => {
-                    // Skip whitespaces (space, tab, vertical tab, form feed).
+                    // Skip horizontal whitespace (space, tab, vertical tab, form feed).
                     // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                     self.next_char();
                 }
@@ -198,7 +184,7 @@ impl Lexer<'_> {
                         self.pop_position_from_stack(); // discard the position
                     }
 
-                    // Update the `last_newline_index` to the current output length.
+                    // Record the number of tokens emitted through this newline.
                     self.last_newline_token_index_1_based = output.len();
                 }
                 '\n' => {
@@ -213,7 +199,7 @@ impl Lexer<'_> {
                         ));
                     }
 
-                    // Update the `last_newline_index` to the current output length.
+                    // Record the number of tokens emitted through this newline.
                     self.last_newline_token_index_1_based = output.len();
                 }
                 '\'' => {
@@ -960,15 +946,15 @@ impl Lexer<'_> {
                     self.next_char(); // consume char
                 }
                 ':' if self.peek_char_and_equals(1, ':') => {
-                    // `::` is used to indicate a namespace or module
+                    // Preserve `::` for scoped attribute names, not C++ namespaces.
                     identifier_buffer.push_str("::");
                     self.next_char(); // consume the 1st ":"
                     self.next_char(); // consume the 2nd ":"
                 }
                 '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{10ffff}' => {
-                    // A char is a ‘Unicode scalar value’, which is any ‘Unicode code point’ other than a surrogate code point.
-                    // This has a fixed numerical definition: code points are in the range 0 to 0x10FFFF,
-                    // inclusive. Surrogate code points, used by UTF-16, are in the range 0xD800 to 0xDFFF.
+                    // Rust chars are Unicode scalar values: code points excluding
+                    // U+D800..U+DFFF surrogates. These accepted ranges are broader
+                    // than C23's XID_Start/XID_Continue identifier rules.
                     //
                     // check out:
                     // https://doc.rust-lang.org/std/primitive.char.html
@@ -1001,14 +987,14 @@ impl Lexer<'_> {
                     identifier_buffer.push(*current_char);
                     self.next_char(); // consume char
                 }
-                // whitespaces
+                // Whitespace and ASCII punctuation terminate this identifier.
                 // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
-                // all ASCII punctuations
+                // ASCII punctuation
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1027,7 +1013,7 @@ impl Lexer<'_> {
 
         let identifier_range = Range::new(&self.pop_position_from_stack(), &self.last_position);
 
-        // unicode normalization
+        // Normalize identifiers to NFC before separating an optional attribute scope.
         let identifier_normalized: String = identifier_buffer.nfc().collect();
 
         if let Some(pos) = identifier_normalized.find("::") {
@@ -1163,14 +1149,14 @@ impl Lexer<'_> {
 
                     break;
                 }
-                // whitespaces
+                // Whitespace
                 // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
-                // all ASCII punctuations
+                // ASCII punctuation
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1269,8 +1255,7 @@ impl Lexer<'_> {
         while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 'f' | 'F' | 'd' | 'D' if found_p => {
-                    // 'f' is allowed only in the hex floating-point literal mode,
-                    // and the character 'p' should be present, e.g. 0x1.2p3f)
+                    // After p/P, f/F begins a suffix; before it, f/F is a hex digit.
                     let suffix = self.lex_floating_point_number_suffix()?;
                     is_decimal = suffix.0;
                     floating_point_number_width = suffix.1;
@@ -1296,9 +1281,9 @@ impl Lexer<'_> {
                             *self.peek_position(0).unwrap(),
                         ));
                     } else {
-                        // Examples of hexadecimal floating-point numbers with '.':
-                        // 0x1.9
-                        // 0x12.bc
+                        // Hexadecimal significands; a p/P exponent must follow:
+                        // 0x1.9p0
+                        // 0x12.bcp0
 
                         found_point = true;
                         if number_buffer.len() == 2 {
@@ -1363,14 +1348,14 @@ impl Lexer<'_> {
 
                     break;
                 }
-                // whitespaces
+                // Whitespace
                 // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
-                // all ASCII punctuations
+                // ASCII punctuation
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1479,14 +1464,14 @@ impl Lexer<'_> {
                         *self.peek_position(0).unwrap(),
                     ));
                 }
-                // whitespaces
+                // Whitespace
                 // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
-                // all ASCII punctuations
+                // ASCII punctuation
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1562,14 +1547,14 @@ impl Lexer<'_> {
                         *self.peek_position(0).unwrap(),
                     ));
                 }
-                // whitespaces
+                // Whitespace
                 // https://en.cppreference.com/w/c/language/translation_phases.html#Phase_3
                 '\t'        // tab, 0x09
                 | '\n'      // line feed, 0x0A
                 | '\u{0b}'  // vertical tab, 0x0B
                 | '\u{0c}'  // form feed, 0x0C
                 | '\r'      // carriage return, 0x0D
-                // all ASCII punctuations
+                // ASCII punctuation
                 | ' '..='/'
                 | ':'..='@'
                 | '['..='`'
@@ -1601,10 +1586,10 @@ impl Lexer<'_> {
     fn lex_integer_number_suffix(
         &mut self,
     ) -> Result<(/* is_unsigned */ bool, IntegerNumberWidth), PreprocessError> {
-        // integer number suffixes consisting of the two groups:
+        // Integer suffixes consist of two groups:
         // - group 1: `u`, `U`
         // - group 2: `l`, `L`, `ll`, `LL`, `wb`, `WB`
-        // Both groups are optional, and can be combined.
+        // Both groups are optional and can be combined in either order.
 
         // to indicate whether the number is unsigned
         let mut is_unsigned = false;
@@ -1670,10 +1655,10 @@ impl Lexer<'_> {
     fn lex_floating_point_number_suffix(
         &mut self,
     ) -> Result<(/* is_decimal */ bool, FloatingPointNumberWidth), PreprocessError> {
-        // possible suffix for floating-point number:
+        // Supported floating-point suffixes:
         // `f`, `F`, `l`, `L`, `dd`, `df`, `dl`, `DD`, `DF`, `DL`
 
-        // to indicate whether the number is decimal
+        // Whether the suffix selects a decimal floating-point type.
         let mut is_decimal = false;
 
         // to indicate the floating-point number type
@@ -1712,8 +1697,8 @@ impl Lexer<'_> {
                     floating_point_number_width = FloatingPointNumberWidth::LongDouble;
                 }
                 'D' if self.peek_char_and_equals(1, 'L') => {
-                    self.next_char(); // consume char 'd'
-                    self.next_char(); // consume char 'l'
+                    self.next_char(); // Consume 'D'.
+                    self.next_char(); // Consume 'L'.
                     is_decimal = true;
                     floating_point_number_width = FloatingPointNumberWidth::LongDouble;
                 }
@@ -1769,7 +1754,7 @@ impl Lexer<'_> {
         // |_____// current char, validated
         // ```
 
-        // Save the start position of the char literal (i.e. the first "'")
+        // Save the literal's start position, including any encoding prefix.
         self.push_peek_position_into_stack();
 
         // consume the prefix characters, e.g. 'L', 'u', 'U', "u8"
@@ -1866,10 +1851,8 @@ impl Lexer<'_> {
                                         }
                                     }
                                     'u' | 'U' => {
-                                        // - Unicode code point below 10000.
-                                        //   format: `\uhhhh`.
-                                        // - code points located at U+10000 or higher.
-                                        //   format: `\Uhhhhhhhh`.
+                                        // Universal character names use four hex digits after
+                                        // \u or eight after \U; the latter also permits lower values.
                                         //
                                         // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Universal_character_names
                                         let length = if escape_type == 'u' {
@@ -1940,8 +1923,8 @@ impl Lexer<'_> {
                                         }
                                     }
                                     'x' | 'X' => {
-                                        // Hexadecimal escape sequence,
-                                        // format: `\xh...`.
+                                        // Hexadecimal escape: exactly two digits in ANCPP,
+                                        // unlike standard C's one-or-more-digit form.
                                         // e.g. `\x38` (`'8'`), `\x41` (`'A'`)
                                         // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Hex
 
@@ -2074,7 +2057,7 @@ impl Lexer<'_> {
         // |_______// current char, validated
         // ```
 
-        // Save the start position of the string literal (i.e. the first '"')
+        // Save the literal's start position, including any encoding prefix.
         self.push_peek_position_into_stack();
 
         // Consumes the prefix characters, e.g. 'L', 'u', 'U', "u8"
@@ -2177,10 +2160,8 @@ impl Lexer<'_> {
                                             }
                                         }
                                         'u' | 'U' => {
-                                            // - Unicode code point below 10000.
-                                            //   format: `\uhhhh`.
-                                            // - code points located at U+10000 or higher.
-                                            //   format: `\Uhhhhhhhh`.
+                                            // Universal character names use four hex digits after
+                                            // \u or eight after \U; the latter also permits lower values.
                                             //
                                             // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Universal_character_names
                                             let length = if escape_type == 'u' {
@@ -2254,8 +2235,8 @@ impl Lexer<'_> {
                                             }
                                         }
                                         'x' | 'X' => {
-                                            // Hexadecimal escape sequence,
-                                            // format: `\xh...`.
+                                            // Hexadecimal escape: exactly two digits in ANCPP,
+                                            // unlike standard C's one-or-more-digit form.
                                             // e.g. `\x38` (`'8'`), `\x41` (`'A'`)
                                             // see: https://en.wikipedia.org/wiki/Escape_sequences_in_C#Hex
 
@@ -2454,7 +2435,7 @@ impl Lexer<'_> {
         ))
     }
 
-    /// Checks whether the last token in the provided token list is a directive `define`.
+    /// Checks whether the token list ends with the start of a #define directive.
     ///
     /// This is used to identify function-like macro definitions, which require the macro name to be
     /// immediately followed by an opening parenthesis with no intervening whitespace.
@@ -2484,7 +2465,7 @@ impl Lexer<'_> {
         matches!(self.last_directive_line_index, Some(idx) if idx == self.last_position.line)
     }
 
-    /// Checks whether the last token in the provided token list is a directive `include` or `embed`.
+    /// Checks whether the token list ends with #include or #embed awaiting a path.
     fn in_inclusion_directive(&self, token_with_ranges: &[TokenWithRange]) -> bool {
         // To check for patterns like:
         // - `# include ...`
@@ -2505,7 +2486,7 @@ impl Lexer<'_> {
             )
     }
 
-    /// Checks whether the last token in the provided token list is an operator `__has_include` or `__has_embed`.
+    /// Checks whether the token list ends with __has_include( or __has_embed(.
     fn in_inclusion_operator(&self, token_with_ranges: &[TokenWithRange]) -> bool {
         // To check for patterns like:
         // - `#... __has_include (`
@@ -2756,8 +2737,7 @@ mod tests {
 
         // Location checks
 
-        // Test punctuations `>>>=`,
-        // it should be divided into  `>>` and `>=`.
+        // Longest-match tokenization: >>>= becomes >> and >=.
         assert_eq!(
             lex_from_str(">>>=").unwrap(),
             vec![
@@ -2772,8 +2752,7 @@ mod tests {
             ]
         );
 
-        // Test punctuations `++++=`,
-        // it should be divided into  `++`, `++` and `=`.
+        // Longest-match tokenization: ++++= becomes ++, ++, and =.
         assert_eq!(
             lex_from_str("++++=").unwrap(),
             vec![
@@ -2792,8 +2771,7 @@ mod tests {
             ]
         );
 
-        // Test punctuations `>====`,
-        // it should be divided into  `>=`, `==`, and `=`.
+        // Longest-match tokenization: >==== becomes >=, ==, and =.
         assert_eq!(
             lex_from_str(">====").unwrap(),
             vec![
@@ -2812,8 +2790,7 @@ mod tests {
             ]
         );
 
-        // Test punctuations `.....`,
-        // it should be divided into  `...`, `.`, and `.`.
+        // Longest-match tokenization: ..... becomes ..., ., and .
         assert_eq!(
             lex_from_str(".....").unwrap(),
             vec![
@@ -3385,7 +3362,7 @@ mod tests {
             ]
         );
 
-        // Error: does not support binary floating-point
+        // Error: floating-point literals cannot use a base-2 prefix (0b).
         assert!(matches!(
             lex_from_str_with_range_strip("0b10.10"),
             Err(PreprocessError::MessageWithPosition(
@@ -3603,7 +3580,7 @@ mod tests {
             ]
         );
 
-        // Error: does not support octal floating-point
+        // Error: ANCPP rejects a fractional part after an octal integer prefix.
         assert!(matches!(
             lex_from_str_with_range_strip("0100.10"),
             Err(PreprocessError::MessageWithPosition(
@@ -4043,7 +4020,7 @@ mod tests {
             ))
         ));
 
-        // Error: empty the exponent
+        // Error: missing exponent digits.
         assert!(matches!(
             lex_from_str_with_range_strip("0x1.23p"),
             Err(PreprocessError::MessageWithRange(
@@ -4356,7 +4333,7 @@ mod tests {
             Err(PreprocessError::UnexpectedEndOfDocument(_))
         ));
 
-        // Error: invalid char, expect the right quote, encounter another char
+        // Error: expected a closing single quote, but found another character.
         assert!(matches!(
             lex_from_str_with_range_strip("'ab"),
             Err(PreprocessError::MessageWithPosition(
@@ -4369,7 +4346,7 @@ mod tests {
             ))
         ));
 
-        // Error: invalid char, expect the right quote, encounter char 'b'
+        // Error: expected a closing single quote, but found 'b'.
         assert!(matches!(
             lex_from_str_with_range_strip("'ab'"),
             Err(PreprocessError::MessageWithPosition(

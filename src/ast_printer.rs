@@ -13,7 +13,7 @@ use crate::{
 
 const DEFAULT_INDENT_CHARS: &str = "    ";
 
-/// Join tokens with spaces
+/// Joins rendered tokens with spaces; original spelling and spacing are not retained.
 pub fn join_tokens(tokens: &[TokenWithRange]) -> String {
     tokens
         .iter()
@@ -22,8 +22,7 @@ pub fn join_tokens(tokens: &[TokenWithRange]) -> String {
         .join(" ")
 }
 
-/// Join tokens without spaces
-/// This function is used for generating file paths
+/// Joins rendered tokens without spaces, for example to construct a header path.
 pub fn join_tokens_without_spaces(tokens: &[TokenWithRange]) -> String {
     tokens
         .iter()
@@ -162,7 +161,7 @@ fn print_code<W: Write>(
     writeln!(writer, "{}{}", indent, code_text)
 }
 
-/// Print a single statement to the given writer
+/// Prints one preprocessing statement with the requested indentation.
 pub fn print_statement<W: Write>(
     writer: &mut W,
     statement: &Statement,
@@ -175,7 +174,6 @@ pub fn print_statement<W: Write>(
             pragma,
             directive_range: _,
         } => {
-            // print_pragma(writer, pragma, indent_level),
             writeln!(
                 writer,
                 "{}#pragma {}",
@@ -198,14 +196,12 @@ pub fn print_statement<W: Write>(
             components,
             directive_range: _,
         } => {
-            // print_include(writer, include, indent_level),
             writeln!(writer, "{}#include {}", indent, join_tokens(components))
         }
         Statement::Embed {
             components,
             directive_range: _,
         } => {
-            // print_embed(writer, embed, indent_level),
             writeln!(writer, "{}#embed {}", indent, join_tokens(components))
         }
         Statement::If(if_) => print_if(writer, if_, indent_level),
@@ -227,7 +223,7 @@ pub fn print_statement<W: Write>(
     }
 }
 
-/// Print the entire program to the given writer
+/// Prints a preprocessing program to the given writer.
 pub fn print_program<W: Write>(writer: &mut W, program: &Program) -> std::io::Result<()> {
     for statement in &program.statements {
         print_statement(writer, statement, 0)?;
@@ -235,7 +231,7 @@ pub fn print_program<W: Write>(writer: &mut W, program: &Program) -> std::io::Re
     Ok(())
 }
 
-/// Print the entire program to a string
+/// Prints a preprocessing program to a string.
 #[allow(dead_code)]
 pub fn print_program_to_string(program: &Program) -> String {
     let mut output = Vec::new();
@@ -265,10 +261,6 @@ mod tests {
         fn new_identifier(s: &str) -> Self {
             TokenWithRange::new(Token::Identifier(s.to_owned()), Range::default())
         }
-
-        // fn new_char(c: char) -> Self {
-        //     TokenWithRange::new(Token::Char(c, CharEncoding::Default), Range::default())
-        // }
 
         fn new_string(s: &str) -> Self {
             TokenWithRange::new(
@@ -341,7 +333,7 @@ mod tests {
                 FunctionParameter::Identifier("Y".to_string()),
             ],
             definition: vec![
-                // omit lots of parentheses for simplicity
+                // Omit unnecessary parentheses to keep the printing test concise.
                 TokenWithRange::new_identifier("X"),
                 TokenWithRange::new_punctuator(Punctuator::Multiply),
                 TokenWithRange::new_identifier("Y"),

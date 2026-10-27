@@ -13,7 +13,7 @@ use std::{
 use crate::context::{FileProvider, normalize_path};
 
 pub struct NativeFileProvider {
-    /// Directories to search for system headers.
+    /// Directories to search for system headers and resources.
     system_include_directories: Vec<PathBuf>,
 
     /// Directories to search for user headers and binary files.
@@ -23,12 +23,10 @@ pub struct NativeFileProvider {
 impl NativeFileProvider {
     /// Creates a new `NativeFileProvider` with the specified directories for system and user headers.
     ///
-    /// - `system_include_directories`: Directories to search for system and external module headers.
-    ///   These are used when resolving `#include` and `embed` directives with angle brackets,
-    ///   e.g., `#include <stdio.h>`.
-    /// - `user_include_directories`: Directories to search for module-specific headers.
-    ///   These are used when resolving `#include` and `embed` directives with double quotes,
-    ///   e.g., `#include "header.h"`.
+    /// - `user_include_directories`: Search paths for quoted `#include` and `#embed`
+    ///   directives, before falling back to system directories.
+    /// - `system_include_directories`: Search paths for angle-bracket directives
+    ///   and the fallback for quoted directives. Paths are tried in list order.
     pub fn new(
         user_include_directories: &[PathBuf],
         system_include_directories: &[PathBuf],
@@ -92,10 +90,8 @@ impl FileProvider for NativeFileProvider {
         canonical_full_path: &Path,
         offset: usize,
 
-        // Optional maximum length to read from the file.
-        // If `None`, reads the entire file.
-        // If `Some(n)`, reads up to `n` bytes.
-        // If the file is shorter than `n`, reads the entire file.
+        // Read at most this many bytes from the offset, or all remaining bytes
+        // if None. A short read may return fewer bytes than requested.
         max_length: Option<usize>,
     ) -> Result<Vec<u8>, io::Error> {
         // Open the file in read-only mode
@@ -136,7 +132,7 @@ mod tests {
         native_file_provider::NativeFileProvider,
     };
 
-    /// Helpers to get the path to the test resources rootfs directory.
+    /// Returns the root directory of the filesystem test fixtures.
     fn get_rootfs_path() -> PathBuf {
         // `env::current_dir()` returns the current Rust project's root folder
         let mut dir = env::current_dir().unwrap();

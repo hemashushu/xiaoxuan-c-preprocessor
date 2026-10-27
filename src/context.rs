@@ -29,13 +29,12 @@ where
     /// The file provider used to load source and header files.
     pub file_provider: &'a T,
 
-    /// The cache for header files to avoid redundant parsing.
-    /// Only header files (`*.h`) are cached, not source files (`*.c`).
+    /// Parsed included files, cached to avoid repeated parsing across runs.
+    /// Included files are cached regardless of extension; the main file is not.
     pub header_file_cache: &'a mut HeaderFileCache,
 
-    /// Identifiers which are used to prevent defining macros with these names.
-    /// They are usually C keywords, such as `int`, `return`, `if`, `else`, etc.
-    /// You may simply use `consts::C23_KEYWORD_STRS`.
+    /// Identifiers that cannot be defined as macros.
+    /// Callers can pass `consts::C23_KEYWORD_STRS` to reserve selected keywords.
     pub reserved_identifiers: &'a [&'a str],
 
     pub compile_features: &'a HashMap<String, bool>,
@@ -44,12 +43,11 @@ where
     /// Macro definitions and related state.
     pub macro_map: MacroMap,
 
-    /// The file number currently being processed.
+    /// The number and location of the file currently being processed.
     pub current_file_item: FileItem,
 
-    /// List of included files to prevent redundant inclusions.
-    /// Besides the header files, the source file itself is also
-    /// included to prevent self-inclusion or reversive inclusion.
+    /// Files already included in this run, including the main file, to prevent
+    /// repeated inclusion and direct or indirect self-inclusion.
     pub included_files: Vec<FileLocation>,
 
     /// User-facing messages, warnings, or information.
@@ -69,8 +67,6 @@ where
         file_provider: &'a T,
         file_cache: &'a mut HeaderFileCache,
         reserved_identifiers: &'a [&'a str],
-        // enable_include_file_path_relative_to_current_file: bool,
-        // enable_macro_single_argument_multiple_tokens: bool,
         compile_features: &'a HashMap<String, bool>,
         suppress_lints: &'a HashSet<String>,
         current_file_number: usize,
@@ -154,21 +150,19 @@ pub struct FileLocation {
     pub canonical_full_path: PathBuf,
 }
 
-/// Represents the source of a file.
+/// Records how a file was supplied or found, along with its display path.
 #[derive(Debug, PartialEq, Clone)]
 pub enum FilePathSource {
-    /// Represents a file that is part of the source code, such as `main.c` and `lib.c`.
-    /// The `relative_file_path` is the path relative to the project root directory.
+    /// The translation unit's main file, such as `main.c`.
+    /// The caller supplies its display path, usually relative to the project root.
     SourceFile(/* relative_file_path */ PathBuf),
 
-    /// Represents a user header file, which is typically a header file included by the user.
-    /// For example, `#include "my_header.h"`.
-    /// The `relative_file_path` is the path relative to the user header directory.
+    /// A header resolved through a user search path or relative to the current file.
+    /// Stores the path used by the inclusion directive, e.g., `my_header.h`.
     UserHeader(/* relative_file_path */ PathBuf),
 
-    /// Represents a system header file, which is typically a standard library header or a system-provided header.
-    /// For example, `#include <stdio.h>`.
-    /// The `external_file_path` is the path relative to the system header directory.
+    /// A header resolved through a system search path, including quoted inclusions
+    /// that fall back to system directories. Stores the requested header path.
     SystemHeader(/* external_file_path */ PathBuf),
 }
 
@@ -204,8 +198,7 @@ pub struct MacroMap {
 pub enum MacroDefinition {
     ObjectLike(Vec<TokenWithLocation>),
     FunctionLike(
-        // The parameter names.
-        // If the macro is variadic, the last parameter name is `...`.
+        // Parameters; the final entry is `FunctionParameter::Variadic` for `...`.
         Vec<FunctionParameter>,
         // The macro definition tokens with locations.
         Vec<TokenWithLocation>,
@@ -251,16 +244,13 @@ pub trait FileProvider {
     /// Returns the canonical path if found, or `None` if not found.
     fn resolve_system_file(&self, relative_file_path: &Path) -> Option<PathBuf>;
 
-    /// Resolves a user header file path using a fallback strategy.
-    /// This mimics the behavior of the quoted include directive in C, e.g., `#include "header.h"`.
+    /// Resolves a quoted header or resource path using ANCPP's fallback search.
     ///
     /// The resolution process is as follows:
-    /// 1. If `resolve_relative` is true, attempts to resolve the header file
-    ///    relative to the source file's directory.
-    /// 2. If the target file does not found, attempts to resolve the file
-    ///    in the user header search directories.
-    /// 3. If it does not found either, attempts to resolve the file in the
-    ///    system header search directories.
+    /// 1. If `enable_include_file_path_relative_to_current_file` is true, search
+    ///    relative to the file containing the directive.
+    /// 2. If not found, search the user include directories.
+    /// 3. If still not found, search the system include directories.
     ///
     /// Returns the canonical path if found, or `None` if not found.
     fn resolve_user_file_with_fallback(
@@ -299,13 +289,11 @@ pub trait FileProvider {
         &self,
         canonical_full_path: &Path,
 
-        // Optional offset to start reading from.
+        // Byte offset at which to start reading.
         offset: usize,
 
-        // Optional maximum length to read from the file.
-        // If `None`, reads the entire file.
-        // If `Some(n)`, reads up to `n` bytes.
-        // If the file is shorter than `n`, reads the entire file.
+        // Maximum bytes to read from the offset, or all remaining bytes if None.
+        // Reading stops at the end of the file even if the limit is larger.
         max_length: Option<usize>,
     ) -> Result<Vec<u8>, std::io::Error>;
 
@@ -337,7 +325,7 @@ pub struct PreprocessResult {
     pub lints: Vec<Lint>,
 }
 
-/// Canonicalizes a given path without checking the real file system.
+/// Normalizes path components without accessing the filesystem.
 ///
 /// This function normalizes the path by resolving components like `.` and `..`,
 /// but does not resolve symbolic links or check if the path exists on the file system.
@@ -367,12 +355,12 @@ pub fn normalize_path(src: &Path) -> PathBuf {
     output
 }
 
-/// A cache for the processed header files.
+/// A cache of parsed included files, reusable across preprocessing runs.
 ///
 /// Stores the canonical path, source code, and the parsed AST for each file.
 /// This cache prevents redundant parsing of the same file multiple times.
 ///
-/// Note that only header files (`*.h`) are cached, not source files (`*.c`).
+/// Included files are cached regardless of extension; main source files are not.
 pub struct HeaderFileCache {
     items: Vec<HeaderFileCacheItem>,
 }
@@ -380,8 +368,7 @@ pub struct HeaderFileCache {
 pub struct HeaderFileCacheItem {
     pub canonical_full_path: PathBuf,
 
-    /// The source code of the file.
-    /// It is used to generate the error message when parsing fails.
+    /// Source text retained alongside the parsed program for diagnostics.
     pub text_content: String,
 
     pub file_number: usize,
@@ -389,14 +376,13 @@ pub struct HeaderFileCacheItem {
 }
 
 impl HeaderFileCache {
-    /// Creates a new, empty `FileCache`.
+    /// Creates an empty `HeaderFileCache`.
     pub fn new() -> Self {
         Self { items: Vec::new() }
     }
 
-    /// File number is assigned automatically in the order of addition.
-    /// The first file number is 1.
-    /// File number 0 is reserved for predefined macros.
+    /// Returns the next header file number, starting at 1.
+    /// The processor uses this when adding entries; 0 is reserved for predefinitions.
     pub fn next_file_number(&self) -> usize {
         self.items.len() + 1 // File number starts from 1
     }
@@ -437,10 +423,8 @@ impl HeaderFileCache {
             .any(|item| item.canonical_full_path == canonical_full_path)
     }
 
-    /// Returns a list of tuples containing the file number and canonical path for each cached file.
-    /// For example, the first item will be `(1, "/path/to/file.h")`.
-    ///
-    /// The file number for the first item is 1, since 0 is reserved for predefined macros.
+    /// Returns all cache entries, including their file numbers, paths, source text,
+    /// and parsed programs. A reused cache also contains entries from earlier runs.
     pub fn get_cache_file_list(&self) -> &[HeaderFileCacheItem] {
         &self.items
     }
@@ -476,22 +460,22 @@ impl MacroMap {
         Ok(macros)
     }
 
-    /// Adds a macro by a key and a single value string.
+    /// Adds an object-like macro from a name and a replacement in C source notation.
     ///
-    /// `value` is a string represented with the source code style, e.g.,
+    /// For example:
     ///
     /// - `"123"` represents a number
     /// - `"\"abc\""` represents a string literal.
     ///
-    /// This value should be a single literal, such as:
+    /// The replacement must be empty or contain exactly one token, such as:
     ///
     /// - a number
     /// - a character
     /// - a string
     /// - an identifier
-    /// - empty value (i.e., `""`)
+    /// - an empty replacement (i.e., `""`)
     ///
-    /// Returns `MacroManipulationResult::AlreadyExist` if the key was already present.
+    /// Returns `AddMacroResult::AlreadyExist` if the name was already present.
     fn add_object_like_by_single_value_string(
         &mut self,
         key: &str,
@@ -504,7 +488,7 @@ impl MacroMap {
             .map(|token_with_range| {
                 let location = Location::new(FILE_NUMBER_PREDEFINED, &token_with_range.range);
                 TokenWithLocation::new(token_with_range.token, location)
-            }) // Assuming line and column are 0 for simplicity
+            })
             .collect();
 
         if token_with_locations.len() > 1 {
@@ -523,8 +507,9 @@ impl MacroMap {
         })
     }
 
-    /// Adds a definition by a key and a list of tokens with ranges.
-    /// Returns `MacroManipulationResult::AlreadyExist` if the key was already present.
+    /// Adds an object-like macro from unexpanded replacement tokens.
+    /// Returns `AddMacroResult::AlreadyExist` for a conflicting definition or
+    /// `AddMacroResult::IdenticalDefinitionAlreadyExist` for an equivalent one.
     pub fn add_object_like(
         &mut self,
         file_number: usize,
@@ -565,8 +550,9 @@ impl MacroMap {
         }
     }
 
-    /// Adds a function-like macro definition by a key, parameters, and a list of tokens with ranges.
-    /// Returns `MacroManipulationResult::AlreadyExist` if the key was already present.
+    /// Adds a function-like macro from parameters and unexpanded replacement tokens.
+    /// Returns `AddMacroResult::AlreadyExist` for a conflicting definition or
+    /// `AddMacroResult::IdenticalDefinitionAlreadyExist` for an equivalent one.
     pub fn add_function_like(
         &mut self,
         file_number: usize,
@@ -617,7 +603,7 @@ impl MacroMap {
         self.macros.get(key)
     }
 
-    /// Remove the definition for the given key.
+    /// Removes the definition for the given key.
     /// Returns:
     /// - `RemoveMacroResult::Success` if the key was present and removed.
     /// - `RemoveMacroResult::NotFound` otherwise.
